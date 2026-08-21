@@ -99,8 +99,8 @@ jobs:
           slumdog backfill-sport \
             --sport "${{ matrix.sport }}" \
             --start "${{ matrix.start }}" \
-            --workers 8 \
-            --batch-size 18 \
+            --workers 6 \
+            --batch-size 6 \
             --delay 62
       - name: Publish sport history receipt
         if: always()

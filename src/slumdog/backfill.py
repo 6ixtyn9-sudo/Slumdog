@@ -127,13 +127,16 @@ def backfill_sport(
     done = {str(item.get("date")) for item in manifest}
 
     pending = [day for day in days if day not in done]
-    safe_batch = max(1, min(int(batch_size), 18))
+    # Keep batches and concurrency gentle: the public relay throttles shared
+    # datacenter IPs hard (football hit 100% 401s at 18-in-parallel on the
+    # runner). Smaller batches + backoff yield higher completion per run.
+    safe_batch = max(1, min(int(batch_size), 6))
 
     if pending:
         with gzip.open(history_path, "at", encoding="utf-8") as output:
             for offset in range(0, len(pending), safe_batch):
                 batch = pending[offset:offset + safe_batch]
-                with ThreadPoolExecutor(max_workers=max(1, min(int(workers), 8))) as executor:
+                with ThreadPoolExecutor(max_workers=max(1, min(int(workers), 6))) as executor:
                     futures = {day: executor.submit(collector._fetch, sport, day) for day in batch}
                     for day in batch:
                         try:
@@ -145,6 +148,8 @@ def backfill_sport(
                                 total_rows += 1
                                 priced_rows += row.odds_1 is not None and row.odds_2 is not None
                                 void_rows += row.disposition == "VOID"
+                            # A valid page with zero settled rows is a covered
+                            # (empty) day, not a failure.
                             manifest.append({
                                 "date": day, "source_url": capture.source_url,
                                 "sha256": capture.sha256, "bytes": capture.bytes,

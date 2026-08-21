@@ -4,7 +4,6 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,7 +11,7 @@ from pathlib import Path
 from .clock import today_iso
 from .contracts import TimingClass
 from .detail_facets import parse_detail
-from .forebet import RELAY_BASE
+from .forebet import RELAY_BASE, relay_get
 
 
 def _detail_path(root: Path, sport: str, event_id: str) -> Path:
@@ -20,17 +19,8 @@ def _detail_path(root: Path, sport: str, event_id: str) -> Path:
     return root / "data" / "raw" / "details" / sport / f"{digest}.html"
 
 
-def _fetch_detail(url: str, timeout: int = 35) -> bytes:
-    request = urllib.request.Request(
-        RELAY_BASE + url,
-        headers={
-            "User-Agent": "Slumdog-Detail/0.1",
-            "X-Return-Format": "html",
-            "X-No-Cache": "true",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        body = response.read()
+def _fetch_detail(url: str, timeout: int = 45) -> bytes:
+    body = relay_get(RELAY_BASE + url, timeout=timeout)
     lower = body.lower()
     if len(body) < 100 or b"not what you were looking for" in lower:
         raise ValueError("invalid detail page")

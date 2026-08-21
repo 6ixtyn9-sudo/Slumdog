@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
+import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
@@ -18,6 +21,45 @@ from .sports import SPORTS, SportSpec
 
 RELAY_BASE = "https://r.jina.ai/"
 CONTENT_MARKER = "Markdown Content:\n"
+
+# The public relay is aggressively rate-limited/auth-walled on shared
+# datacenter IPs. Retry transient failures with bounded exponential backoff
+# plus jitter; hard client errors (401/403) are not retried since they are
+# deterministic per context and would only burn the budget.
+_RETRYABLE = (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError)
+_RETRY_STATUS = {408, 425, 429, 500, 502, 503, 504}
+
+
+def _sleep_with_jitter(attempt: int, base: float = 4.0, cap: float = 40.0) -> None:
+    delay = min(cap, base * (2 ** attempt)) * (0.7 + 0.6 * random.random())
+    time.sleep(delay)
+
+
+def relay_get(url: str, timeout: int = 45, max_retries: int = 3) -> bytes:
+    """GET a relay URL with bounded retry/backoff for transient failures."""
+    last_error: Exception | None = None
+    for attempt in range(max_retries):
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Slumdog/0.1",
+                "Accept": "text/plain",
+                "X-No-Cache": "true",
+                "X-Return-Format": "html",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read()
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code not in _RETRY_STATUS:
+                raise  # 401/403/404 are deterministic; do not retry
+        except _RETRYABLE as exc:
+            last_error = exc
+        if attempt + 1 < max_retries:
+            _sleep_with_jitter(attempt)
+    raise last_error  # type: ignore[misc]
 
 
 @dataclass(frozen=True)
@@ -97,17 +139,7 @@ class ForebetCollector:
         spec = SPORTS[sport]
         target = source_url(spec, target_date)
         relay = RELAY_BASE + target
-        request = urllib.request.Request(
-            relay,
-            headers={
-                "User-Agent": "Slumdog/0.1",
-                "Accept": "text/plain",
-                "X-No-Cache": "true",
-                "X-Return-Format": "html",
-            },
-        )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
-            body = response.read()
+        body = relay_get(relay, timeout=self.timeout)
         validate_html_body(body, sport, target_date)
         captured_at = datetime.now(timezone.utc).isoformat()
         digest = hashlib.sha256(body).hexdigest()
