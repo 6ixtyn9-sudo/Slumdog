@@ -35,6 +35,13 @@ jobs:
           cache: pip
       - run: python -m pip install -e '.[dev]'
       - run: pytest
+      - name: Restore cached detail pages (cache)
+        uses: actions/cache/restore@v4
+        with:
+          path: data/raw/details
+          key: slumdog-census-${{ github.run_id }}
+          restore-keys: |
+            slumdog-census-
       - name: Capture every current matchup detail across all sports
         run: |
           # The census date is the runner clock in the pinned TZ; there is no
@@ -61,6 +68,12 @@ jobs:
             data/interim/**
             data/reports/**
           retention-days: 14
+      - name: Persist cached detail pages (cache)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/raw/details
+          key: slumdog-census-${{ github.run_id }}
 
   history:
     name: History — ${{ matrix.sport }}
@@ -91,17 +104,31 @@ jobs:
           python-version: "3.13"
           cache: pip
       - run: python -m pip install -e '.[dev]'
+      - name: Restore accumulated history ledger (cache)
+        uses: actions/cache/restore@v4
+        with:
+          path: data/reports
+          key: slumdog-history-${{ matrix.sport }}-${{ github.run_id }}
+          restore-keys: |
+            slumdog-history-${{ matrix.sport }}-
       - name: Accumulate sport history (skips dates already in the ledger)
         shell: bash
         run: |
-          # --end defaults to yesterday from the runner clock; the ledger is
-          # resumable, so repeat runs only fetch days not yet covered.
+          # The rolling ledger (history_<sport>.json + .jsonl.gz) is restored
+          # from the cache, so this run only fetches days not yet covered.
+          # --end defaults to yesterday from the runner clock.
           slumdog backfill-sport \
             --sport "${{ matrix.sport }}" \
             --start "${{ matrix.start }}" \
             --workers 6 \
             --batch-size 6 \
             --delay 62
+      - name: Persist accumulated history ledger (cache)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/reports
+          key: slumdog-history-${{ matrix.sport }}-${{ github.run_id }}
       - name: Publish sport history receipt
         if: always()
         shell: bash

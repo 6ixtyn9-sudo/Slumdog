@@ -42,15 +42,18 @@ Dates are runtime-derived, not typed at dispatch: the workflow takes no
 dispatch inputs, and every CLI date argument is an optional override that
 defaults to the runner clock in TZ Africa/Johannesburg (src/slumdog/clock.py).
 History ledgers are rolling and resumable per sport (history_<sport>.jsonl.gz +
-manifest), so repeat runs only fetch new dates. Relay access uses bounded
+manifest), so repeat runs only fetch new dates. The pipeline persists each
+sport's ledger and the census detail cache via actions/cache between runs
+(per-sport keys + run_id), so the daily history job is genuinely incremental
+instead of re-fetching every date from scratch. Relay access uses bounded
 retry with backoff (transient 4xx/5xx/timeouts), and backfill batches are
 gentle (max 6 in parallel) to stay under the public relay's shared-IP budget;
 a valid page with zero rows counts as covered, not failed. Football capture
 falls back to direct Forebet access (AJAX header set validated by Edge-Factory,
-with optional curl_cffi TLS impersonation) when the relay auth-walls the
-runner IP; direct bodies are raw JSON, which the football parsers decode
-directly. 2026-08-21 first run: football listing 401s on the runner, so its
-963 dates remain to backfill (retried with the fallback on the next run).
+with optional curl_cffi TLS impersonation) for local runs; on GitHub runners
+the relay's deterministic 401 fails fast instead of stalling. 2026-08-21 first
+run: football listing 401s on the runner, so its 963 dates remain to backfill
+(locally, or retried on the next run).
 Next gates
 Review the first census + history receipts (from the scheduled pipeline), then
 measure detail-field missingness from the census, not from three-page samples.
