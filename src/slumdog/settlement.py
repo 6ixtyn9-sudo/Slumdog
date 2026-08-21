@@ -9,7 +9,7 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 
 from .contracts import SettledEvent
-from .parsers import _event_day, _number, _participant_odds, _text
+from .parsers import _event_day, _load_football_payload, _number, _participant_odds, _text
 from .sports import SPORTS
 
 
@@ -68,8 +68,7 @@ def parse_html_settled(body: bytes, sport: str, target_date: str) -> list[Settle
 
 
 def parse_football_settled(body: bytes, target_date: str) -> list[SettledEvent]:
-    soup = BeautifulSoup(body, "html.parser")
-    payload = json.loads(soup.body.get_text() if soup.body else body.decode("utf-8", "replace"))
+    payload = _load_football_payload(body)
     rows = payload[0] if isinstance(payload, list) and payload and isinstance(payload[0], list) else []
     settled = []
     for row in rows:

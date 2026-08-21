@@ -45,8 +45,12 @@ History ledgers are rolling and resumable per sport (history_<sport>.jsonl.gz +
 manifest), so repeat runs only fetch new dates. Relay access uses bounded
 retry with backoff (transient 4xx/5xx/timeouts), and backfill batches are
 gentle (max 6 in parallel) to stay under the public relay's shared-IP budget;
-a valid page with zero rows counts as covered, not failed. 2026-08-21 first
-run: football listing 401s on the runner, so its 963 dates remain to backfill.
+a valid page with zero rows counts as covered, not failed. Football capture
+falls back to direct Forebet access (AJAX header set validated by Edge-Factory,
+with optional curl_cffi TLS impersonation) when the relay auth-walls the
+runner IP; direct bodies are raw JSON, which the football parsers decode
+directly. 2026-08-21 first run: football listing 401s on the runner, so its
+963 dates remain to backfill (retried with the fallback on the next run).
 Next gates
 Review the first census + history receipts (from the scheduled pipeline), then
 measure detail-field missingness from the census, not from three-page samples.

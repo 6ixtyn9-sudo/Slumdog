@@ -42,6 +42,20 @@ def decimal_odds(value: str) -> float | None:
     return number if number > 1.0 else None
 
 
+def _load_football_payload(body: bytes):
+    """Load the football JSON payload from either relay-wrapped HTML or raw JSON.
+
+    Direct Forebet access returns raw JSON (starts with '[' or '{'); the relay
+    wraps it in HTML. Parsing raw JSON directly avoids BeautifulSoup entity
+    mangling of team names/comments.
+    """
+    stripped = body.lstrip()
+    if stripped[:1] in (b"[", b"{"):
+        return json.loads(body.decode("utf-8", "replace"))
+    soup = BeautifulSoup(body, "html.parser")
+    return json.loads(soup.body.get_text() if soup.body else body.decode("utf-8", "replace"))
+
+
 def _event_day(value: str) -> str | None:
     match = re.search(r"(\d{2})/(\d{2})/(\d{4})", value)
     if not match:
@@ -176,8 +190,7 @@ def parse_football_json(
     source_url: str,
     raw_sha256: str = "",
 ) -> list[EventSnapshot]:
-    soup = BeautifulSoup(body, "html.parser")
-    payload = json.loads(soup.body.get_text() if soup.body else body.decode("utf-8", "replace"))
+    payload = _load_football_payload(body)
     if not (isinstance(payload, list) and payload and isinstance(payload[0], list)):
         raise ValueError("unexpected football JSON shape")
     events = []
