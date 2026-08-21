@@ -1,0 +1,79 @@
+{
+  "american_football": {
+    "both_participant_prices": 0,
+    "both_price_pct": null,
+    "date": "2026-10-15",
+    "events": 0,
+    "selected_price_only": 0
+  },
+  "baseball": {
+    "both_participant_prices": 13,
+    "both_price_pct": 0.6842,
+    "date": "2026-07-15",
+    "events": 19,
+    "selected_price_only": 0
+  },
+  "basketball": {
+    "both_participant_prices": 60,
+    "both_price_pct": 0.6061,
+    "date": "2026-01-15",
+    "events": 99,
+    "selected_price_only": 0
+  },
+  "cricket": {
+    "both_participant_prices": 0,
+    "both_price_pct": 0.0,
+    "date": "2026-03-15",
+    "events": 15,
+    "selected_price_only": 0
+  },
+  "football": {
+    "both_participant_prices": 778,
+    "both_price_pct": 0.7734,
+    "date": "2026-08-15",
+    "events": 1006,
+    "selected_price_only": 0
+  },
+  "handball": {
+    "both_participant_prices": 0,
+    "both_price_pct": 0.0,
+    "date": "2026-03-15",
+    "events": 96,
+    "selected_price_only": 0
+  },
+  "hockey": {
+    "both_participant_prices": 0,
+    "both_price_pct": 0.0,
+    "date": "2026-01-15",
+    "events": 77,
+    "selected_price_only": 0
+  },
+  "mma": {
+    "both_participant_prices": 0,
+    "both_price_pct": null,
+    "date": "2026-06-01",
+    "events": 0,
+    "selected_price_only": 0
+  },
+  "rugby": {
+    "both_participant_prices": 0,
+    "both_price_pct": 0.0,
+    "date": "2026-03-15",
+    "events": 14,
+    "selected_price_only": 0
+  },
+  "tennis": {
+    "both_participant_prices": 72,
+    "both_price_pct": 0.96,
+    "date": "2026-01-20",
+    "events": 75,
+    "selected_price_only": 0
+  },
+  "volleyball": {
+    "both_participant_prices": 0,
+    "both_price_pct": 0.0,
+    "date": "2026-03-15",
+    "events": 134,
+    "selected_price_only": 0
+  }
+}

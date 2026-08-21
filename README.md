@@ -1,26 +1,29 @@
-Slumdog
+# Slumdog
+
 Slumdog is a standalone multi-sport research system for reproducing and testing
-Ma Golide Robber decisions against Forebet's complete pre-event matchup
+Ma Golide **Robber** decisions against Forebet's complete pre-event matchup
 surface.
 
 It captures every supported sport, identifies the Forebet percentage underdog,
 reproduces the legacy Ma Golide Robber score, and learns sport-specific
 conditions under which that underdog wins.
 
-Principles
-Forebet is the sole external prediction and displayed-price source.
-Every raw page is frozen before parsing.
-Every visible Forebet factor is catalogued with timing provenance.
-Result/live fields cannot enter pre-event features.
-Missing prices are allowed for upset learning, but expected value remains
-unknown and the output is not actionable.
-Outputs are not capped. Every candidate passing the configured confidence
-threshold is emitted.
-No candidate is called certain or guaranteed.
-v0.1 emits shadow research only.
-Architecture
-text
+## Principles
 
+- Forebet is the sole external prediction and displayed-price source.
+- Every raw page is frozen before parsing.
+- Every visible Forebet factor is catalogued with timing provenance.
+- Result/live fields cannot enter pre-event features.
+- Missing prices are allowed for upset learning, but expected value remains
+  unknown and the output is not actionable.
+- Outputs are not capped. Every candidate passing the configured confidence
+  threshold is emitted.
+- No candidate is called certain or guaranteed.
+- v0.1 emits shadow research only.
+
+## Architecture
+
+```text
 Forebet sport pages
         |
         v
@@ -37,23 +40,28 @@ sport-specific ML-meta probability
         |
         v
 all qualifying shadow Robbers (Mothership output)
-Sports
-Football
-Basketball
-Tennis
-Hockey
-Baseball
-American Football
-Rugby
-Handball
-Volleyball
-Cricket
-MMA
-Esoccer
+```
+
+## Sports
+
+- Football
+- Basketball
+- Tennis
+- Hockey
+- Baseball
+- American Football
+- Rugby
+- Handball
+- Volleyball
+- Cricket
+- MMA
+- Esoccer
+
 Each sport has its own outcome and settlement contract. Probabilities and
 thresholds are never pooled blindly across sports.
 
-Robber definition
+## Robber definition
+
 A Robber is a named participant selected as the upset side.
 
 When both Forebet prices exist, the participant with the longer price is the
@@ -63,17 +71,19 @@ breaks the tie.
 
 The legacy Ma Golide score then considers:
 
-favorite strength;
-underdog H2H upset rate;
-period/quarter dominance;
-half performance;
-recent momentum;
-displayed price band, when present.
+- favorite strength;
+- underdog H2H upset rate;
+- period/quarter dominance;
+- half performance;
+- recent momentum;
+- displayed price band, when present.
+
 Legacy confidence is reproduced for audit comparability. It is not accepted as
 a trained probability. The ML-meta layer learns the actual underdog-win target
 from out-of-time data.
 
-Model freeze
+## Model freeze
+
 Training is disabled while the Forebet depth audit is in progress. A preliminary
 14-day experiment demonstrated that separate sport estimators are not enough
 when their feature vector is still mostly generic. That experiment and its
@@ -83,17 +93,19 @@ Retraining is allowed only after each sport has a documented listing/detail
 facet contract, historical depth receipt, timing classification, settlement
 coverage and price-availability profile.
 
-Status lanes
-text
+## Status lanes
 
+```text
 SHADOW_UNPRICED  probability-defined Robber; Forebet price missing
 SHADOW_PRICED    Forebet price exists; model not certified
 CERTIFIED        reserved for later sport-specific prospective proof
-v0.1 never emits CERTIFIED.
+```
 
-Quick start
-Bash
+v0.1 never emits `CERTIFIED`.
 
+## Quick start
+
+```bash
 python -m pip install -e '.[dev]'
 pytest
 
@@ -110,13 +122,14 @@ slumdog enrich --events data/interim/events_2026-08-22.json
 
 # Model commands remain available only behind an explicit research override.
 # Production training is frozen until parser/missingness gates are complete.
+```
+
 Listing parsers normalize the common Forebet event surface across all sports.
 Raw HTML remains the source of truth for deeper match-detail facets developed in
 the next parser phase.
 
-Documentation policy
+## Documentation policy
 
-STATE.md
- is kept concise and describes only the current contract and next
+`STATE.md` is kept concise and describes only the current contract and next
 build gate. Detailed findings belong in dated, bounded research reports rather
 than an ever-growing handover file.

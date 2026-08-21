@@ -1,0 +1,65 @@
+[
+  {
+    "event_id": "basketball:demo:alpha-beta",
+    "sport": "basketball",
+    "event_date": "2026-08-22",
+    "captured_at": "2026-08-22T06:00:00+00:00",
+    "source_url": "https://www.forebet.com/en/basketball/example",
+    "participant_1": "Alpha",
+    "participant_2": "Beta",
+    "probability_1": 0.35,
+    "probability_2": 0.65,
+    "forebet_pick": 2,
+    "odds_1": 2.1,
+    "odds_2": 1.4,
+    "league": "DEMO",
+    "predicted_score": "78-84",
+    "predicted_total": 162.0,
+    "facets": {
+      "rank_gap": 5,
+      "h2h_total_games": 4,
+      "h2h_participant_1_wins": 2,
+      "period_win_rates_1": [0.6, 0.55, 0.4, 0.3],
+      "half_1_rate_1": 0.6,
+      "half_2_rate_1": 0.7,
+      "recent_1_wins": 4,
+      "recent_1_games": 5,
+      "result": null
+    },
+    "facet_timing": {
+      "rank_gap": "PRE_EVENT",
+      "h2h_total_games": "PRE_EVENT",
+      "h2h_participant_1_wins": "PRE_EVENT",
+      "period_win_rates_1": "PRE_EVENT",
+      "half_1_rate_1": "PRE_EVENT",
+      "half_2_rate_1": "PRE_EVENT",
+      "recent_1_wins": "PRE_EVENT",
+      "recent_1_games": "PRE_EVENT",
+      "result": "RESULT_ONLY"
+    }
+  },
+  {
+    "event_id": "tennis:demo:x-y",
+    "sport": "tennis",
+    "event_date": "2026-08-22",
+    "captured_at": "2026-08-22T06:00:00+00:00",
+    "source_url": "https://www.forebet.com/en/tennis/example",
+    "participant_1": "Player X",
+    "participant_2": "Player Y",
+    "probability_1": 0.28,
+    "probability_2": 0.72,
+    "forebet_pick": 2,
+    "odds_1": null,
+    "odds_2": null,
+    "league": "DEMO",
+    "predicted_score": "0-2",
+    "facets": {
+      "rank_gap": 23,
+      "surface_code": 2
+    },
+    "facet_timing": {
+      "rank_gap": "PRE_EVENT",
+      "surface_code": "PRE_EVENT"
+    }
+  }
+]
