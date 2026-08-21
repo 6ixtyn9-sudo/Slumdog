@@ -143,15 +143,19 @@ def parse_detail(body: bytes, sport: str) -> DetailFacets:
     specific: dict[str, Any] = {}
 
     if sport == "football":
-        for key, phrase in {
-            "weather_present": "weather conditions",
-            "htft_present": "ht/ft probability",
-            "corners_present": "avg. corners",
-            "cards_present": "avg. cards",
-            "btts_present": "both teams scored",
+        # Match Forebet's real page labels, not over-precise phrases. The page
+        # shows "ht/ft btts" menu labels and "avg. corners" tables; "both teams
+        # scored" prose is rare. A present label is enough to say the family is
+        # on the page; numeric extraction (where applicable) is separate.
+        for key, phrases in {
+            "weather_present": ("weather conditions", "weather"),
+            "htft_present": ("ht/ft", "ht/ft probability", "half time"),
+            "corners_present": ("avg. corners", "corners"),
+            "cards_present": ("avg. cards", "cards"),
+            "btts_present": ("btts", "both teams scored"),
         }.items():
-            specific[key] = phrase in lower
-        specific["cards_present"] = "avg. cards" in lower or "cards score" in lower
+            specific[key] = any(phrase in lower for phrase in phrases)
+        specific["cards_present"] = "avg. cards" in lower or "cards score" in lower or "cards" in lower
     elif sport in {"basketball", "american_football"}:
         specific["quarter_data_present"] = all(f"q{i}" in lower for i in range(1, 5))
     elif sport == "tennis":

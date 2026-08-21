@@ -39,3 +39,19 @@ def test_football_detail_contract_keeps_football_only_fields():
         "cards_present": True,
         "btts_present": True,
     }
+
+
+def test_football_matches_real_page_labels_not_just_prose():
+    # Real Forebet detail pages label these as "ht/ft btts" menus and
+    # "avg. corners"; the parser must not require "probability"/"scored".
+    body = b'''<html><body><h2>Match info</h2>
+    <div>1X2 Under/Over 2.5 Half time HT/FT BTTS Double handicap Corners Cards</div>
+    <div>Prediction Correct score Avg. goals Weather conditions Coef.</div>
+    </body></html>'''
+    facets = parse_detail(body, "football")
+    assert facets.sport_specific["htft_present"] is True
+    assert facets.sport_specific["btts_present"] is True
+    assert facets.sport_specific["corners_present"] is True
+    assert facets.sport_specific["cards_present"] is True
+    assert facets.sport_specific["weather_present"] is True
+    assert facets.missing == []
