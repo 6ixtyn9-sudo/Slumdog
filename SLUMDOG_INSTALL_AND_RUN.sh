@@ -6,6 +6,19 @@ EXPECTED_BASE_TREE="74548d4999a6340b6c5228bd642a86824535d9ea"
 EXPECTED_TARGET_TREE="b24d929144e2f3eb92503b3ae15d093c7520e207"
 EXPECTED_PATCH_SHA="015dab85d500499de7c647e71747faefb575dd4d514f2242f00491c13a31e7f7"
 
+# The full build is detected by content, not by an exact tree hash: the tree
+# that results from applying the embedded patch on top of main now also
+# contains this installer itself, so no single constant can describe it.
+full_build_installed() {
+  [[ -f "src/slumdog/aggregate.py" ]] &&
+  [[ -f "src/slumdog/depth_sweep.py" ]] &&
+  [[ -f "tests/test_special_settlement.py" ]] &&
+  grep -qs "def backfill_sport" "src/slumdog/backfill.py" &&
+  grep -qs "def capture_stratified_details" "src/slumdog/detail_worker.py" &&
+  grep -qs "def parse_mma_settled" "src/slumdog/settlement.py" &&
+  grep -qs "name: Slumdog Full Forebet Build" ".github/workflows/daily.yml"
+}
+
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 if [[ -z "$ROOT" ]]; then
   echo "ERROR: run this inside the Slumdog Codespace repository."
@@ -32,8 +45,8 @@ git switch main
 git pull --ff-only origin main
 
 CURRENT_TREE="$(git rev-parse HEAD^{tree})"
-if [[ "$CURRENT_TREE" == "$EXPECTED_TARGET_TREE" ]]; then
-  echo "Full-build tree is already installed; skipping patch application."
+if full_build_installed; then
+  echo "Full-build code is already installed; skipping patch application."
 elif [[ "$CURRENT_TREE" == "$EXPECTED_BASE_TREE" ]]; then
   PATCH_FILE="$(mktemp)"
   PAYLOAD_LINE="$(awk '/^__PATCH_PAYLOAD_BELOW__$/ {print NR+1; exit}' "$0")"
@@ -63,8 +76,8 @@ else
 fi
 
 INSTALLED_TREE="$(git rev-parse HEAD^{tree})"
-if [[ "$INSTALLED_TREE" != "$EXPECTED_TARGET_TREE" ]]; then
-  echo "ERROR: installed tree mismatch: $INSTALLED_TREE"
+if ! full_build_installed; then
+  echo "ERROR: full build markers missing after install; installed tree: $INSTALLED_TREE"
   exit 7
 fi
 
