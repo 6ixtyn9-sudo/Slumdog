@@ -74,6 +74,10 @@ def build_training_rows(settled: list[SettledEvent]) -> list[TrainingRow]:
     history = HistoryIndex(settled)
     training = []
     for row in sorted(settled, key=lambda item: (item.event_date, item.event_id)):
+        if row.disposition == "VOID":
+            # Voided events (no-contest, abandoned, cancelled, no-result) have
+            # no real outcome and must never become fake wins or losses.
+            continue
         event = settled_event_snapshot(row)
         h2h, recent_1, recent_2 = history.context(
             row.sport, row.event_date, row.participant_1, row.participant_2
