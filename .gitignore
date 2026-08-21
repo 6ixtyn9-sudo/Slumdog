@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+.env
+
+# Immutable captures and generated ledgers stay runtime data.
+data/raw/*
+data/interim/*
+data/ledgers/*
+data/reports/*
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/ledgers/.gitkeep
+!data/reports/.gitkeep
+
+# Trained artifacts are generated from frozen ledgers.
+models/

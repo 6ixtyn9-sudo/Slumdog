@@ -1,0 +1,91 @@
+name: Slumdog Forebet Depth Worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: YYYY-MM-DD
+        required: true
+      sport:
+        description: Forebet sport
+        required: true
+        type: choice
+        options:
+          - all
+          - football
+          - basketball
+          - tennis
+          - hockey
+          - baseball
+          - american_football
+          - rugby
+          - handball
+          - volleyball
+          - cricket
+          - mma
+          - esoccer
+      detail_budget:
+        description: Max detail pages this run (1-18)
+        required: false
+        default: "18"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: slumdog-depth-${{ inputs.sport }}
+  cancel-in-progress: false
+
+jobs:
+  depth-worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e '.[dev]'
+      - run: pytest
+
+      - name: Restore accumulated detail pages
+        uses: actions/cache/restore@v4
+        with:
+          path: data/raw/details
+          key: slumdog-depth-${{ inputs.sport }}-${{ github.run_id }}
+          restore-keys: slumdog-depth-${{ inputs.sport }}-
+
+      - name: Capture listing and bounded detail batch
+        shell: bash
+        run: |
+          SPORT="${{ inputs.sport }}"
+          if [ "$SPORT" = "all" ]; then
+            slumdog capture --date "${{ inputs.target_date }}"
+          else
+            slumdog capture --date "${{ inputs.target_date }}" --sport "$SPORT"
+          fi
+          slumdog parse --date "${{ inputs.target_date }}"
+          EVENTS="data/interim/events_${{ inputs.target_date }}.json"
+          slumdog details --events "$EVENTS" --max-events "${{ inputs.detail_budget }}"
+          slumdog enrich --events "$EVENTS"
+
+      - name: Save accumulated detail pages
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: data/raw/details
+          key: slumdog-depth-${{ inputs.sport }}-${{ github.run_id }}
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: slumdog-depth-${{ inputs.sport }}-${{ inputs.target_date }}
+          path: |
+            data/raw/**
+            data/interim/**
+            data/reports/**
+          retention-days: 14
+
+# No cron, no model training, no suggestion emission. Re-run a sport/date to
+# consume the next cached detail batch until missingness coverage is complete.
