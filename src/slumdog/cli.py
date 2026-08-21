@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .analyze import analyze_depth
 from .backfill import backfill, backfill_sport
 from .clock import today_iso
 from .detail_worker import capture_detail_batch, enrich_events_from_details
@@ -96,6 +97,10 @@ def main() -> int:
     daily.add_argument("--root", default=".")
     daily.add_argument("--workers", type=int, default=4)
 
+    analysis = sub.add_parser("analyze", help="turn census + history receipts into a research report")
+    _date_arg(analysis, help_text="YYYY-MM-DD label for the report (default: today)")
+    analysis.add_argument("--root", default=".")
+
     args = parser.parse_args()
 
     def resolved(day: str | None) -> str:
@@ -162,6 +167,10 @@ def main() -> int:
         )
         report_path = render_suggestions(ledger, day, root)
         print(report_path)
+        return 0
+    if args.command == "analyze":
+        path = analyze_depth(args.root, args.date)
+        print(path)
         return 0
     return 2
 

@@ -126,6 +126,10 @@ slumdog depth-sweep --per-sport 1000000
 # sports out in parallel). --end defaults to yesterday.
 slumdog backfill-sport --sport basketball --start 2023-01-01
 
+# Turn the pipeline receipts into a research report (field missingness,
+# coverage by season/league, priced vs unpriced) once data exists.
+slumdog analyze
+
 # The GitHub pipeline (Slumdog · Forebet Depth Pipeline) runs automatically:
 #   daily 03:00 UTC  history accumulation (through yesterday)
 #   Mon    02:00 UTC full census + consolidated receipt
