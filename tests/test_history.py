@@ -93,8 +93,10 @@ def test_settlement_append_is_idempotent(tmp_path):
     assert rows[0]["winner_index"] == 1
 
 
-def test_streaming_sport_backfill_writes_compressed_history(tmp_path, monkeypatch):
+def _fake_fetch(tmp_path, fetches=None):
     def fake_fetch(self, sport, day):
+        if fetches is not None:
+            fetches.append((sport, day))
         body = tmp_path / "data" / "raw" / sport / day / "body.html"
         meta = body.with_suffix(".json")
         body.parent.mkdir(parents=True, exist_ok=True)
@@ -105,8 +107,13 @@ def test_streaming_sport_backfill_writes_compressed_history(tmp_path, monkeypatc
             bytes=body.stat().st_size, body_path=str(body.relative_to(tmp_path)),
             metadata_path=str(meta.relative_to(tmp_path)),
         )
+    return fake_fetch
 
-    monkeypatch.setattr("slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+
+def test_streaming_sport_backfill_writes_compressed_history(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "slumdog.forebet.ForebetCollector._fetch", _fake_fetch(tmp_path)
+    )
     manifest_path = backfill_sport(
         "basketball", "2026-08-19", tmp_path,
         start="2026-08-18", workers=2, batch_size=2, delay_seconds=0,
@@ -117,3 +124,40 @@ def test_streaming_sport_backfill_writes_compressed_history(tmp_path, monkeypatc
     assert manifest["settled_rows"] == 2
     with gzip.open(tmp_path / manifest["history_file"], "rt") as handle:
         assert len(handle.readlines()) == 2
+
+
+def test_backfill_sport_resumes_and_skips_covered_dates(tmp_path, monkeypatch):
+    fetches = []
+    monkeypatch.setattr(
+        "slumdog.forebet.ForebetCollector._fetch", _fake_fetch(tmp_path, fetches)
+    )
+
+    manifest_path = backfill_sport(
+        "basketball", "2026-08-19", tmp_path,
+        start="2026-08-18", workers=2, batch_size=2, delay_seconds=0,
+    )
+    first = json.loads(manifest_path.read_text())
+    assert first["dates_completed"] == 2
+
+    # Same range again: nothing re-fetched, ledger unchanged.
+    manifest_path = backfill_sport(
+        "basketball", "2026-08-19", tmp_path,
+        start="2026-08-18", workers=2, batch_size=2, delay_seconds=0,
+    )
+    second = json.loads(manifest_path.read_text())
+    assert second["dates_completed"] == 2
+    assert second["settled_rows"] == 2
+    assert len(fetches) == 2  # no new fetches for already-covered dates
+
+    # Extended range: only the new day is fetched and appended.
+    manifest_path = backfill_sport(
+        "basketball", "2026-08-20", tmp_path,
+        start="2026-08-18", workers=2, batch_size=2, delay_seconds=0,
+    )
+    third = json.loads(manifest_path.read_text())
+    assert third["dates_completed"] == 3
+    assert third["settled_rows"] == 3
+    assert fetches[-1] == ("basketball", "2026-08-20")
+    import gzip
+    with gzip.open(tmp_path / third["history_file"], "rt") as handle:
+        assert len(handle.readlines()) == 3

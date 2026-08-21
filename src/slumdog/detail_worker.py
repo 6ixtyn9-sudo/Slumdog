@@ -6,9 +6,10 @@ import json
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
+from .clock import today_iso
 from .contracts import TimingClass
 from .detail_facets import parse_detail
 from .forebet import RELAY_BASE
@@ -162,7 +163,7 @@ def enrich_events_from_details(
     events = json.loads(Path(events_path).read_text())
     coverage: dict[str, dict[str, int]] = {}
     enriched = 0
-    capture_day = date.today().isoformat()
+    capture_day = today_iso()
     for event in events:
         if not isinstance(event, dict):
             continue

@@ -7,19 +7,21 @@ from collections import Counter
 from pathlib import Path
 
 from .detail_worker import capture_stratified_details, enrich_events_from_details
+from .clock import today_iso
 from .forebet import ForebetCollector
 from .pipeline import parse_capture_receipt
 from .sports import SPORTS
 
 
 def run_depth_sweep(
-    target_date: str,
+    target_date: str | None = None,
     root: Path | str = ".",
     per_sport: int = 3,
     workers: int = 4,
     relay_pause: float = 62.0,
 ) -> Path:
     root = Path(root)
+    target_date = target_date or today_iso()
     ForebetCollector(root, workers=workers).capture_all(target_date)
     events_path = parse_capture_receipt(target_date, root)
     # Listing capture uses 12 relay requests. Start detail requests in a fresh

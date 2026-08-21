@@ -1,11 +1,16 @@
 name: Slumdog Full Forebet Build
 
 on:
+  # Optional autonomy: uncomment to run the census + incremental history daily.
+  # A full census is heavy on the public relay; start at 02:00 UTC and tune.
+  # schedule:
+  #   - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
-      target_date:
-        description: Current suggestions date (YYYY-MM-DD)
-        required: true
+      sweep_date:
+        description: Research override (YYYY-MM-DD); leave empty for today
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -19,6 +24,8 @@ jobs:
     name: Current board — every detail
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    env:
+      TZ: 'Africa/Johannesburg'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,15 +36,20 @@ jobs:
       - run: pytest
       - name: Capture every current matchup detail across all sports
         run: |
+          SWEEP_DATE="${{ inputs.sweep_date }}"
+          if [ -z "$SWEEP_DATE" ]; then SWEEP_DATE="$(date +%F)"; fi
+          echo "Census date: $SWEEP_DATE"
           slumdog depth-sweep \
-            --date "${{ inputs.target_date }}" \
+            --date "$SWEEP_DATE" \
             --per-sport 1000000 \
             --workers 6 \
             --relay-pause 62
       - name: Publish current census summary
         if: always()
         run: |
-          REPORT="data/reports/depth_sweep_${{ inputs.target_date }}.md"
+          SWEEP_DATE="${{ inputs.sweep_date }}"
+          if [ -z "$SWEEP_DATE" ]; then SWEEP_DATE="$(date +%F)"; fi
+          REPORT="data/reports/depth_sweep_$SWEEP_DATE.md"
           if [ -f "$REPORT" ]; then cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"; fi
       - uses: actions/upload-artifact@v4
         if: always()
@@ -68,6 +80,8 @@ jobs:
           - {sport: volleyball, start: '2024-01-01'}
           - {sport: cricket, start: '2025-01-01'}
           - {sport: mma, start: '2025-01-01'}
+    env:
+      TZ: 'Africa/Johannesburg'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -75,14 +89,14 @@ jobs:
           python-version: "3.13"
           cache: pip
       - run: python -m pip install -e '.[dev]'
-      - name: Stream full sport history
+      - name: Accumulate sport history (skips dates already in the ledger)
         shell: bash
         run: |
-          END="$(date -d '${{ inputs.target_date }} -1 day' +%F)"
+          # --end defaults to yesterday from the runner clock; the ledger is
+          # resumable, so repeat runs only fetch days not yet covered.
           slumdog backfill-sport \
             --sport "${{ matrix.sport }}" \
             --start "${{ matrix.start }}" \
-            --end "$END" \
             --workers 8 \
             --batch-size 18 \
             --delay 62
@@ -90,7 +104,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          FILE="$(find data/reports -name 'history_${{ matrix.sport }}_*.json' | head -1)"
+          FILE="$(find data/reports -name 'history_${{ matrix.sport }}*.json' | head -1)"
           if [ -n "$FILE" ]; then
             echo "## ${{ matrix.sport }} history" >> "$GITHUB_STEP_SUMMARY"
             echo '```json' >> "$GITHUB_STEP_SUMMARY"
@@ -101,7 +115,7 @@ jobs:
         if: always()
         with:
           name: slumdog-history-${{ matrix.sport }}
-          path: data/reports/history_${{ matrix.sport }}_*
+          path: data/reports/history_${{ matrix.sport }}*
           retention-days: 30
 
   aggregate:
@@ -131,6 +145,6 @@ jobs:
           path: full_depth_summary.md
           retention-days: 30
 
-# One dispatch fans out into a complete current detail census and parallel full
-# historical backfills per sport. Esoccer is prospective-only. No model training
-# or suggestion emission occurs in this workflow.
+# Dates come from the runner clock in TZ Africa/Johannesburg; dispatch needs no
+# target date. History ledgers are rolling and resumable per sport. Esoccer is
+# prospective-only. No model training or suggestion emission occurs here.

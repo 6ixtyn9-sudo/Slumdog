@@ -109,22 +109,27 @@ v0.1 never emits `CERTIFIED`.
 python -m pip install -e '.[dev]'
 pytest
 
-# Freeze all Forebet sport surfaces for a discovery date.
-slumdog capture --date 2026-08-22
+# Dates come from the runner clock in TZ Africa/Johannesburg. Every --date /
+# --start / --end argument is an optional override; omit it to mean "now".
 
-# Bounded historical discovery (rate-limited by default).
-slumdog backfill --start 2026-08-20 --end 2026-08-21
+# Freeze all Forebet sport surfaces for today (or --date YYYY-MM-DD).
+slumdog capture
+
+# Bounded historical probe: trailing 7 days by default (or --start/--end).
+slumdog backfill
 
 # Full current-board census: all listings and every available match detail.
-slumdog depth-sweep --date 2026-08-22 --per-sport 1000000
+slumdog depth-sweep --per-sport 1000000
 
-# Full dated history for one sport (the GitHub workflow fans all sports out in parallel).
-slumdog backfill-sport --sport basketball --start 2023-01-01 --end 2026-08-21
+# Full dated history for one sport; the ledger is rolling and resumable, so
+# repeat runs only fetch days not yet covered (the GitHub workflow fans all
+# sports out in parallel). --end defaults to yesterday.
+slumdog backfill-sport --sport basketball --start 2023-01-01
 
 # Lower-level commands remain available for parser development.
-slumdog parse --date 2026-08-22
-slumdog details --events data/interim/events_2026-08-22.json --max-events 18
-slumdog enrich --events data/interim/events_2026-08-22.json
+slumdog parse
+slumdog details --events data/interim/events_$(date +%F).json --max-events 18
+slumdog enrich --events data/interim/events_$(date +%F).json
 
 # Model commands remain available only behind an explicit research override.
 # Production training is frozen until parser/missingness gates are complete.

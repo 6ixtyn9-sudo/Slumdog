@@ -37,6 +37,10 @@ per-sport missingness receipt.
 Annual archive and representative price/detail coverage reports are stored in
 docs/.
 Training is blocked unless an explicit research override is passed.
+Dates are runtime-derived, not typed at dispatch: every CLI date argument is
+an optional override and defaults to the runner clock in TZ Africa/Johannesburg
+(src/slumdog/clock.py). History ledgers are rolling and resumable per sport
+(history_<sport>.jsonl.gz + manifest), so repeat runs only fetch new dates.
 Next gates
 Dispatch the full Forebet build (one manual GitHub dispatch) so the current
 all-detail census and each sport's full dated backfill stream to compressed
