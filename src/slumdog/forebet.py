@@ -106,6 +106,41 @@ def relay_get(url: str, timeout: int = 45, max_retries: int = 3) -> bytes:
     raise last_error  # type: ignore[misc]
 
 
+def relay_get_markdown(url: str, expected_url: str, timeout: int = 45, max_retries: int = 3) -> bytes:
+    """GET via the relay in Markdown reader mode (Edge-Factory-validated path).
+
+    The relay's default reader mode (no ``X-Return-Format``) renders the
+    target as a Markdown wrapper: ``Title: … URL Source: <url> … Markdown
+    Content:\\n<body>``. Edge-Factory qualified this exact mode for the
+    football JSON endpoint from GitHub Actions (byte-identical JSON, no
+    secrets); the html-forced mode is what 401s there. Returns the unwrapped
+    body. ``expected_url`` must match the wrapper's ``URL Source:`` exactly.
+    """
+    last_error: Exception | None = None
+    for attempt in range(max_retries):
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "EdgeFactory/1.0",
+                "Accept": "text/plain",
+                "X-No-Cache": "true",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                wrapped = response.read()
+            return unwrap_reader(wrapped, expected_url)
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code not in _RETRY_STATUS:
+                raise
+        except _RETRYABLE as exc:
+            last_error = exc
+        if attempt + 1 < max_retries:
+            _sleep_with_jitter(attempt)
+    raise last_error  # type: ignore[misc]
+
+
 def direct_get(url: str, timeout: int = 40, max_retries: int = 3) -> bytes:
     """GET a Forebet URL directly, trying distinct transports in order.
 
@@ -249,8 +284,10 @@ def validate_football_json_body(body: bytes) -> None:
 
 def validate_capture_body(body: bytes, sport: str, target_date: str, route: str) -> None:
     """Sport- and route-aware validation of a captured body."""
-    if route == "direct" and sport == "football":
-        # Direct access returns raw JSON without the relay's HTML wrapper.
+    if sport == "football":
+        # Football arrives as raw JSON (direct access, or the relay's Markdown
+        # reader mode after unwrapping) or as the relay's HTML-wrapped JSON.
+        # Both are accepted by validate_football_json_body.
         validate_football_json_body(body)
         return
     validate_html_body(body, sport, target_date)
@@ -266,7 +303,18 @@ class ForebetCollector:
         spec = SPORTS[sport]
         target = source_url(spec, target_date)
         relay = RELAY_BASE + target
-        body, route = fetch_with_fallback(relay, target, timeout=self.timeout)
+        if sport == "football":
+            # The relay's Markdown reader mode (Edge-Factory-validated) is the
+            # qualified path for the football JSON endpoint; the html-forced
+            # mode 401s on cloud IPs. Try markdown first, then html, then
+            # direct (local-only, fail-fast on a runner).
+            try:
+                body = relay_get_markdown(relay, target, timeout=self.timeout)
+                route = "relay_markdown"
+            except Exception:
+                body, route = fetch_with_fallback(relay, target, timeout=self.timeout)
+        else:
+            body, route = fetch_with_fallback(relay, target, timeout=self.timeout)
         validate_capture_body(body, sport, target_date, route)
         captured_at = datetime.now(timezone.utc).isoformat()
         digest = hashlib.sha256(body).hexdigest()

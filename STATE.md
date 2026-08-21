@@ -49,11 +49,13 @@ instead of re-fetching every date from scratch. Relay access uses bounded
 retry with backoff (transient 4xx/5xx/timeouts), and backfill batches are
 gentle (max 6 in parallel) to stay under the public relay's shared-IP budget;
 a valid page with zero rows counts as covered, not failed. Football capture
-falls back to direct Forebet access (AJAX header set validated by Edge-Factory,
-with optional curl_cffi TLS impersonation) for local runs; on GitHub runners
-the relay's deterministic 401 fails fast instead of stalling. 2026-08-21 first
-run: football listing 401s on the runner, so its 963 dates remain to backfill
-(locally, or retried on the next run).
+uses the relay's Markdown reader mode first (Edge-Factory-validated path for
+the JSON endpoint — no X-Return-Format, unwrap the "Markdown Content:" body),
+then the html-forced relay, then direct Forebet access (AJAX headers +
+optional curl_cffi) for local runs; on GitHub runners a deterministic relay
+failure fails fast instead of stalling. 2026-08-21 first run: football listing
+401s on the runner, so its 963 dates remain to backfill (retried with the
+Markdown-mode path on the next run).
 Next gates
 Review the first census + history receipts (from the scheduled pipeline), then
 measure detail-field missingness from the census, not from three-page samples.

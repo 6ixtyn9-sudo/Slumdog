@@ -48,6 +48,24 @@ def test_direct_get_raises_when_all_transports_fail(monkeypatch):
         forebet.direct_get("https://www.forebet.com/x", max_retries=1)
 
 
+def test_relay_get_markdown_unwraps_reader_wrapper(monkeypatch):
+    url = "https://r.jina.ai/https://www.forebet.com/scripts/getrs.php?in=2026-08-19"
+    expected = "https://www.forebet.com/scripts/getrs.php?in=2026-08-19"
+    wrapped = (
+        b"Title: \n\n"
+        b"URL Source: https://www.forebet.com/scripts/getrs.php?in=2026-08-19\n\n"
+        b"Markdown Content:\n"
+        b'[[{"id":"1","Host_SC":null}]]'
+    )
+    monkeypatch.setattr(
+        forebet, "relay_get_markdown",
+        lambda url, expected_url, timeout=45, max_retries=3: wrapped.split(b"Markdown Content:\n", 1)[1],
+    )
+    body = forebet.relay_get_markdown(url, expected)
+    assert body.startswith(b"[[{")
+    assert b"Markdown Content" not in body
+
+
 def test_route_recorded_in_raw_capture(monkeypatch, tmp_path):
     def fake_fallback(relay_url, direct_url, timeout=45, max_retries=3):
         return b"<html>not really used</html>", "direct"
