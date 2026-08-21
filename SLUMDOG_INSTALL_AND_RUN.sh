@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Census date is derived from the runner clock; TARGET_DATE only overrides.
-TARGET_DATE="${TARGET_DATE:-$(date +%F)}"
 EXPECTED_BASE_TREE="74548d4999a6340b6c5228bd642a86824535d9ea"
 EXPECTED_TARGET_TREE="b24d929144e2f3eb92503b3ae15d093c7520e207"
 EXPECTED_PATCH_SHA="015dab85d500499de7c647e71747faefb575dd4d514f2242f00491c13a31e7f7"
@@ -103,20 +101,16 @@ fi
 echo "Pushing validated full-build tree to main..."
 git push origin main
 
-echo "Dispatching full Forebet build (census date: $TARGET_DATE)..."
+echo "Dispatching full Forebet build (dates derived from the runner clock)..."
 if ! command -v gh >/dev/null 2>&1; then
   echo "ERROR: push succeeded, but gh CLI is unavailable."
   echo "Run the workflow manually from the Actions tab."
   exit 8
 fi
 
-# The workflow no longer takes a date input; dates derive from the runner
-# clock in TZ Africa/Johannesburg. Pass sweep_date only when overriding.
-DISPATCH_ARGS=()
-if [[ -n "${SWEEP_DATE_OVERRIDE:-}" ]]; then
-  DISPATCH_ARGS+=(-f "sweep_date=$SWEEP_DATE_OVERRIDE")
-fi
-gh workflow run daily.yml --ref main "${DISPATCH_ARGS[@]}"
+# The workflow takes no dispatch inputs; dates derive from the runner clock in
+# TZ Africa/Johannesburg (census today, history through yesterday).
+gh workflow run daily.yml --ref main
 sleep 5
 echo "Latest workflow runs:"
 gh run list --workflow daily.yml --limit 3

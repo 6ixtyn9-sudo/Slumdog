@@ -5,12 +5,7 @@ on:
   # A full census is heavy on the public relay; start at 02:00 UTC and tune.
   # schedule:
   #   - cron: '0 2 * * *'
-  workflow_dispatch:
-    inputs:
-      sweep_date:
-        description: Research override (YYYY-MM-DD); leave empty for today
-        required: false
-        type: string
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -36,8 +31,10 @@ jobs:
       - run: pytest
       - name: Capture every current matchup detail across all sports
         run: |
-          SWEEP_DATE="${{ inputs.sweep_date }}"
-          if [ -z "$SWEEP_DATE" ]; then SWEEP_DATE="$(date +%F)"; fi
+          # The census date is the runner clock in the pinned TZ; there is no
+          # dispatch input. To census a specific date, use the CLI directly:
+          #   slumdog depth-sweep --date YYYY-MM-DD
+          SWEEP_DATE="$(date +%F)"
           echo "Census date: $SWEEP_DATE"
           slumdog depth-sweep \
             --date "$SWEEP_DATE" \
@@ -47,8 +44,7 @@ jobs:
       - name: Publish current census summary
         if: always()
         run: |
-          SWEEP_DATE="${{ inputs.sweep_date }}"
-          if [ -z "$SWEEP_DATE" ]; then SWEEP_DATE="$(date +%F)"; fi
+          SWEEP_DATE="$(date +%F)"
           REPORT="data/reports/depth_sweep_$SWEEP_DATE.md"
           if [ -f "$REPORT" ]; then cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"; fi
       - uses: actions/upload-artifact@v4
@@ -145,6 +141,7 @@ jobs:
           path: full_depth_summary.md
           retention-days: 30
 
-# Dates come from the runner clock in TZ Africa/Johannesburg; dispatch needs no
-# target date. History ledgers are rolling and resumable per sport. Esoccer is
-# prospective-only. No model training or suggestion emission occurs here.
+# No dispatch inputs: dates come from the runner clock in TZ Africa/Johannesburg
+# (census today, history through yesterday). History ledgers are rolling and
+# resumable per sport. Esoccer is prospective-only. No model training or
+# suggestion emission occurs here.
