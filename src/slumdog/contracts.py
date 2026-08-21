@@ -135,6 +135,7 @@ class SettledEvent:
     period_scores_2: tuple[float, ...] = ()
     source_url: str = ""
     reconstruction: str = "HISTORICAL_PAGE"
+    disposition: str = "SETTLED"
 
     def __post_init__(self) -> None:
         if self.winner_index not in (0, 1, 2):

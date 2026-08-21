@@ -63,3 +63,4 @@ def test_football_json_parser_keeps_prematch_and_drops_results():
     assert events[0].forebet_pick == 2
     assert events[0].draw_probability == 0.20
     assert events[0].odds_1 == 2.6
+    assert events[0].source_url.endswith("/home-away-1")

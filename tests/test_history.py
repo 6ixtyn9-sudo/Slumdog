@@ -1,7 +1,10 @@
 from slumdog.contracts import SettledEvent
+import json
 from datetime import datetime, timezone
 
 from slumdog.contracts import EventSnapshot
+from slumdog.backfill import backfill_sport
+from slumdog.forebet import RawCapture
 from slumdog.history import HistoryIndex
 from slumdog.pipeline import build_shadow_robbers
 from slumdog.settlement import append_settled_from_capture, parse_html_settled
@@ -79,7 +82,6 @@ def test_settlement_append_is_idempotent(tmp_path):
     body_path.write_bytes(SETTLED_HTML)
     report = tmp_path / "data" / "reports" / "capture_2026-08-19.json"
     report.parent.mkdir(parents=True)
-    import json
     report.write_text(json.dumps({"captured": [{
         "sport": "basketball", "target_date": "2026-08-19",
         "body_path": str(body_path.relative_to(tmp_path)),
@@ -89,3 +91,29 @@ def test_settlement_append_is_idempotent(tmp_path):
     rows = json.loads(path.read_text())
     assert len(rows) == 1
     assert rows[0]["winner_index"] == 1
+
+
+def test_streaming_sport_backfill_writes_compressed_history(tmp_path, monkeypatch):
+    def fake_fetch(self, sport, day):
+        body = tmp_path / "data" / "raw" / sport / day / "body.html"
+        meta = body.with_suffix(".json")
+        body.parent.mkdir(parents=True, exist_ok=True)
+        body.write_bytes(SETTLED_HTML.replace(b"19/08/2026", day[8:10].encode()+b"/08/2026"))
+        return RawCapture(
+            sport=sport, target_date=day, captured_at=day+"T00:00:00+00:00",
+            source_url="u", relay_url="r", body_format="html", sha256="abc",
+            bytes=body.stat().st_size, body_path=str(body.relative_to(tmp_path)),
+            metadata_path=str(meta.relative_to(tmp_path)),
+        )
+
+    monkeypatch.setattr("slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+    manifest_path = backfill_sport(
+        "basketball", "2026-08-19", tmp_path,
+        start="2026-08-18", workers=2, batch_size=2, delay_seconds=0,
+    )
+    import gzip
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["dates_completed"] == 2
+    assert manifest["settled_rows"] == 2
+    with gzip.open(tmp_path / manifest["history_file"], "rt") as handle:
+        assert len(handle.readlines()) == 2

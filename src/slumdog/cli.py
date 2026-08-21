@@ -5,8 +5,9 @@ import json
 from datetime import date
 from pathlib import Path
 
-from .backfill import backfill
+from .backfill import backfill, backfill_sport
 from .detail_worker import capture_detail_batch, enrich_events_from_details
+from .depth_sweep import run_depth_sweep
 from .forebet import ForebetCollector
 from .pipeline import parse_capture_receipt, run_from_json
 from .reports import render_suggestions
@@ -35,12 +36,28 @@ def main() -> int:
     robbers.add_argument("--root", default=".")
     robbers.add_argument("--history", default=None, help="settled history JSON")
 
+    sport_history = sub.add_parser("backfill-sport", help="stream one sport's full dated history")
+    sport_history.add_argument("--sport", required=True)
+    sport_history.add_argument("--start", default=None)
+    sport_history.add_argument("--end", required=True)
+    sport_history.add_argument("--root", default=".")
+    sport_history.add_argument("--workers", type=int, default=6)
+    sport_history.add_argument("--batch-size", type=int, default=18)
+    sport_history.add_argument("--delay", type=float, default=62.0)
+
     history = sub.add_parser("backfill", help="bounded historical capture and settlement")
     history.add_argument("--start", required=True)
     history.add_argument("--end", required=True)
     history.add_argument("--root", default=".")
     history.add_argument("--workers", type=int, default=4)
     history.add_argument("--delay", type=float, default=60.0)
+
+    sweep = sub.add_parser("depth-sweep", help="one-shot stratified all-sport audit")
+    sweep.add_argument("--date", required=True)
+    sweep.add_argument("--root", default=".")
+    sweep.add_argument("--per-sport", type=int, default=3)
+    sweep.add_argument("--workers", type=int, default=4)
+    sweep.add_argument("--relay-pause", type=float, default=62.0)
 
     details = sub.add_parser("details", help="capture next bounded match-detail batch")
     details.add_argument("--events", required=True)
@@ -86,8 +103,19 @@ def main() -> int:
         path = run_from_json(args.events, args.date, args.root, history_path=args.history)
         print(path)
         return 0
+    if args.command == "backfill-sport":
+        path = backfill_sport(
+            args.sport, args.end, args.root, args.start,
+            args.workers, args.batch_size, args.delay,
+        )
+        print(path)
+        return 0
     if args.command == "backfill":
         path = backfill(args.start, args.end, args.root, args.workers, args.delay)
+        print(path)
+        return 0
+    if args.command == "depth-sweep":
+        path = run_depth_sweep(args.date, args.root, args.per_sport, args.workers, args.relay_pause)
         print(path)
         return 0
     if args.command == "details":

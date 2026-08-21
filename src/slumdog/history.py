@@ -15,7 +15,10 @@ class HistoryIndex:
     """Build H2H and recent-form context using strictly earlier event dates."""
 
     def __init__(self, rows: list[SettledEvent]):
-        self.rows = sorted(rows, key=lambda row: (row.event_date, row.event_id))
+        self.rows = sorted(
+            [row for row in rows if row.disposition != "VOID"],
+            key=lambda row: (row.event_date, row.event_id),
+        )
         self.by_sport: dict[str, list[SettledEvent]] = defaultdict(list)
         self.by_pair: dict[tuple[str, tuple[str, str]], list[SettledEvent]] = defaultdict(list)
         self.by_participant: dict[tuple[str, str], list[SettledEvent]] = defaultdict(list)

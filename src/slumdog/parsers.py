@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
@@ -12,6 +13,12 @@ from .contracts import EventSnapshot, TimingClass
 from .sports import SPORTS
 
 BASE = "https://www.forebet.com"
+
+
+def _slug(value: str) -> str:
+    folded = unicodedata.normalize("NFKD", str(value or ""))
+    ascii_text = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z0-9]+", "-", ascii_text.casefold()).strip("-")
 
 
 def _text(node) -> str:
@@ -194,13 +201,17 @@ def parse_football_json(
             key: (TimingClass.RESULT_ONLY if key in result_keys else TimingClass.PRE_EVENT)
             for key in row
         }
+        detail_url = (
+            f"{BASE}/en/football/matches/"
+            f"{_slug(row.get('HOST_NAME'))}-{_slug(row.get('GUEST_NAME'))}-{row.get('id')}"
+        )
         events.append(
             EventSnapshot(
                 event_id=f"football:{row.get('id')}",
                 sport="football",
                 event_date=target_date,
                 captured_at=captured_at,
-                source_url=source_url,
+                source_url=detail_url,
                 participant_1=str(row.get("HOST_NAME") or ""),
                 participant_2=str(row.get("GUEST_NAME") or ""),
                 probability_1=p1 / 100.0,

@@ -232,11 +232,12 @@ Still required before retraining (implementation, not further discovery):
 - field missingness by season/league;
 - sport-specific feature ablations and model cards.
 
-## Three-detail-page coverage sample
+## Preliminary three-detail-page coverage
 
-Three live detail pages per sport were checked (Football was sampled separately
-from its current board). Coverage means the factor family was visibly present;
-parsing and timing still require fixture tests.
+Three live detail pages per sport were checked to qualify the field contracts.
+This is no longer the final missingness gate: the full-build workflow now fetches
+every current detail page and reports census coverage. The table remains the
+pre-deployment receipt that justified each parser family.
 
 | Sport | H2H | Last 6 | Venue splits | Standings | Core sport detail |
 |---|---:|---:|---:|---:|---|

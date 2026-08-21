@@ -115,7 +115,13 @@ slumdog capture --date 2026-08-22
 # Bounded historical discovery (rate-limited by default).
 slumdog backfill --start 2026-08-20 --end 2026-08-21
 
-# Normalize a listing, then consume the next rate-bounded detail batch.
+# Full current-board census: all listings and every available match detail.
+slumdog depth-sweep --date 2026-08-22 --per-sport 1000000
+
+# Full dated history for one sport (the GitHub workflow fans all sports out in parallel).
+slumdog backfill-sport --sport basketball --start 2023-01-01 --end 2026-08-21
+
+# Lower-level commands remain available for parser development.
 slumdog parse --date 2026-08-22
 slumdog details --events data/interim/events_2026-08-22.json --max-events 18
 slumdog enrich --events data/interim/events_2026-08-22.json

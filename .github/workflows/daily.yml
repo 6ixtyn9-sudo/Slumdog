@@ -1,45 +1,24 @@
-name: Slumdog Forebet Depth Worker
+name: Slumdog Full Forebet Build
 
 on:
   workflow_dispatch:
     inputs:
       target_date:
-        description: YYYY-MM-DD
+        description: Current suggestions date (YYYY-MM-DD)
         required: true
-      sport:
-        description: Forebet sport
-        required: true
-        type: choice
-        options:
-          - all
-          - football
-          - basketball
-          - tennis
-          - hockey
-          - baseball
-          - american_football
-          - rugby
-          - handball
-          - volleyball
-          - cricket
-          - mma
-          - esoccer
-      detail_budget:
-        description: Max detail pages this run (1-18)
-        required: false
-        default: "18"
 
 permissions:
   contents: read
 
 concurrency:
-  group: slumdog-depth-${{ inputs.sport }}
+  group: slumdog-full-build
   cancel-in-progress: false
 
 jobs:
-  depth-worker:
+  current-all-details:
+    name: Current board — every detail
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -48,44 +27,110 @@ jobs:
           cache: pip
       - run: python -m pip install -e '.[dev]'
       - run: pytest
-
-      - name: Restore accumulated detail pages
-        uses: actions/cache/restore@v4
-        with:
-          path: data/raw/details
-          key: slumdog-depth-${{ inputs.sport }}-${{ github.run_id }}
-          restore-keys: slumdog-depth-${{ inputs.sport }}-
-
-      - name: Capture listing and bounded detail batch
-        shell: bash
+      - name: Capture every current matchup detail across all sports
         run: |
-          SPORT="${{ inputs.sport }}"
-          if [ "$SPORT" = "all" ]; then
-            slumdog capture --date "${{ inputs.target_date }}"
-          else
-            slumdog capture --date "${{ inputs.target_date }}" --sport "$SPORT"
-          fi
-          slumdog parse --date "${{ inputs.target_date }}"
-          EVENTS="data/interim/events_${{ inputs.target_date }}.json"
-          slumdog details --events "$EVENTS" --max-events "${{ inputs.detail_budget }}"
-          slumdog enrich --events "$EVENTS"
-
-      - name: Save accumulated detail pages
-        uses: actions/cache/save@v4
+          slumdog depth-sweep \
+            --date "${{ inputs.target_date }}" \
+            --per-sport 1000000 \
+            --workers 6 \
+            --relay-pause 62
+      - name: Publish current census summary
         if: always()
-        with:
-          path: data/raw/details
-          key: slumdog-depth-${{ inputs.sport }}-${{ github.run_id }}
-
+        run: |
+          REPORT="data/reports/depth_sweep_${{ inputs.target_date }}.md"
+          if [ -f "$REPORT" ]; then cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"; fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: slumdog-depth-${{ inputs.sport }}-${{ inputs.target_date }}
+          name: slumdog-current-depth
           path: |
-            data/raw/**
             data/interim/**
             data/reports/**
           retention-days: 14
 
-# No cron, no model training, no suggestion emission. Re-run a sport/date to
-# consume the next cached detail batch until missingness coverage is complete.
+  historical-sport:
+    name: History — ${{ matrix.sport }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include:
+          - {sport: football, start: '2024-01-01'}
+          - {sport: basketball, start: '2023-01-01'}
+          - {sport: tennis, start: '2024-01-01'}
+          - {sport: hockey, start: '2022-01-01'}
+          - {sport: baseball, start: '2024-01-01'}
+          - {sport: american_football, start: '2023-01-01'}
+          - {sport: rugby, start: '2024-01-01'}
+          - {sport: handball, start: '2024-01-01'}
+          - {sport: volleyball, start: '2024-01-01'}
+          - {sport: cricket, start: '2025-01-01'}
+          - {sport: mma, start: '2025-01-01'}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e '.[dev]'
+      - name: Stream full sport history
+        shell: bash
+        run: |
+          END="$(date -d '${{ inputs.target_date }} -1 day' +%F)"
+          slumdog backfill-sport \
+            --sport "${{ matrix.sport }}" \
+            --start "${{ matrix.start }}" \
+            --end "$END" \
+            --workers 8 \
+            --batch-size 18 \
+            --delay 62
+      - name: Publish sport history receipt
+        if: always()
+        shell: bash
+        run: |
+          FILE="$(find data/reports -name 'history_${{ matrix.sport }}_*.json' | head -1)"
+          if [ -n "$FILE" ]; then
+            echo "## ${{ matrix.sport }} history" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat "$FILE" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: slumdog-history-${{ matrix.sport }}
+          path: data/reports/history_${{ matrix.sport }}_*
+          retention-days: 30
+
+  aggregate:
+    name: Consolidated depth receipt
+    if: always()
+    needs: [current-all-details, historical-sport]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e .
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: slumdog-*
+          path: depth-input
+      - name: Build consolidated report
+        run: |
+          python -m slumdog.aggregate \
+            --input depth-input \
+            --output full_depth_summary.md
+          cat full_depth_summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slumdog-full-depth-summary
+          path: full_depth_summary.md
+          retention-days: 30
+
+# One dispatch fans out into a complete current detail census and parallel full
+# historical backfills per sport. Esoccer is prospective-only. No model training
+# or suggestion emission occurs in this workflow.
