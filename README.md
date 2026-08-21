@@ -122,9 +122,14 @@ slumdog backfill
 slumdog depth-sweep --per-sport 1000000
 
 # Full dated history for one sport; the ledger is rolling and resumable, so
-# repeat runs only fetch days not yet covered (the GitHub workflow fans all
+# repeat runs only fetch days not yet covered (the GitHub pipeline fans all
 # sports out in parallel). --end defaults to yesterday.
 slumdog backfill-sport --sport basketball --start 2023-01-01
+
+# The GitHub pipeline (Slumdog · Forebet Depth Pipeline) runs automatically:
+#   daily 03:00 UTC  history accumulation (through yesterday)
+#   Mon    02:00 UTC full census + consolidated receipt
+#   manual dispatch (no inputs) runs both immediately
 
 # Lower-level commands remain available for parser development.
 slumdog parse

@@ -1,22 +1,28 @@
-name: Slumdog Full Forebet Build
+name: Slumdog · Forebet Depth Pipeline
+run-name: "Slumdog · Depth Build · #${{ github.run_number }}"
 
 on:
-  # Optional autonomy: uncomment to run the census + incremental history daily.
-  # A full census is heavy on the public relay; start at 02:00 UTC and tune.
-  # schedule:
-  #   - cron: '0 2 * * *'
+  schedule:
+    # Daily at 03:00 UTC (05:00 SAST): accumulate each sport's history ledger
+    # through yesterday. Resumable ledgers make this cheap once caught up.
+    - cron: '0 3 * * *'
+    # Weekly on Monday at 02:00 UTC (04:00 SAST): full current-board census.
+    # The census fetches every match detail across all sports and is heavy on
+    # the public relay, so it is intentionally not a daily job.
+    - cron: '0 2 * * 1'
   workflow_dispatch: {}
 
 permissions:
   contents: read
 
 concurrency:
-  group: slumdog-full-build
+  group: slumdog-depth-build
   cancel-in-progress: false
 
 jobs:
-  current-all-details:
-    name: Current board — every detail
+  census:
+    name: Census — current board, all sports
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 1'
     runs-on: ubuntu-latest
     timeout-minutes: 350
     env:
@@ -41,7 +47,7 @@ jobs:
             --per-sport 1000000 \
             --workers 6 \
             --relay-pause 62
-      - name: Publish current census summary
+      - name: Publish census summary
         if: always()
         run: |
           SWEEP_DATE="$(date +%F)"
@@ -50,13 +56,13 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: slumdog-current-depth
+          name: slumdog-census
           path: |
             data/interim/**
             data/reports/**
           retention-days: 14
 
-  historical-sport:
+  history:
     name: History — ${{ matrix.sport }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
@@ -115,9 +121,9 @@ jobs:
           retention-days: 30
 
   aggregate:
-    name: Consolidated depth receipt
-    if: always()
-    needs: [current-all-details, historical-sport]
+    name: Aggregate — consolidated receipt
+    if: always() && (github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 1')
+    needs: [census, history]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -137,11 +143,12 @@ jobs:
           cat full_depth_summary.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
-          name: slumdog-full-depth-summary
+          name: slumdog-depth-summary
           path: full_depth_summary.md
           retention-days: 30
 
-# No dispatch inputs: dates come from the runner clock in TZ Africa/Johannesburg
-# (census today, history through yesterday). History ledgers are rolling and
-# resumable per sport. Esoccer is prospective-only. No model training or
-# suggestion emission occurs here.
+# Cadence: daily 03:00 UTC history accumulation; weekly (Mon) 02:00 UTC full
+# census + aggregate; manual dispatch runs both. Dates come from the runner
+# clock in TZ Africa/Johannesburg (census today, history through yesterday).
+# History ledgers are rolling and resumable per sport. Esoccer is
+# prospective-only. No model training or suggestion emission occurs here.

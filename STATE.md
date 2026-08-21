@@ -29,9 +29,10 @@ A systematic earliest-date search remains required.
 
 Depth implementation
 Sport-specific feature and settlement contracts are machine-readable.
-One manual GitHub dispatch captures all current listings and every current
-match detail, while parallel sport jobs stream each dated archive from its
-own start date. A final job merges all receipts into one Job Summary.
+A scheduled GitHub workflow (.github/workflows/pipeline.yml) runs the full
+current-board census weekly and accumulates every sport's dated archive
+daily; a manual dispatch (no inputs) runs both immediately. A final job
+merges all receipts into one Job Summary.
 Detail enrichment writes numeric facets with timing classification and a
 per-sport missingness receipt.
 Annual archive and representative price/detail coverage reports are stored in
@@ -43,10 +44,8 @@ defaults to the runner clock in TZ Africa/Johannesburg (src/slumdog/clock.py).
 History ledgers are rolling and resumable per sport (history_<sport>.jsonl.gz +
 manifest), so repeat runs only fetch new dates.
 Next gates
-Dispatch the full Forebet build (one manual GitHub dispatch) so the current
-all-detail census and each sport's full dated backfill stream to compressed
-receipts, then measure detail-field missingness from the census, not from
-three-page samples.
+Review the first census + history receipts (from the scheduled pipeline), then
+measure detail-field missingness from the census, not from three-page samples.
 Implement each sport's approved detail fields and ablations.
 Review separate model cards, then deliberately unlock training.
 Specialized MMA/Cricket/Esoccer settlement and void handling is implemented
