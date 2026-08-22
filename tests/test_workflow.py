@@ -7,7 +7,7 @@ import yaml
 
 WORKFLOW = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "pipeline.yml"
 
-DAILY_HISTORY_CRON = "0 3 * * *"
+DAILY_HISTORY_CRON = "0 3 * * 0,2-6"  # daily except Monday (weekly covers Mon)
 WEEKLY_CENSUS_CRON = "0 2 * * 1"
 
 
@@ -40,6 +40,27 @@ def test_schedule_has_daily_history_and_weekly_census():
     crons = [item["cron"] for item in on["schedule"]]
     assert DAILY_HISTORY_CRON in crons
     assert WEEKLY_CENSUS_CRON in crons
+
+
+def _expand_dow(expr: str) -> set[int]:
+    """Expand a cron day-of-week field like '0,2-6' into a set of weekday ints."""
+    days: set[int] = set()
+    for part in expr.split(","):
+        if "-" in part:
+            start, end = part.split("-", 1)
+            days.update(range(int(start), int(end) + 1))
+        elif part:
+            days.add(int(part))
+    return days
+
+
+def test_daily_history_excludes_monday_to_avoid_clash_with_weekly():
+    # Monday 02:00 UTC weekly runs history + census + aggregate; a Monday
+    # 03:00 daily run would be redundant and queue behind it (same concurrency
+    # group), so the daily cron must not include Monday.
+    days = _expand_dow(DAILY_HISTORY_CRON.split()[-1])
+    assert 1 not in days                      # Monday excluded
+    assert {0, 2, 3, 4, 5, 6} <= days          # Sun + Tue..Sat present
 
 
 def test_census_and_aggregate_gated_to_weekly_or_manual():
