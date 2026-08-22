@@ -122,6 +122,11 @@ def walk_forward_predict(
 ) -> list[dict[str, object]]:
     predictions: list[dict[str, object]] = []
     for train, test in walk_forward_splits(rows, min_train=min_train):
+        # A train fold can be single-class early in a sport's history (e.g.
+        # every underdog won/lost); a classifier cannot be fit on one class.
+        # Skip that fold rather than crash the whole research gate.
+        if len({row.underdog_won for row in train}) < 2:
+            continue
         artifact = train_sport_model(train, min_rows=min_train)
         for row in test:
             predictions.append(

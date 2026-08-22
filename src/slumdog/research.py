@@ -131,8 +131,17 @@ def build_research(
     root = Path(root)
     target_date = target_date or today_iso()
     by_sport = load_settled(root / "data" / "reports")
-    cards = {sport: sport_model_card(rows, min_rows) for sport, rows in sorted(by_sport.items())}
-    ablations = {sport: sport_ablation(rows, min_rows) for sport, rows in sorted(by_sport.items())}
+    cards = {}
+    ablations = {}
+    for sport, rows in sorted(by_sport.items()):
+        try:
+            cards[sport] = sport_model_card(rows, min_rows)
+        except Exception as exc:
+            cards[sport] = {"status": "ERROR", "error": f"{type(exc).__name__}: {exc}"}
+        try:
+            ablations[sport] = sport_ablation(rows, min_rows)
+        except Exception as exc:
+            ablations[sport] = [{"family": "all", "error": f"{type(exc).__name__}: {exc}"}]
     research = {
         "target_date": target_date,
         "min_rows": min_rows,

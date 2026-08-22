@@ -89,6 +89,27 @@ def test_build_research_skips_rows_without_participants(tmp_path):
     assert len(training) == 88  # two bad rows skipped, no crash
 
 
+def test_walk_forward_skips_single_class_folds(tmp_path):
+    from slumdog.ml_meta import walk_forward_predict, TrainingRow
+    # 120 rows where the FIRST 30 dates all have underdog_won=1 (single-class
+    # train folds early), then a mix. walk_forward must not crash.
+    rows = []
+    for i in range(60):
+        rows.append(TrainingRow(
+            event_date=f"2026-01-{i%28+1:02d}", sport="football", event_id=f"a{i}",
+            features={"displayed_odds": 2.5, "forebet_dog_probability": 0.4},
+            underdog_won=1,
+        ))
+    for i in range(60):
+        rows.append(TrainingRow(
+            event_date=f"2026-03-{i%28+1:02d}", sport="football", event_id=f"b{i}",
+            features={"displayed_odds": 2.5, "forebet_dog_probability": 0.4},
+            underdog_won=i % 2,
+        ))
+    preds = walk_forward_predict(rows, min_train=30)
+    assert isinstance(preds, list)  # no crash
+
+
 def test_build_research_writes_report_and_gate(tmp_path):
     _write_ledger(tmp_path, "football", _rows(90))
     with pytest.raises(RuntimeError, match="frozen"):
