@@ -3,9 +3,12 @@ run-name: "Slumdog · Depth Build · #${{ github.run_number }}"
 
 on:
   schedule:
-    # Daily at 03:00 UTC (05:00 SAST): accumulate each sport's history ledger
-    # through yesterday. Resumable ledgers make this cheap once caught up.
-    - cron: '0 3 * * *'
+    # Daily at 03:00 UTC (05:00 SAST) — Sunday, Tuesday–Saturday: accumulate
+    # each sport's history ledger through yesterday. Monday is intentionally
+    # excluded: the weekly census (Mon 02:00 UTC, below) already runs history
+    # + census + aggregate, so a Monday daily run would be redundant and would
+    # only queue behind the weekly run under the same concurrency group.
+    - cron: '0 3 * * 0,2-6'
     # Weekly on Monday at 02:00 UTC (04:00 SAST): full current-board census.
     # The census fetches every match detail across all sports and is heavy on
     # the public relay, so it is intentionally not a daily job.
