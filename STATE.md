@@ -41,6 +41,11 @@ Training is blocked unless an explicit research override is passed.
 Dates are runtime-derived, not typed at dispatch: the workflow takes no
 dispatch inputs, and every CLI date argument is an optional override that
 defaults to the runner clock in TZ Africa/Johannesburg (src/slumdog/clock.py).
+Heavy compute (research gate: per-sport model cards + feature ablations) runs
+on GitHub-hosted runners (4 vCPU / 16 GB, Azure), not the local Codespace;
+the pipeline's research job downloads the history ledgers, runs
+`slumdog research --research-override`, and uploads the report as an artifact.
+The Codespace is for code changes only.
 History ledgers are rolling and resumable per sport (history_<sport>.jsonl.gz +
 manifest), so repeat runs only fetch new dates. The pipeline persists each
 sport's ledger and the census detail cache via actions/cache between runs

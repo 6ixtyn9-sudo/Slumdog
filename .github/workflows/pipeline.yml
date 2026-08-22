@@ -181,6 +181,35 @@ jobs:
           path: full_depth_summary.md
           retention-days: 30
 
+  research:
+    name: Research — model cards + ablations
+    if: always() && (github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 1')
+    needs: [history]
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e '.[dev]'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: slumdog-history-*
+          path: depth-input
+      - name: Assemble ledgers from artifacts
+        run: |
+          mkdir -p data/reports
+          find depth-input -name 'history_*.jsonl.gz' -exec cp {} data/reports/ \;
+          find depth-input -name 'history_*.json' -exec cp {} data/reports/ \;
+      - name: Run research gate (model cards + ablations)
+        run: slumdog research --research-override
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slumdog-research
+          path: data/reports/research_*
+          retention-days: 30
+
 # Cadence: daily 03:00 UTC history accumulation; weekly (Mon) 02:00 UTC full
 # census + aggregate; manual dispatch runs both. Dates come from the runner
 # clock in TZ Africa/Johannesburg (census today, history through yesterday).

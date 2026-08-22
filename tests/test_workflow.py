@@ -65,11 +65,19 @@ def test_daily_history_excludes_monday_to_avoid_clash_with_weekly():
 
 def test_census_and_aggregate_gated_to_weekly_or_manual():
     data, _ = _workflow()
-    for job in ("census", "aggregate"):
+    for job in ("census", "aggregate", "research"):
         gate = data["jobs"][job]["if"]
         assert "workflow_dispatch" in gate
         assert WEEKLY_CENSUS_CRON in gate
         assert DAILY_HISTORY_CRON not in gate
+
+
+def test_research_job_downloads_history_and_runs_gate():
+    data, _ = _workflow()
+    steps = data["jobs"]["research"]["steps"]
+    assert any("download-artifact" in (s.get("uses") or "") for s in steps)
+    assert any("slumdog research" in (s.get("run") or "") for s in steps)
+    assert any("upload-artifact" in (s.get("uses") or "") for s in steps)
 
 
 def test_history_job_runs_on_every_trigger():
