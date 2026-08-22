@@ -12,6 +12,7 @@ from .depth_sweep import run_depth_sweep
 from .forebet import ForebetCollector
 from .pipeline import parse_capture_receipt, run_from_json
 from .reports import render_suggestions
+from .research import build_research
 from .settlement import append_settled_from_capture
 from .training import train_registry
 
@@ -101,6 +102,11 @@ def main() -> int:
     _date_arg(analysis, help_text="YYYY-MM-DD label for the report (default: today)")
     analysis.add_argument("--root", default=".")
 
+    research = sub.add_parser("research", help="model cards + feature ablations from settled ledgers")
+    research.add_argument("--root", default=".")
+    research.add_argument("--min-rows", type=int, default=100)
+    research.add_argument("--research-override", action="store_true")
+
     args = parser.parse_args()
 
     def resolved(day: str | None) -> str:
@@ -170,6 +176,10 @@ def main() -> int:
         return 0
     if args.command == "analyze":
         path = analyze_depth(args.root, args.date)
+        print(path)
+        return 0
+    if args.command == "research":
+        path = build_research(args.root, args.min_rows, allow_research=args.research_override)
         print(path)
         return 0
     return 2
