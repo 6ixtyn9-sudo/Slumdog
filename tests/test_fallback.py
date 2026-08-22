@@ -19,9 +19,15 @@ def test_fetch_with_fallback_falls_back_to_direct(monkeypatch):
 
     monkeypatch.setattr(forebet, "relay_get", bad_relay)
     monkeypatch.setattr(forebet, "direct_get", lambda url, timeout=40, max_retries=3: b"direct-body")
-    body, route = forebet.fetch_with_fallback("relay", "direct")
-    assert route == "direct"
-    assert body == b"direct-body"
+    # On a GitHub runner the direct fallback is intentionally skipped (fail
+    # fast); locally it falls back. The test asserts whichever the env implies.
+    if forebet.on_github_runner():
+        with pytest.raises(RuntimeError, match="relay auth-walled"):
+            forebet.fetch_with_fallback("relay", "direct")
+    else:
+        body, route = forebet.fetch_with_fallback("relay", "direct")
+        assert route == "direct"
+        assert body == b"direct-body"
 
 
 def test_fetch_with_fallback_fails_fast_on_github_runner(monkeypatch):
