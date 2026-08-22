@@ -1,6 +1,9 @@
+import json
+
 import pytest
 
 from slumdog import forebet
+from slumdog.forebet import ForebetCollector
 
 
 def test_fetch_with_fallback_uses_relay_when_it_works(monkeypatch):
@@ -64,6 +67,35 @@ def test_relay_get_markdown_unwraps_reader_wrapper(monkeypatch):
     body = forebet.relay_get_markdown(url, expected)
     assert body.startswith(b"[[{")
     assert b"Markdown Content" not in body
+
+
+def test_capture_selected_reuses_existing_same_day_capture(monkeypatch, tmp_path):
+    from slumdog.forebet import RawCapture
+
+    fetch_calls = {"n": 0}
+    def fake_fetch(self, sport, day):
+        fetch_calls["n"] += 1
+        day_dir = tmp_path / "data" / "raw" / sport / day
+        day_dir.mkdir(parents=True, exist_ok=True)
+        cap = RawCapture(
+            sport=sport, target_date=day, captured_at=day + "T00:00:00+00:00",
+            source_url="s", relay_url="r", body_format="html", sha256="abc",
+            bytes=10, body_path="x", metadata_path="y", route="relay",
+        )
+        (day_dir / "meta.json").write_text(json.dumps({
+            "sport": sport, "target_date": day, "captured_at": day + "T00:00:00+00:00",
+            "source_url": "s", "relay_url": "r", "body_format": "html", "sha256": "abc",
+            "bytes": 10, "body_path": "x", "metadata_path": "y", "route": "relay",
+        }))
+        return cap
+
+    monkeypatch.setattr(ForebetCollector, "_fetch", fake_fetch)
+    c = ForebetCollector(tmp_path)
+    # First call fetches all sports; second call reuses existing (no re-fetch).
+    c.capture_selected("2026-08-19", ["football", "basketball"])
+    first = fetch_calls["n"]
+    c.capture_selected("2026-08-19", ["football", "basketball"])
+    assert fetch_calls["n"] == first  # nothing re-fetched
 
 
 def test_route_recorded_in_raw_capture(monkeypatch, tmp_path):
