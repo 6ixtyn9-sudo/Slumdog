@@ -77,6 +77,18 @@ def test_ablation_compares_families(tmp_path):
     assert "delta_brier" in drop or "error" in drop
 
 
+def test_build_research_skips_rows_without_participants(tmp_path):
+    rows = _rows(90)
+    # Corrupt two rows: empty participant names (parser edge case).
+    rows[3]["participant_1"] = ""
+    rows[7]["participant_2"] = ""
+    _write_ledger(tmp_path, "football", rows)
+    settled = load_settled(tmp_path / "data" / "reports")["football"]
+    from slumdog.training import build_training_rows
+    training = build_training_rows(settled)
+    assert len(training) == 88  # two bad rows skipped, no crash
+
+
 def test_build_research_writes_report_and_gate(tmp_path):
     _write_ledger(tmp_path, "football", _rows(90))
     with pytest.raises(RuntimeError, match="frozen"):

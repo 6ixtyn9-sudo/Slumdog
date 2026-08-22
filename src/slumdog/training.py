@@ -78,6 +78,10 @@ def build_training_rows(settled: list[SettledEvent]) -> list[TrainingRow]:
             # Voided events (no-contest, abandoned, cancelled, no-result) have
             # no real outcome and must never become fake wins or losses.
             continue
+        if not (row.participant_1 and row.participant_2):
+            # A settled row without two named participants (parser edge case)
+            # cannot become a training row.
+            continue
         event = settled_event_snapshot(row)
         h2h, recent_1, recent_2 = history.context(
             row.sport, row.event_date, row.participant_1, row.participant_2
