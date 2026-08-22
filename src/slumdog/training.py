@@ -18,6 +18,7 @@ from .facets import build_numeric_features
 from .history import HistoryIndex
 from .magolide import RobberConfig, detect_robber, identify_underdog
 from .ml_meta import ModelArtifact, TrainingRow, train_sport_model, walk_forward_predict
+from .sports import SPORTS
 
 
 def settled_event_snapshot(row: SettledEvent) -> EventSnapshot:
@@ -77,6 +78,18 @@ def build_training_rows(settled: list[SettledEvent]) -> list[TrainingRow]:
         if row.disposition == "VOID":
             # Voided events (no-contest, abandoned, cancelled, no-result) have
             # no real outcome and must never become fake wins or losses.
+            continue
+        spec = SPORTS.get(row.sport)
+        if (
+            row.winner_index == 0
+            and spec is not None
+            and not spec.draw_possible
+        ):
+            # A tie is not a loss for the underdog in a two-way market. It is
+            # an outcome-contract violation (or a missing overtime/retirement
+            # result), so quarantine it rather than manufacture a target.
+            continue
+        if row.disposition == "SETTLED_DRAW" and (spec is None or not spec.draw_possible):
             continue
         if not (row.participant_1 and row.participant_2):
             # A settled row without two named participants (parser edge case)

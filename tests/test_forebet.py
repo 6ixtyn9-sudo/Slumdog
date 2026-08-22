@@ -16,7 +16,7 @@ def test_source_urls_are_date_addressable():
     for spec in SPORTS.values():
         url = source_url(spec, "2026-08-22")
         assert url.startswith("https://www.forebet.com/")
-        if spec.key != "esoccer":
+        if not spec.current_only:
             assert "2026-08-22" in url
 
 

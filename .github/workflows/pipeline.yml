@@ -202,12 +202,19 @@ jobs:
           mkdir -p data/reports
           find depth-input -name 'history_*.jsonl.gz' -exec cp {} data/reports/ \;
           find depth-input -name 'history_*.json' -exec cp {} data/reports/ \;
+      - name: Write data completeness receipt
+        run: slumdog audit --no-fail
+      - name: Enforce historical completeness gate
+        run: slumdog audit
       - name: Run research gate (model cards + ablations)
         run: slumdog research --research-override
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: slumdog-research
-          path: data/reports/research_*
+          path: |
+            data/reports/research_*
+            data/reports/audit_*
           retention-days: 30
 
 # Cadence: daily 03:00 UTC history accumulation; weekly (Mon) 02:00 UTC full

@@ -12,6 +12,7 @@ class SportSpec:
     draw_possible: bool
     period_labels: tuple[str, ...]
     known_facets: tuple[str, ...]
+    current_only: bool = False
 
 
 HISTORY_STARTS: dict[str, str | None] = {
@@ -27,6 +28,7 @@ HISTORY_STARTS: dict[str, str | None] = {
     "cricket": "2025-01-01",
     "mma": "2025-01-01",
     "esoccer": None,
+    "afl": None,
 }
 
 
@@ -90,6 +92,13 @@ SPORTS: dict[str, SportSpec] = {
         "esoccer", "esoccer", "score_1x2", True,
         ("1H", "2H"),
         ("player_identity", "game_format", "league", "form", "h2h", "predicted_score", "average_goals"),
+        current_only=True,
+    ),
+    "afl": SportSpec(
+        "afl", "afl", "score_2way", False,
+        ("Q1", "Q2", "Q3", "Q4"),
+        ("ladder", "form", "h2h", "quarter_scores", "predicted_score", "predicted_total", "moneyline"),
+        current_only=True,
     ),
 }
 

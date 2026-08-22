@@ -107,6 +107,10 @@ def main() -> int:
     research.add_argument("--min-rows", type=int, default=100)
     research.add_argument("--research-override", action="store_true")
 
+    audit = sub.add_parser("audit", help="write and optionally gate a history completeness receipt")
+    audit.add_argument("--root", default=".")
+    audit.add_argument("--no-fail", action="store_true", help="report without returning a gate failure")
+
     args = parser.parse_args()
 
     def resolved(day: str | None) -> str:
@@ -180,6 +184,15 @@ def main() -> int:
         return 0
     if args.command == "research":
         path = build_research(args.root, args.min_rows, allow_research=args.research_override)
+        print(path)
+        return 0
+    if args.command == "audit":
+        from .audit import AuditGateError, build_audit
+        try:
+            path = build_audit(args.root, fail_on_gate=not args.no_fail)
+        except AuditGateError as exc:
+            print(exc.path)
+            return 1
         print(path)
         return 0
     return 2

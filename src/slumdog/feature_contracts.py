@@ -108,6 +108,12 @@ CONTRACTS: dict[str, SportFeatureContract] = {
         ("score_environment", "htft_profile", "corners_profile", "cards_profile"),
         BLOCKED_COMMON + ("physical_club_identity",),
     ),
+    "afl": SportFeatureContract(
+        "afl", "full-game winner; draw handling follows displayed market",
+        COMMON + ("predicted_margin", "predicted_total", "quarter_scoring_balance", "ladder_gap"),
+        ("recent_point_diff", "h2h_margin", "home_away_form_gap", "competition_round", "rest_days"),
+        BLOCKED_COMMON + ("ambiguous_draw_market",),
+    ),
 }
 
 MODEL_TRAINING_ALLOWED = False

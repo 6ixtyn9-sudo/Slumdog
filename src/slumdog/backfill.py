@@ -103,7 +103,7 @@ def backfill_sport(
     skipped, so a re-dispatch or a scheduled follow-up only fetches the days
     that are actually new. ``end`` defaults to yesterday from the runner clock.
     """
-    if sport not in SPORTS or sport == "esoccer":
+    if sport not in SPORTS or SPORTS[sport].current_only:
         raise ValueError("sport must have a dated Forebet archive")
     end = end or yesterday_iso()
     start = start or HISTORY_STARTS[sport]

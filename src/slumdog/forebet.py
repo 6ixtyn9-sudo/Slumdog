@@ -19,6 +19,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .clock import today_iso
 from .sports import SPORTS, SportSpec
 
 RELAY_BASE = "https://r.jina.ai/"
@@ -217,6 +218,84 @@ class RawCapture:
     route: str = "relay"  # "relay" (r.jina.ai) or "direct" (forebet.com)
 
 
+# The extra endpoint responses are deliberately kept out of historical
+# backfill. They are useful for today's shadow run, but nine requests per
+# historical date would turn a parser enhancement into an Actions-budget
+# change. The row keys are preserved as facets, not treated as extra targets.
+FOOTBALL_MARKETS: tuple[str, ...] = (
+    "uo", "bts", "ht", "htft", "ah", "corners", "cards", "goalscorer",
+)
+FOOTBALL_MARKET_KEYS: dict[str, tuple[str, ...]] = {
+    "uo": ("pr_over", "pr_under", "odds_under_over"),
+    "bts": ("Pred_gg", "Pred_no_gg", "odds_gg_y", "odds_gg_n"),
+    "ht": ("Pred_1_HT", "Pred_X_HT", "Pred_2_HT", "best_odd_ht"),
+    "htft": ("odds_ht_ft",),
+    "ah": ("odds_ah",),
+    "corners": ("best_odd",),
+    "cards": ("avg_cards", "host_yellowcards", "guest_yellowcards",
+              "host_redcards", "guest_redcards"),
+    "goalscorer": ("best_odd",),
+}
+
+
+def fetch_football_markets(
+    target_date: str,
+    root: Path | str = ".",
+    timeout: int = 45,
+) -> Path | None:
+    """Capture extra football markets for *today* only.
+
+    This function is intentionally date-guarded as well as call-site guarded:
+    a manual historical capture cannot accidentally spend eight extra relay
+    requests. Each market is independent; partial success is recorded in a
+    sidecar receipt and never makes the 1X2 capture disappear.
+    """
+    if target_date != today_iso():
+        return None
+    root = Path(root)
+    base = source_url(SPORTS["football"], target_date)
+    merged: dict[str, dict[str, object]] = {}
+    succeeded: list[str] = []
+    failures: list[dict[str, str]] = []
+    for market in FOOTBALL_MARKETS:
+        url = base.replace("tp=1x2", f"tp={market}")
+        try:
+            body = relay_get_markdown(
+                RELAY_BASE + url, url, timeout=timeout, max_retries=2,
+            )
+            payload = json.loads(body.decode("utf-8", "replace"))
+            rows = payload[0] if isinstance(payload, list) and payload else []
+            if not isinstance(rows, list):
+                raise ValueError("unexpected market row shape")
+            for row in rows:
+                if isinstance(row, dict) and row.get("id") not in (None, ""):
+                    merged.setdefault(str(row["id"]), {}).update(row)
+            succeeded.append(market)
+        except Exception as exc:
+            failures.append({
+                "market": market,
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+
+    if not succeeded:
+        return None
+    out = root / "data" / "raw" / "football" / target_date / "markets.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(list(merged.values()), indent=2, sort_keys=True))
+    receipt = {
+        "target_date": target_date,
+        "requested": list(FOOTBALL_MARKETS),
+        "succeeded": succeeded,
+        "failures": failures,
+        "rows": len(merged),
+        "output": str(out.relative_to(root)),
+    }
+    (out.parent / "markets_receipt.json").write_text(
+        json.dumps(receipt, indent=2, sort_keys=True)
+    )
+    return out
+
+
 def source_url(spec: SportSpec, target_date: str) -> str:
     """Use Forebet's date-addressable sport page, not wall-clock labels."""
     if spec.key == "football":
@@ -226,10 +305,11 @@ def source_url(spec: SportSpec, target_date: str) -> str:
             "https://www.forebet.com/scripts/getrs.php?"
             f"ln=en&tp=1x2&in={target_date}&ord=0&tz=0&tzs=&tze="
         )
-    if spec.key == "esoccer":
-        # Esoccer exposes rolling today/tomorrow pages but no reliable dated
-        # archive route. Capture the full Esoccer board and filter by event date.
-        return "https://www.forebet.com/en/esoccer"
+    if spec.current_only:
+        # Current-only boards (currently esoccer and AFL) have no reliable
+        # dated archive. Capture the board and let the parser filter by the
+        # event date shown in each row.
+        return f"https://www.forebet.com/en/{spec.path}"
     return f"https://www.forebet.com/en/{spec.path}/predictions/{target_date}"
 
 
@@ -264,7 +344,7 @@ def validate_html_body(body: bytes, sport: str, target_date: str) -> None:
     label = sport.replace("_", " ").encode()
     if label not in lower:
         raise ValueError(f"sport label missing from HTML: {sport}")
-    if sport != "esoccer":
+    if not SPORTS[sport].current_only:
         day = datetime.fromisoformat(target_date).strftime("%d/%m/%Y").encode()
         if day not in body:
             raise ValueError(f"target date missing from HTML: {target_date}")
@@ -359,6 +439,16 @@ class ForebetCollector:
                     captures.append(futures[sport].result())
                 except Exception as exc:  # each satellite fails independently
                     failures.append(f"{sport}:{type(exc).__name__}:{exc}")
+
+        # Never add the extra market requests to historical/manual captures,
+        # and never refresh them when the base football capture was reused.
+        markets_path: Path | None = None
+        if target_date == today_iso() and "football" in to_fetch:
+            try:
+                markets_path = fetch_football_markets(target_date, self.root, self.timeout)
+            except Exception as exc:
+                failures.append(f"football-markets:{type(exc).__name__}:{exc}")
+
         report_dir = self.root / "data" / "reports"
         report_dir.mkdir(parents=True, exist_ok=True)
         receipt = {
@@ -367,6 +457,10 @@ class ForebetCollector:
             "captured": [asdict(item) for item in captures],
             "failures": failures,
             "reused": len(captures) - len(to_fetch),
+            "football_markets": (
+                str(markets_path.relative_to(self.root))
+                if markets_path is not None else None
+            ),
         }
         (report_dir / f"capture_{target_date}.json").write_text(
             json.dumps(receipt, indent=2, sort_keys=True)

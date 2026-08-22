@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import unicodedata
+from pathlib import Path
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
@@ -63,15 +64,49 @@ def _event_day(value: str) -> str | None:
     return f"{match.group(3)}-{match.group(2)}-{match.group(1)}"
 
 
+_AMERICAN_ODDS = re.compile(r"(?<![0-9])[+-][0-9]{3,5}(?![0-9])")
+
+
+def _american_odds_row(row) -> tuple[float | None, float | None] | None:
+    """Read the two participant prices from the listing's ``lscrsp`` cells.
+
+    This is intentionally narrower than scanning the entire row: signed
+    numbers can also occur in scores, handicaps, or timestamps. A malformed
+    or one-sided price returns ``None`` so callers retain a missing value.
+    """
+    anchors = list(row.select(".lscrsp"))
+    tokens: list[str] = []
+    for anchor in anchors:
+        tokens.extend(_AMERICAN_ODDS.findall(_text(anchor)))
+        if len(tokens) >= 2:
+            break
+    if len(tokens) < 2:
+        for anchor in anchors:
+            sibling = anchor.find_next_sibling()
+            while sibling is not None and len(tokens) < 2:
+                tokens.extend(_AMERICAN_ODDS.findall(_text(sibling)))
+                sibling = sibling.find_next_sibling()
+    if len(tokens) < 2:
+        return None
+    home, away = (decimal_odds(tokens[0]), decimal_odds(tokens[1]))
+    if home is None or away is None:
+        return None
+    return home, away
+
+
 def _participant_odds(row, draw_possible: bool) -> tuple[float | None, float | None, list[str]]:
     values = [_text(span) for span in row.select(".haodd span") if _text(span)]
-    if not values:
-        return None, None, []
     parsed = [decimal_odds(value) for value in values]
-    if draw_possible and len(parsed) >= 3:
+    if draw_possible and len(parsed) >= 3 and parsed[0] is not None and parsed[2] is not None:
         return parsed[0], parsed[2], values
-    if len(parsed) >= 2:
+    if not draw_possible and len(parsed) >= 2 and parsed[0] is not None and parsed[1] is not None:
         return parsed[0], parsed[1], values
+
+    # Some boards expose only American prices in .lscrsp; also fall back when
+    # the legacy .haodd block exists but contains dashes or one bad token.
+    american = _american_odds_row(row)
+    if american is not None:
+        return american[0], american[1], values
     return None, None, values
 
 
@@ -245,15 +280,55 @@ def parse_football_json(
     return events
 
 
-def parse_capture(metadata: dict, root=".") -> list[EventSnapshot]:
-    from pathlib import Path
+def _merge_football_markets(events: list[EventSnapshot], markets_path: Path) -> None:
+    """Attach captured extra-market fields without changing the 1X2 target.
 
-    body = (Path(root) / metadata["body_path"]).read_bytes()
+    Missing/corrupt sidecars are a degraded capture, not a parser failure.
+    Values remain raw facets and are admitted to features only when numeric;
+    every admitted facet is explicitly marked pre-event.
+    """
+    if not markets_path.exists():
+        return
+    try:
+        payload = json.loads(markets_path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return
+    if not isinstance(payload, list):
+        return
+    by_id = {
+        str(row.get("id")): row
+        for row in payload
+        if isinstance(row, dict) and row.get("id") not in (None, "")
+    }
+    from .forebet import FOOTBALL_MARKET_KEYS
+
+    for event in events:
+        row = by_id.get(event.event_id.split(":", 1)[-1])
+        if row is None:
+            continue
+        for market, keys in FOOTBALL_MARKET_KEYS.items():
+            for key in keys:
+                value = row.get(key)
+                if value in (None, "", "-"):
+                    continue
+                facet = f"market_{market}_{key}"
+                event.facets[facet] = value
+                event.facet_timing[facet] = TimingClass.PRE_EVENT
+
+
+def parse_capture(metadata: dict, root=".") -> list[EventSnapshot]:
+    root = Path(root)
+    body = (root / metadata["body_path"]).read_bytes()
     if metadata["sport"] == "football":
-        return parse_football_json(
+        events = parse_football_json(
             body, metadata["target_date"], metadata["captured_at"],
             metadata["source_url"], metadata["sha256"],
         )
+        _merge_football_markets(
+            events,
+            root / "data" / "raw" / "football" / metadata["target_date"] / "markets.json",
+        )
+        return events
     return parse_html_events(
         body, metadata["sport"], metadata["target_date"], metadata["captured_at"],
         metadata["source_url"], metadata["sha256"],

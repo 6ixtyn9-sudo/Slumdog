@@ -6,7 +6,7 @@ def test_all_forebet_sports_are_registered():
     assert set(SPORTS) == {
         "football", "basketball", "tennis", "hockey", "baseball",
         "american_football", "rugby", "handball", "volleyball",
-        "cricket", "mma", "esoccer",
+        "cricket", "mma", "esoccer", "afl",
     }
 
 

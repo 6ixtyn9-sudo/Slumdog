@@ -7,7 +7,8 @@ import pickle
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Iterable
+from collections import defaultdict
+from typing import Iterable, Iterator
 
 import numpy as np
 from sklearn.impute import SimpleImputer
@@ -100,28 +101,50 @@ def train_sport_model(rows: list[TrainingRow], min_rows: int = 100) -> ModelArti
     )
 
 
+def _iter_walk_forward_splits(
+    rows: list[TrainingRow],
+    min_train: int = 100,
+    max_test_dates: int | None = None,
+) -> Iterator[tuple[list[TrainingRow], list[TrainingRow]]]:
+    """Yield expanding-date splits without rescanning rows for every fold."""
+    ordered = sorted(rows, key=lambda row: (row.event_date, row.event_id))
+    grouped: dict[str, list[TrainingRow]] = defaultdict(list)
+    for row in ordered:
+        grouped[row.event_date].append(row)
+    dates = sorted(grouped)
+    if max_test_dates is not None and max_test_dates > 0:
+        test_dates = set(dates[-max_test_dates:])
+    else:
+        test_dates = set(dates)
+
+    prior: list[TrainingRow] = []
+    for event_date in dates:
+        if event_date in test_dates and len(prior) >= min_train:
+            # The copy is required because ``prior`` continues to grow after
+            # this yield. A generator keeps only one copy live in prediction
+            # code, unlike a list of all folds.
+            yield prior.copy(), grouped[event_date]
+        prior.extend(grouped[event_date])
+
+
 def walk_forward_splits(
     rows: list[TrainingRow],
     min_train: int = 100,
+    max_test_dates: int | None = None,
 ) -> list[tuple[list[TrainingRow], list[TrainingRow]]]:
-    """Expanding-date splits: a date is predicted only from earlier dates."""
-    ordered = sorted(rows, key=lambda row: (row.event_date, row.event_id))
-    dates = sorted({row.event_date for row in ordered})
-    splits = []
-    for test_date in dates:
-        train = [row for row in ordered if row.event_date < test_date]
-        test = [row for row in ordered if row.event_date == test_date]
-        if len(train) >= min_train and test:
-            splits.append((train, test))
-    return splits
+    """Return expanding-date splits, optionally limited to recent test dates."""
+    return list(_iter_walk_forward_splits(rows, min_train, max_test_dates))
 
 
 def walk_forward_predict(
     rows: list[TrainingRow],
     min_train: int = 100,
+    max_test_dates: int | None = None,
 ) -> list[dict[str, object]]:
     predictions: list[dict[str, object]] = []
-    for train, test in walk_forward_splits(rows, min_train=min_train):
+    for train, test in _iter_walk_forward_splits(
+        rows, min_train=min_train, max_test_dates=max_test_dates
+    ):
         # A train fold can be single-class early in a sport's history (e.g.
         # every underdog won/lost); a classifier cannot be fit on one class.
         # Skip that fold rather than crash the whole research gate.

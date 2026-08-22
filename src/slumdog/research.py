@@ -14,6 +14,7 @@ Still research-only: training remains frozen unless --research-override.
 from __future__ import annotations
 
 import json
+import math
 from collections import defaultdict
 from pathlib import Path
 
@@ -40,6 +41,21 @@ FEATURE_FAMILIES: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# These are intentionally conservative. The cap is applied after sorting by
+# event date, so the validation window is recent and reproducible rather than
+# an arbitrary first-N sample. The signal map distinguishes a family that is
+# structurally present in every generic vector from one with actual source
+# evidence in this sport's ledger.
+MAX_ROWS_PER_SPORT = 60_000
+MAX_TEST_DATES = 180
+FAMILY_SIGNAL_KEYS: dict[str, tuple[str, ...]] = {
+    "drop_price": ("price_available",),
+    "drop_probability": ("forebet_dog_probability", "forebet_other_probability"),
+    "drop_legacy": ("legacy_robber_score",),
+    "drop_h2h": ("h2h_games",),
+    "drop_form": ("dog_recent_games", "favorite_recent_win_rate"),
+}
+
 
 def load_settled(reports_dir: Path) -> dict[str, list]:
     """Load every sport's rolling ledger into SettledEvent lists."""
@@ -51,7 +67,18 @@ def load_settled(reports_dir: Path) -> dict[str, list]:
     return dict(by_sport)
 
 
+def _cap_rows(rows: list, limit: int = MAX_ROWS_PER_SPORT) -> list:
+    """Keep the most recent rows without mutating the caller's list."""
+    if limit <= 0:
+        raise ValueError("research row limit must be positive")
+    if len(rows) <= limit:
+        return rows
+    ordered = sorted(rows, key=lambda row: (row.event_date, row.event_id))
+    return ordered[-limit:]
+
+
 def _filter_features(rows: list[TrainingRow], drop: tuple[str, ...]) -> list[TrainingRow]:
+
     if not drop:
         return rows
     drop_set = set(drop)
@@ -65,11 +92,39 @@ def _filter_features(rows: list[TrainingRow], drop: tuple[str, ...]) -> list[Tra
     return out
 
 
+def _has_family_signal(rows: list[TrainingRow], family: str) -> bool:
+    """Return true only when a family has non-missing source evidence."""
+    keys = FAMILY_SIGNAL_KEYS.get(family, ())
+    for row in rows:
+        for key in keys:
+            value = row.features.get(key)
+            try:
+                if value is not None and math.isfinite(float(value)) and float(value) != 0.0:
+                    return True
+            except (TypeError, ValueError):
+                continue
+    return False
+
+
+def _families_with_features(training: list[TrainingRow]) -> list[str]:
+    # ``build_numeric_features`` emits missing-safe placeholder keys for every
+    # sport. Checking key membership alone therefore does not tell us whether
+    # an ablation has anything to remove; use source-signal keys instead.
+    return [
+        name for name, drop in FEATURE_FAMILIES.items()
+        if not drop or _has_family_signal(training, name)
+    ]
+
+
 def sport_model_card(settled: list, min_rows: int = 100) -> dict:
-    training = build_training_rows(settled)
+    training = build_training_rows(_cap_rows(settled))
     if len(training) < min_rows or len({r.underdog_won for r in training}) < 2:
         return {"status": "INSUFFICIENT", "rows": len(training)}
-    predictions = walk_forward_predict(training, min_train=max(20, min_rows // 2))
+    predictions = walk_forward_predict(
+        training,
+        min_train=max(20, min_rows // 2),
+        max_test_dates=MAX_TEST_DATES,
+    )
     summary = validation_summary(predictions)
     return {
         "status": "OK",
@@ -81,15 +136,20 @@ def sport_model_card(settled: list, min_rows: int = 100) -> dict:
 
 
 def sport_ablation(settled: list, min_rows: int = 100) -> list[dict]:
-    training = build_training_rows(settled)
+    training = build_training_rows(_cap_rows(settled))
     if len(training) < min_rows or len({r.underdog_won for r in training}) < 2:
         return []
     baseline = None
     results = []
-    for name, drop in FEATURE_FAMILIES.items():
+    for name in _families_with_features(training):
+        drop = FEATURE_FAMILIES[name]
         try:
             subset = _filter_features(training, drop)
-            preds = walk_forward_predict(subset, min_train=max(20, min_rows // 2))
+            preds = walk_forward_predict(
+                subset,
+                min_train=max(20, min_rows // 2),
+                max_test_dates=MAX_TEST_DATES,
+            )
             summary = validation_summary(preds)
             entry = {
                 "family": name,
@@ -145,6 +205,11 @@ def build_research(
     research = {
         "target_date": target_date,
         "min_rows": min_rows,
+        "limits": {
+            "max_rows_per_sport": MAX_ROWS_PER_SPORT,
+            "max_test_dates": MAX_TEST_DATES,
+            "families": "only families with non-missing source signal",
+        },
         "sports": sorted(by_sport),
         "cards": cards,
         "ablations": ablations,

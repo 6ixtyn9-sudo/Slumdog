@@ -5,6 +5,7 @@ from bisect import bisect_left
 from collections import defaultdict
 
 from .contracts import H2HStats, RecentForm, SettledEvent
+from .sports import SPORTS
 
 
 def _key(name: str) -> str:
@@ -16,7 +17,19 @@ class HistoryIndex:
 
     def __init__(self, rows: list[SettledEvent]):
         self.rows = sorted(
-            [row for row in rows if row.disposition != "VOID"],
+            [
+                row for row in rows
+                if row.disposition != "VOID"
+                and not (
+                    row.winner_index == 0
+                    and row.sport in SPORTS
+                    and not SPORTS[row.sport].draw_possible
+                )
+                and not (
+                    row.disposition == "SETTLED_DRAW"
+                    and (row.sport not in SPORTS or not SPORTS[row.sport].draw_possible)
+                )
+            ],
             key=lambda row: (row.event_date, row.event_id),
         )
         self.by_sport: dict[str, list[SettledEvent]] = defaultdict(list)
