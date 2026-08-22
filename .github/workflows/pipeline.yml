@@ -84,7 +84,11 @@ jobs:
     timeout-minutes: 350
     strategy:
       fail-fast: false
-      max-parallel: 6
+      # 4 parallel runners (was 6): each backfill job hammers the same public
+      # relay, so more concurrency just multiplies 503 rate-limits. 4 keeps
+      # total relay load ~24 req/s-batch instead of ~36, fewer retries, and
+      # roughly the same wall-clock.
+      max-parallel: 4
       matrix:
         include:
           - {sport: football, start: '2024-01-01'}
