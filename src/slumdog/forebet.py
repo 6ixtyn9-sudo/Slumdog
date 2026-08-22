@@ -346,11 +346,15 @@ class ForebetCollector:
         unknown = [sport for sport in selected if sport not in SPORTS]
         if unknown:
             raise ValueError(f"unsupported sports: {unknown}")
-        captures: list[RawCapture] = []
+        # Reuse captures already frozen for this date (same-day re-dispatch or
+        # census-then-history): skip a sport if its raw dir for the date exists.
+        existing = {cap.sport for cap in self._existing_captures(target_date)}
+        to_fetch = [sport for sport in selected if sport not in existing]
+        captures: list[RawCapture] = [cap for cap in self._existing_captures(target_date) if cap.sport in selected]
         failures: list[str] = []
         with ThreadPoolExecutor(max_workers=self.workers) as executor:
-            futures = {sport: executor.submit(self._fetch, sport, target_date) for sport in selected}
-            for sport in selected:  # deterministic result order
+            futures = {sport: executor.submit(self._fetch, sport, target_date) for sport in to_fetch}
+            for sport in to_fetch:  # deterministic result order
                 try:
                     captures.append(futures[sport].result())
                 except Exception as exc:  # each satellite fails independently
@@ -362,11 +366,32 @@ class ForebetCollector:
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "captured": [asdict(item) for item in captures],
             "failures": failures,
+            "reused": len(captures) - len(to_fetch),
         }
         (report_dir / f"capture_{target_date}.json").write_text(
             json.dumps(receipt, indent=2, sort_keys=True)
         )
         return captures
+
+    def _existing_captures(self, target_date: str) -> list[RawCapture]:
+        """Load previously frozen capture metadata for a date from disk."""
+        found: list[RawCapture] = []
+        sport_dir = self.root / "data" / "raw"
+        if not sport_dir.exists():
+            return found
+        for sport in SPORTS:
+            day_dir = sport_dir / sport / target_date
+            if not day_dir.is_dir():
+                continue
+            metas = sorted(day_dir.glob("*.json"))
+            if not metas:
+                continue
+            try:
+                meta = json.loads(metas[-1].read_text())
+                found.append(RawCapture(**meta))
+            except Exception:
+                continue
+        return found
 
     def capture_all(self, target_date: str) -> list[RawCapture]:
         return self.capture_selected(target_date, None)
