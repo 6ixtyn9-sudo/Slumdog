@@ -64,3 +64,34 @@ def test_football_json_parser_keeps_prematch_and_drops_results():
     assert events[0].draw_probability == 0.20
     assert events[0].odds_1 == 2.6
     assert events[0].source_url.endswith("/home-away-1")
+
+
+def test_football_listing_promotes_form_standings_weather_and_draw_odds():
+    row = {
+        "id": "9", "HOST_NAME": "Home", "GUEST_NAME": "Away",
+        "Pred_1": "20", "Pred_X": "30", "Pred_2": "50",
+        "best_odd_1": "4.00", "best_odd_2": "1.70", "best_odd_X": "3.60",
+        "short_tag": "Pt1", "DATE_BAH": "2026-08-23 18:00",
+        "host_sc_pr": "1", "guest_sc_pr": "2", "goalsavg": "2.8",
+        "Host_SC": None, "Guest_SC": None, "comment": "",
+        "host_form": ["l", "d", "d", "l", "w", "l"],
+        "guest_form": ["w", "w", "d", "d", "w", "w"],
+        "host_pos": "15th", "guest_pos": "7th",
+        "weather_high": 14, "weather_low": 14, "weather_code": 31,
+        "kelly": 0.39, "Round": 3,
+    }
+    body = json.dumps([[row]]).encode()
+    events = parse_football_json(
+        body, "2026-08-23", "2026-08-23T06:00:00+00:00", "u", "abc",
+    )
+    event = events[0]
+    assert event.round_name == "3"
+    assert event.facets["recent_1_wins"] == 1
+    assert event.facets["recent_1_games"] == 6
+    assert event.facets["recent_2_wins"] == 4
+    assert event.facets["standings_1"] == 15
+    assert event.facets["standings_2"] == 7
+    assert event.facets["standings_gap"] == 8
+    assert event.facets["odds_draw"] == 3.6
+    assert event.facets["weather_high"] == 14
+    assert event.facet_timing["recent_1_wins"].value == "PRE_EVENT"
