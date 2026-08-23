@@ -78,6 +78,46 @@ def test_extract_cricket_features():
     assert feat_dict["cr_is_home_dog"] == 1.0
     assert feat_dict["cr_is_t20_format"] == 1.0
     assert feat_dict["cr_predicted_total_runs"] == 357.0
+    assert feat_dict["cr_travel_distance_km_missing"] == 1.0
+
+
+def test_extract_cricket_features_with_detail_differentials():
+    event = EventSnapshot(
+        event_id="cricket:1105",
+        sport="cricket",
+        event_date="2026-08-23",
+        captured_at="2026-08-23T10:00:00+00:00",
+        source_url="https://www.forebet.com/en/cricket/matches/home-away-1105",
+        participant_1="KKR",
+        participant_2="RCB",
+        probability_1=0.42,
+        probability_2=0.58,
+        forebet_pick=2,
+        odds_1=2.40,
+        odds_2=1.58,
+        predicted_score="185-190",
+        predicted_total=375.0,
+        facets={
+            "travel_distance_km": 1500.0,
+            "p1_scored_avg": 182.0,
+            "p1_conceded_avg": 168.0,
+            "p2_scored_avg": 190.0,
+            "p2_conceded_avg": 170.0,
+        },
+        facet_timing={k: TimingClass.PRE_EVENT for k in [
+            "travel_distance_km", "p1_scored_avg", "p1_conceded_avg", "p2_scored_avg", "p2_conceded_avg",
+        ]},
+    )
+    candidate = detect_cricket_robber(event)
+    assert candidate is not None
+
+    cf = extract_cricket_features(event, candidate)
+    assert cf.travel_distance_km == 1500.0
+    assert cf.dog_travel_distance == 0.0
+    assert cf.fav_travel_distance == 1500.0
+    # net run diff: (182 - 168) - (190 - 170) = 14 - 20 = -6.0
+    assert round(cf.net_run_differential_gap, 1) == -6.0
+
 
 
 def test_detect_cricket_robber_t20_bonus():
