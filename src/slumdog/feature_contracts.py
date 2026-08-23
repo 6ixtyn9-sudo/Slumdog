@@ -102,6 +102,12 @@ CONTRACTS: dict[str, SportFeatureContract] = {
         ("height_gap", "weight_gap", "predicted_method", "scheduled_rounds", "opposition_adjusted_form"),
         BLOCKED_COMMON,
     ),
+    "esports": SportFeatureContract(
+        "esports", "match winner by maps; walkover/disqualification void",
+        COMMON + ("game_title", "tournament_stage", "predicted_map_margin", "recent_map_diff", "h2h_maps"),
+        ("decider_map_profile", "sweep_profile", "map_splits", "server_region"),
+        BLOCKED_COMMON,
+    ),
     "esoccer": SportFeatureContract(
         "esoccer", "full-time 1X2 by player handle",
         COMMON + ("player_handle_1", "player_handle_2", "game_format", "handle_pair_h2h", "repeat_frequency", "short_horizon_drift"),

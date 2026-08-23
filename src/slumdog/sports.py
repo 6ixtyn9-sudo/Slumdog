@@ -27,6 +27,7 @@ HISTORY_STARTS: dict[str, str | None] = {
     "volleyball": "2024-01-01",
     "cricket": "2025-01-01",
     "mma": "2025-01-01",
+    "esports": "2024-01-01",
     "esoccer": None,
     "afl": None,
 }
@@ -87,6 +88,11 @@ SPORTS: dict[str, SportSpec] = {
         "mma", "mma", "fight_2way", False,
         ("R1", "R2", "R3", "R4", "R5"),
         ("division", "fighter_record", "height", "weight", "reach", "stance", "strikes", "takedowns", "submissions", "control_time", "predicted_method", "moneyline"),
+    ),
+    "esports": SportSpec(
+        "esports", "esports", "maps_2way", False,
+        ("M1", "M2", "M3", "M4", "M5"),
+        ("game", "league", "tournament", "form", "h2h", "predicted_score", "predicted_maps", "moneyline"),
     ),
     "esoccer": SportSpec(
         "esoccer", "esoccer", "score_1x2", True,
