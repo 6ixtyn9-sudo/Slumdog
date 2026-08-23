@@ -79,6 +79,47 @@ def test_extract_baseball_features():
     assert feat_dict["ba_low_total_environment"] == 1.0
     assert feat_dict["ba_high_total_environment"] == 0.0
     assert feat_dict["ba_predicted_total_runs"] == 7.0
+    assert feat_dict["ba_travel_distance_km_missing"] == 1.0
+
+
+def test_extract_baseball_features_with_detail_differentials():
+    event = EventSnapshot(
+        event_id="baseball:505",
+        sport="baseball",
+        event_date="2026-08-23",
+        captured_at="2026-08-23T10:00:00+00:00",
+        source_url="https://www.forebet.com/en/baseball/matches/home-away-505",
+        participant_1="San Francisco Giants",
+        participant_2="New York Yankees",
+        probability_1=0.41,
+        probability_2=0.59,
+        forebet_pick=2,
+        odds_1=2.40,
+        odds_2=1.58,
+        predicted_score="3-4",
+        predicted_total=7.0,
+        facets={
+            "travel_distance_km": 4100.0,
+            "p1_scored_avg": 4.6,
+            "p1_conceded_avg": 4.2,
+            "p2_scored_avg": 5.1,
+            "p2_conceded_avg": 4.0,
+        },
+        facet_timing={k: TimingClass.PRE_EVENT for k in [
+            "travel_distance_km", "p1_scored_avg", "p1_conceded_avg", "p2_scored_avg", "p2_conceded_avg",
+        ]},
+    )
+    candidate = detect_baseball_robber(event)
+    assert candidate is not None
+    assert any("Fav Away Road Fatigue" in r for r in candidate.reasons)
+
+    bf = extract_baseball_features(event, candidate)
+    assert bf.travel_distance_km == 4100.0
+    assert bf.dog_travel_distance == 0.0
+    assert bf.fav_travel_distance == 4100.0
+    # net run diff: (4.6 - 4.2) - (5.1 - 4.0) = 0.4 - 1.1 = -0.7
+    assert round(bf.net_run_differential_gap, 1) == -0.7
+
 
 
 def test_detect_baseball_robber_batting_last_bonus():

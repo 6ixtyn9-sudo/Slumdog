@@ -115,6 +115,54 @@ def test_extract_basketball_features_full():
     assert feat_dict["bb_is_home_dog"] == 1.0
     assert feat_dict["bb_high_pace_environment"] == 1.0
     assert feat_dict["bb_predicted_total_points"] == 217.0
+    assert feat_dict["bb_travel_distance_km_missing"] == 1.0
+
+
+def test_extract_basketball_features_with_detail_differentials():
+    event = EventSnapshot(
+        event_id="basketball:205",
+        sport="basketball",
+        event_date="2026-08-23",
+        captured_at="2026-08-23T10:00:00+00:00",
+        source_url="https://www.forebet.com/en/basketball/matches/home-away-205",
+        participant_1="Denver Nuggets",
+        participant_2="Boston Celtics",
+        probability_1=0.42,
+        probability_2=0.58,
+        forebet_pick=2,
+        odds_1=2.30,
+        odds_2=1.65,
+        predicted_score="112-115",
+        predicted_total=227.0,
+        facets={
+            "travel_distance_km": 2850.0,
+            "p1_scored_avg": 115.4,
+            "p1_conceded_avg": 109.2,
+            "p2_scored_avg": 118.0,
+            "p2_conceded_avg": 110.0,
+        },
+        facet_timing={k: TimingClass.PRE_EVENT for k in [
+            "travel_distance_km", "p1_scored_avg", "p1_conceded_avg", "p2_scored_avg", "p2_conceded_avg",
+        ]},
+    )
+    candidate = detect_basketball_robber(event)
+    assert candidate is not None
+    assert any("Fav Away Road Fatigue" in r for r in candidate.reasons)
+
+    bb = extract_basketball_features(event, candidate)
+    assert bb.travel_distance_km == 2850.0
+    assert bb.dog_travel_distance == 0.0  # Denver is home
+    assert bb.fav_travel_distance == 2850.0  # Boston traveled
+    assert bb.dog_scored_avg == 115.4
+    assert bb.fav_scored_avg == 118.0
+    # net diff: (115.4 - 109.2) - (118.0 - 110.0) = 6.2 - 8.0 = -1.8
+    assert round(bb.net_points_differential_gap, 1) == -1.8
+
+    feat_dict = bb.to_dict()
+    assert feat_dict["bb_travel_distance_km"] == 2850.0
+    assert feat_dict["bb_travel_distance_km_missing"] == 0.0
+    assert round(feat_dict["bb_net_points_differential_gap"], 1) == -1.8
+
 
 
 def test_detect_basketball_robber_scoring():

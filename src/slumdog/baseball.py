@@ -8,9 +8,9 @@ Baseball is a 2-way sport (including extra innings) characterized by:
 - Season series and divisional matchup dynamics
 
 This module provides:
-- Baseball-specific feature extraction (run margins, low/high run environment, 2-way de-vigging)
-- Run differential and standings win-percentage gap metrics
-- Dedicated 2-way baseball Robber detector with home-underdog and low-total bonuses
+- Baseball-specific feature extraction (run margins, low/high run environment, 2-way de-vigging, travel distance)
+- Run differential, scoring averages, and standings win-percentage gap metrics
+- Dedicated 2-way baseball Robber detector with home-underdog, travel, and low-total bonuses
 - Leak-safe numeric vector builder with explicit missingness flags
 """
 from __future__ import annotations
@@ -120,14 +120,24 @@ class BaseballFeatures:
     standings_pts_gap: float | None
     standings_win_pct_gap: float | None
 
+    # Spatial & Detail Match Averages
+    travel_distance_km: float | None = None
+    dog_travel_distance: float | None = None
+    fav_travel_distance: float | None = None
+    dog_scored_avg: float | None = None
+    fav_scored_avg: float | None = None
+    dog_conceded_avg: float | None = None
+    fav_conceded_avg: float | None = None
+    net_run_differential_gap: float | None = None
+
     # H2H Matchup History
-    h2h_total_games: float
-    h2h_dog_win_rate: float
-    h2h_has_dog_win: float
+    h2h_total_games: float = 0.0
+    h2h_dog_win_rate: float = 0.0
+    h2h_has_dog_win: float = 0.0
 
     # Legacy & Meta
-    legacy_robber_score: float
-    legacy_raw_confidence: float
+    legacy_robber_score: float = 0.0
+    legacy_raw_confidence: float = 0.0
 
     def to_dict(self) -> dict[str, float]:
         features: dict[str, float] = {
@@ -168,6 +178,14 @@ class BaseballFeatures:
             ("ba_rank_gap", self.rank_gap),
             ("ba_standings_pts_gap", self.standings_pts_gap),
             ("ba_standings_win_pct_gap", self.standings_win_pct_gap),
+            ("ba_travel_distance_km", self.travel_distance_km),
+            ("ba_dog_travel_distance", self.dog_travel_distance),
+            ("ba_fav_travel_distance", self.fav_travel_distance),
+            ("ba_dog_scored_avg", self.dog_scored_avg),
+            ("ba_fav_scored_avg", self.fav_scored_avg),
+            ("ba_dog_conceded_avg", self.dog_conceded_avg),
+            ("ba_fav_conceded_avg", self.fav_conceded_avg),
+            ("ba_net_run_differential_gap", self.net_run_differential_gap),
         ]
 
         for name, val in optional_fields:
@@ -251,6 +269,24 @@ def extract_baseball_features(
         pct_2 = w_2 / (w_2 + l_2)
         win_pct_gap = (pct_1 - pct_2) if dog == 1 else (pct_2 - pct_1)
 
+    # Travel & Detail Match Averages
+    dist_km = _safe_float(facets.get("travel_distance_km") or facets.get("detail_travel_distance_km"))
+    dog_travel = (dist_km if dog == 2 else 0.0) if dist_km is not None else None
+    fav_travel = (dist_km if fav == 2 else 0.0) if dist_km is not None else None
+
+    sc1_avg = _safe_float(facets.get("p1_scored_avg") or facets.get("detail_p1_scored_avg"))
+    sc2_avg = _safe_float(facets.get("p2_scored_avg") or facets.get("detail_p2_scored_avg"))
+    conc1_avg = _safe_float(facets.get("p1_conceded_avg") or facets.get("detail_p1_conceded_avg"))
+    conc2_avg = _safe_float(facets.get("p2_conceded_avg") or facets.get("detail_p2_conceded_avg"))
+
+    dog_sc_avg = sc1_avg if dog == 1 else sc2_avg
+    fav_sc_avg = sc2_avg if dog == 1 else sc1_avg
+    dog_conc_avg = conc1_avg if dog == 1 else conc2_avg
+    fav_conc_avg = conc2_avg if dog == 1 else conc1_avg
+    net_run_gap = None
+    if dog_sc_avg is not None and dog_conc_avg is not None and fav_sc_avg is not None and fav_conc_avg is not None:
+        net_run_gap = (dog_sc_avg - dog_conc_avg) - (fav_sc_avg - fav_conc_avg)
+
     # H2H
     h2h_games = float(h2h.total_games or facets.get("h2h_total_games") or 0)
     h2h_dog_wins = float(h2h.wins(dog) or 0)
@@ -289,6 +325,14 @@ def extract_baseball_features(
         rank_gap=rank_gap,
         standings_pts_gap=pts_gap,
         standings_win_pct_gap=win_pct_gap,
+        travel_distance_km=dist_km,
+        dog_travel_distance=dog_travel,
+        fav_travel_distance=fav_travel,
+        dog_scored_avg=dog_sc_avg,
+        fav_scored_avg=fav_sc_avg,
+        dog_conceded_avg=dog_conc_avg,
+        fav_conceded_avg=fav_conc_avg,
+        net_run_differential_gap=net_run_gap,
         h2h_total_games=h2h_games,
         h2h_dog_win_rate=h2h_wr,
         h2h_has_dog_win=has_dog_win,
@@ -304,7 +348,7 @@ def detect_baseball_robber(
     recent_2: RecentForm | None = None,
     config: RobberConfig | None = None,
 ) -> RobberCandidate | None:
-    """Dedicated Baseball 2-Way Robber detector with home-field and low-run bonuses."""
+    """Dedicated Baseball 2-Way Robber detector with home-field, travel, and low-run bonuses."""
     config = config or RobberConfig()
     h2h = h2h or H2HStats()
 
@@ -377,6 +421,13 @@ def detect_baseball_robber(
         elif rate >= 0.45:
             score += 8.0
             reasons.append(f"Solid form {recent.wins}W/{recent.games}G")
+
+    # Travel Road Fatigue Catalyst
+    facets = event.pre_event_facets()
+    dist = _safe_float(facets.get("travel_distance_km") or facets.get("detail_travel_distance_km"))
+    if dist and dist >= 500.0 and dog_idx == 1:
+        score += 5.0
+        reasons.append(f"Fav Away Road Fatigue ({int(dist)}km)")
 
     # Odds Value Factor (Moneyline 2-Way)
     if odds_avail and dog_odds is not None:

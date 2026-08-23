@@ -8,8 +8,8 @@ Cricket is a format-specific sport (Test 1X2 with draw possible; ODI/T20 2-way) 
 - 2-way or 3-way market pricing
 
 This module provides:
-- Cricket-specific feature extraction (format indicator, run margins, 2-way/3-way de-vigging)
-- Standings, recent form, and H2H metrics
+- Cricket-specific feature extraction (format indicator, run margins, 2-way/3-way de-vigging, travel distance)
+- Standings, scoring averages, recent form, and H2H metrics
 - Dedicated Robber detector with format volatility and home bonuses
 - Leak-safe numeric vector builder with explicit missingness flags
 """
@@ -134,14 +134,24 @@ class CricketFeatures:
     standings_pts_gap: float | None
     standings_nrr_gap: float | None
 
+    # Spatial & Detail Match Averages
+    travel_distance_km: float | None = None
+    dog_travel_distance: float | None = None
+    fav_travel_distance: float | None = None
+    dog_scored_avg: float | None = None
+    fav_scored_avg: float | None = None
+    dog_conceded_avg: float | None = None
+    fav_conceded_avg: float | None = None
+    net_run_differential_gap: float | None = None
+
     # H2H Matchup History
-    h2h_total_games: float
-    h2h_dog_win_rate: float
-    h2h_has_dog_win: float
+    h2h_total_games: float = 0.0
+    h2h_dog_win_rate: float = 0.0
+    h2h_has_dog_win: float = 0.0
 
     # Legacy & Meta
-    legacy_robber_score: float
-    legacy_raw_confidence: float
+    legacy_robber_score: float = 0.0
+    legacy_raw_confidence: float = 0.0
 
     def to_dict(self) -> dict[str, float]:
         features: dict[str, float] = {
@@ -186,6 +196,14 @@ class CricketFeatures:
             ("cr_rank_gap", self.rank_gap),
             ("cr_standings_pts_gap", self.standings_pts_gap),
             ("cr_standings_nrr_gap", self.standings_nrr_gap),
+            ("cr_travel_distance_km", self.travel_distance_km),
+            ("cr_dog_travel_distance", self.dog_travel_distance),
+            ("cr_fav_travel_distance", self.fav_travel_distance),
+            ("cr_dog_scored_avg", self.dog_scored_avg),
+            ("cr_fav_scored_avg", self.fav_scored_avg),
+            ("cr_dog_conceded_avg", self.dog_conceded_avg),
+            ("cr_fav_conceded_avg", self.fav_conceded_avg),
+            ("cr_net_run_differential_gap", self.net_run_differential_gap),
         ]
 
         for name, val in optional_fields:
@@ -271,6 +289,24 @@ def extract_cricket_features(
     if dog == 2 and nrr_gap is not None:
         nrr_gap = -nrr_gap
 
+    # Travel & Detail Match Averages
+    dist_km = _safe_float(facets.get("travel_distance_km") or facets.get("detail_travel_distance_km"))
+    dog_travel = (dist_km if dog == 2 else 0.0) if dist_km is not None else None
+    fav_travel = (dist_km if fav == 2 else 0.0) if dist_km is not None else None
+
+    sc1_avg = _safe_float(facets.get("p1_scored_avg") or facets.get("detail_p1_scored_avg"))
+    sc2_avg = _safe_float(facets.get("p2_scored_avg") or facets.get("detail_p2_scored_avg"))
+    conc1_avg = _safe_float(facets.get("p1_conceded_avg") or facets.get("detail_p1_conceded_avg"))
+    conc2_avg = _safe_float(facets.get("p2_conceded_avg") or facets.get("detail_p2_conceded_avg"))
+
+    dog_sc_avg = sc1_avg if dog == 1 else sc2_avg
+    fav_sc_avg = sc2_avg if dog == 1 else sc1_avg
+    dog_conc_avg = conc1_avg if dog == 1 else conc2_avg
+    fav_conc_avg = conc2_avg if dog == 1 else conc1_avg
+    net_run_gap = None
+    if dog_sc_avg is not None and dog_conc_avg is not None and fav_sc_avg is not None and fav_conc_avg is not None:
+        net_run_gap = (dog_sc_avg - dog_conc_avg) - (fav_sc_avg - fav_conc_avg)
+
     # H2H
     h2h_games = float(h2h.total_games or facets.get("h2h_total_games") or 0)
     h2h_dog_wins = float(h2h.wins(dog) or 0)
@@ -313,6 +349,14 @@ def extract_cricket_features(
         rank_gap=rank_gap,
         standings_pts_gap=pts_gap,
         standings_nrr_gap=nrr_gap,
+        travel_distance_km=dist_km,
+        dog_travel_distance=dog_travel,
+        fav_travel_distance=fav_travel,
+        dog_scored_avg=dog_sc_avg,
+        fav_scored_avg=fav_sc_avg,
+        dog_conceded_avg=dog_conc_avg,
+        fav_conceded_avg=fav_conc_avg,
+        net_run_differential_gap=net_run_gap,
         h2h_total_games=h2h_games,
         h2h_dog_win_rate=h2h_wr,
         h2h_has_dog_win=has_dog_win,

@@ -80,6 +80,52 @@ def test_extract_mma_features():
     assert feat_dict["mma_has_reach_advantage_dog"] == 1.0
     assert feat_dict["mma_is_southpaw_dog"] == 1.0
     assert feat_dict["mma_ko_finish_potential"] == 1.0
+    assert feat_dict["mma_takedown_differential_missing"] == 1.0
+
+
+def test_extract_mma_features_with_detail_differentials():
+    event = EventSnapshot(
+        event_id="mma:1205",
+        sport="mma",
+        event_date="2026-08-23",
+        captured_at="2026-08-23T10:00:00+00:00",
+        source_url="https://www.forebet.com/en/mma/matches/fighter-a-b-1205",
+        participant_1="Challenger",
+        participant_2="Champion",
+        probability_1=0.42,
+        probability_2=0.58,
+        forebet_pick=2,
+        odds_1=2.40,
+        odds_2=1.58,
+        facets={
+            "fighter_1_stance": "Southpaw",
+            "fighter_2_stance": "Orthodox",
+            "fighter_1_reach": 190.0,
+            "fighter_2_reach": 182.0,
+            "takedowns_1": 2.5,
+            "takedowns_2": 1.0,
+            "strikes_1": 4.8,
+            "strikes_2": 3.2,
+        },
+        facet_timing={k: TimingClass.PRE_EVENT for k in [
+            "fighter_1_stance", "fighter_2_stance", "fighter_1_reach", "fighter_2_reach",
+            "takedowns_1", "takedowns_2", "strikes_1", "strikes_2",
+        ]},
+    )
+    candidate = detect_mma_robber(event)
+    assert candidate is not None
+    assert any("Southpaw stance advantage" in r for r in candidate.reasons)
+
+    mf = extract_mma_features(event, candidate)
+    assert mf.is_southpaw_dog == 1.0
+    assert mf.is_southpaw_fav == 0.0
+    assert mf.takedown_avg_dog == 2.5
+    assert mf.takedown_avg_fav == 1.0
+    assert round(mf.takedown_differential, 1) == 1.5
+    assert mf.sig_strikes_landed_dog == 4.8
+    assert mf.sig_strikes_landed_fav == 3.2
+    assert round(mf.sig_strikes_differential, 1) == 1.6
+
 
 
 def test_detect_mma_robber_reach_bonus():

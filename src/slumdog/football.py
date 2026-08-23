@@ -6,8 +6,8 @@ Half-Time, Asian Handicap, Cards, Corners), and rich league standings/form.
 
 This module provides:
 - Unified multi-market schema definitions
-- Comprehensive football feature extraction with de-vigging and PPG
-- Football-specific Robber detection with draw-buffer modeling
+- Comprehensive football feature extraction with de-vigging, PPG, and deep detail metrics
+- Football-specific Robber detection with draw-buffer modeling and travel/tactical signals
 - Leak-safe numeric vector builder with explicit missingness flags
 - Walk-forward validation and specialized settlement
 """
@@ -204,10 +204,43 @@ class FootballFeatures:
     dog_card_differential: float | None
     corner_intensity: float | None
     
-    # Legacy & Meta Signals
-    legacy_robber_score: float
-    legacy_raw_confidence: float
+    # Spatial & Environmental
+    travel_distance_km: float | None
+    dog_travel_distance: float | None
+    fav_travel_distance: float | None
     weather_temperature: float | None
+
+    # Tactical & Detail Match Averages
+    dog_clean_sheets_avg: float | None = None
+    fav_clean_sheets_avg: float | None = None
+    clean_sheets_avg_gap: float | None = None
+    dog_corners_avg: float | None = None
+    fav_corners_avg: float | None = None
+    corners_avg_gap: float | None = None
+    dog_yellow_cards_avg: float | None = None
+    fav_yellow_cards_avg: float | None = None
+    yellow_cards_avg_gap: float | None = None
+    dog_fouls_avg: float | None = None
+    fav_fouls_avg: float | None = None
+    fouls_avg_gap: float | None = None
+    dog_tackles_avg: float | None = None
+    fav_tackles_avg: float | None = None
+    tackles_avg_gap: float | None = None
+    dog_total_shots_avg: float | None = None
+    fav_total_shots_avg: float | None = None
+    total_shots_avg_gap: float | None = None
+    dog_dangerous_attacks_avg: float | None = None
+    fav_dangerous_attacks_avg: float | None = None
+    dangerous_attacks_avg_gap: float | None = None
+    dog_scored_avg: float | None = None
+    fav_scored_avg: float | None = None
+    dog_conceded_avg: float | None = None
+    fav_conceded_avg: float | None = None
+    net_goal_efficiency_gap: float | None = None
+
+    # Legacy & Meta Signals
+    legacy_robber_score: float = 0.0
+    legacy_raw_confidence: float = 0.0
 
     def to_dict(self) -> dict[str, float]:
         """Produce a flat dictionary of numeric features with missing flags."""
@@ -270,7 +303,36 @@ class FootballFeatures:
             ("fb_card_intensity", self.card_intensity),
             ("fb_dog_card_differential", self.dog_card_differential),
             ("fb_corner_intensity", self.corner_intensity),
+            ("fb_travel_distance_km", self.travel_distance_km),
+            ("fb_dog_travel_distance", self.dog_travel_distance),
+            ("fb_fav_travel_distance", self.fav_travel_distance),
             ("fb_weather_temperature", self.weather_temperature),
+            ("fb_dog_clean_sheets_avg", self.dog_clean_sheets_avg),
+            ("fb_fav_clean_sheets_avg", self.fav_clean_sheets_avg),
+            ("fb_clean_sheets_avg_gap", self.clean_sheets_avg_gap),
+            ("fb_dog_corners_avg", self.dog_corners_avg),
+            ("fb_fav_corners_avg", self.fav_corners_avg),
+            ("fb_corners_avg_gap", self.corners_avg_gap),
+            ("fb_dog_yellow_cards_avg", self.dog_yellow_cards_avg),
+            ("fb_fav_yellow_cards_avg", self.fav_yellow_cards_avg),
+            ("fb_yellow_cards_avg_gap", self.yellow_cards_avg_gap),
+            ("fb_dog_fouls_avg", self.dog_fouls_avg),
+            ("fb_fav_fouls_avg", self.fav_fouls_avg),
+            ("fb_fouls_avg_gap", self.fouls_avg_gap),
+            ("fb_dog_tackles_avg", self.dog_tackles_avg),
+            ("fb_fav_tackles_avg", self.fav_tackles_avg),
+            ("fb_tackles_avg_gap", self.tackles_avg_gap),
+            ("fb_dog_total_shots_avg", self.dog_total_shots_avg),
+            ("fb_fav_total_shots_avg", self.fav_total_shots_avg),
+            ("fb_total_shots_avg_gap", self.total_shots_avg_gap),
+            ("fb_dog_dangerous_attacks_avg", self.dog_dangerous_attacks_avg),
+            ("fb_fav_dangerous_attacks_avg", self.fav_dangerous_attacks_avg),
+            ("fb_dangerous_attacks_avg_gap", self.dangerous_attacks_avg_gap),
+            ("fb_dog_scored_avg", self.dog_scored_avg),
+            ("fb_fav_scored_avg", self.fav_scored_avg),
+            ("fb_dog_conceded_avg", self.dog_conceded_avg),
+            ("fb_fav_conceded_avg", self.fav_conceded_avg),
+            ("fb_net_goal_efficiency_gap", self.net_goal_efficiency_gap),
         ]
 
         for name, val in optional_fields:
@@ -423,7 +485,38 @@ def extract_football_features(
         dog_card_diff = (host_cards - guest_cards) if dog == 1 else (guest_cards - host_cards)
 
     corner_avg = _safe_float(facets.get("market_corners_avg_corners") or facets.get("avg_corners"))
-    weather_temp = _safe_float(facets.get("weather_high") or facets.get("weather_low"))
+    weather_temp = _safe_float(
+        facets.get("weather_temperature_c") or facets.get("detail_weather_temperature_c")
+        or facets.get("weather_high") or facets.get("weather_low")
+    )
+
+    # Spatial & Travel Distance
+    dist_km = _safe_float(facets.get("travel_distance_km") or facets.get("detail_travel_distance_km"))
+    dog_travel = (dist_km if dog == 2 else 0.0) if dist_km is not None else None
+    fav_travel = (dist_km if fav == 2 else 0.0) if dist_km is not None else None
+
+    # Tactical & Detail Match Averages
+    def _facet_pair(metric_name: str) -> tuple[float | None, float | None, float | None]:
+        m1 = _safe_float(facets.get(f"p1_{metric_name}") or facets.get(f"detail_p1_{metric_name}"))
+        m2 = _safe_float(facets.get(f"p2_{metric_name}") or facets.get(f"detail_p2_{metric_name}"))
+        dog_m = m1 if dog == 1 else m2
+        fav_m = m2 if dog == 1 else m1
+        diff = (dog_m - fav_m) if (dog_m is not None and fav_m is not None) else None
+        return dog_m, fav_m, diff
+
+    dog_cs, fav_cs, cs_gap = _facet_pair("clean_sheets_avg")
+    dog_corn, fav_corn, corn_gap = _facet_pair("corners_avg")
+    dog_yc, fav_yc, yc_gap = _facet_pair("yellow_cards_avg")
+    dog_fls, fav_fls, fls_gap = _facet_pair("fouls_avg")
+    dog_tkl, fav_tkl, tkl_gap = _facet_pair("tackles_avg")
+    dog_shots, fav_shots, shots_gap = _facet_pair("total_shots_avg")
+    dog_datt, fav_datt, datt_gap = _facet_pair("dangerous_attacks_avg")
+
+    dog_sc_avg, fav_sc_avg, _ = _facet_pair("scored_avg")
+    dog_conc_avg, fav_conc_avg, _ = _facet_pair("conceded_avg")
+    net_eff_gap = None
+    if dog_sc_avg is not None and dog_conc_avg is not None and fav_sc_avg is not None and fav_conc_avg is not None:
+        net_eff_gap = (dog_sc_avg - dog_conc_avg) - (fav_sc_avg - fav_conc_avg)
 
     return FootballFeatures(
         is_home_dog=is_home_dog,
@@ -480,9 +573,38 @@ def extract_football_features(
         card_intensity=card_avg,
         dog_card_differential=dog_card_diff,
         corner_intensity=corner_avg,
+        travel_distance_km=dist_km,
+        dog_travel_distance=dog_travel,
+        fav_travel_distance=fav_travel,
+        weather_temperature=weather_temp,
+        dog_clean_sheets_avg=dog_cs,
+        fav_clean_sheets_avg=fav_cs,
+        clean_sheets_avg_gap=cs_gap,
+        dog_corners_avg=dog_corn,
+        fav_corners_avg=fav_corn,
+        corners_avg_gap=corn_gap,
+        dog_yellow_cards_avg=dog_yc,
+        fav_yellow_cards_avg=fav_yc,
+        yellow_cards_avg_gap=yc_gap,
+        dog_fouls_avg=dog_fls,
+        fav_fouls_avg=fav_fls,
+        fouls_avg_gap=fls_gap,
+        dog_tackles_avg=dog_tkl,
+        fav_tackles_avg=fav_tkl,
+        tackles_avg_gap=tkl_gap,
+        dog_total_shots_avg=dog_shots,
+        fav_total_shots_avg=fav_shots,
+        total_shots_avg_gap=shots_gap,
+        dog_dangerous_attacks_avg=dog_datt,
+        fav_dangerous_attacks_avg=fav_datt,
+        dangerous_attacks_avg_gap=datt_gap,
+        dog_scored_avg=dog_sc_avg,
+        fav_scored_avg=fav_sc_avg,
+        dog_conceded_avg=dog_conc_avg,
+        fav_conceded_avg=fav_conc_avg,
+        net_goal_efficiency_gap=net_eff_gap,
         legacy_robber_score=candidate.score,
         legacy_raw_confidence=candidate.raw_confidence,
-        weather_temperature=weather_temp,
     )
 
 
@@ -565,6 +687,13 @@ def detect_football_robber(
         elif rate >= 0.40:
             score += 8.0
             reasons.append(f"Solid form {recent.wins}W/{recent.games}G")
+
+    # Tactical & Environmental Catalysts
+    facets = event.pre_event_facets()
+    dist = _safe_float(facets.get("travel_distance_km") or facets.get("detail_travel_distance_km"))
+    if dist and dist >= 400.0 and dog_idx == 1:
+        score += 5.0
+        reasons.append(f"Fav Away Travel Fatigue ({int(dist)}km)")
 
     # Odds Value Factor
     if odds_avail and dog_odds is not None:

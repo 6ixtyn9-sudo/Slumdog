@@ -5,12 +5,12 @@ Basketball is a 2-way (no-draw) sport characterized by:
 - High point totals (pace environments: 140-240+ pts)
 - Point margins and spread predictions
 - Quarter-by-quarter consistency and second-half scoring resilience
-- Significant home-court advantage dynamics
+- Significant home-court advantage dynamics and travel fatigue
 
 This module provides:
-- Basketball-specific feature extraction (2-way de-vigging, quarter splits, pace proxy)
+- Basketball-specific feature extraction (2-way de-vigging, quarter splits, pace proxy, travel distance)
 - Quarter and half margin calculations
-- Dedicated 2-way basketball Robber detector
+- Dedicated 2-way basketball Robber detector with travel and efficiency catalysts
 - Leak-safe numeric vector builder with explicit missingness flags
 """
 from __future__ import annotations
@@ -152,9 +152,19 @@ class BasketballFeatures:
     h2h_has_dog_win: float
     h2h_period_dog_win_rate: float
 
+    # Spatial, Detail & Tactical Differentials
+    travel_distance_km: float | None = None
+    dog_travel_distance: float | None = None
+    fav_travel_distance: float | None = None
+    dog_scored_avg: float | None = None
+    fav_scored_avg: float | None = None
+    dog_conceded_avg: float | None = None
+    fav_conceded_avg: float | None = None
+    net_points_differential_gap: float | None = None
+
     # Legacy & Meta
-    legacy_robber_score: float
-    legacy_raw_confidence: float
+    legacy_robber_score: float = 0.0
+    legacy_raw_confidence: float = 0.0
 
     def to_dict(self) -> dict[str, float]:
         """Produce flat dictionary of numeric features with missing flags."""
@@ -204,6 +214,14 @@ class BasketballFeatures:
             ("bb_rank_gap", self.rank_gap),
             ("bb_standings_pts_gap", self.standings_pts_gap),
             ("bb_standings_win_pct_gap", self.standings_win_pct_gap),
+            ("bb_travel_distance_km", self.travel_distance_km),
+            ("bb_dog_travel_distance", self.dog_travel_distance),
+            ("bb_fav_travel_distance", self.fav_travel_distance),
+            ("bb_dog_scored_avg", self.dog_scored_avg),
+            ("bb_fav_scored_avg", self.fav_scored_avg),
+            ("bb_dog_conceded_avg", self.dog_conceded_avg),
+            ("bb_fav_conceded_avg", self.fav_conceded_avg),
+            ("bb_net_points_differential_gap", self.net_points_differential_gap),
         ]
 
         for name, val in optional_fields:
@@ -327,6 +345,24 @@ def extract_basketball_features(
     p_rates = h2h.period_rates(dog)
     h2h_period_wr = (sum(p_rates) / len(p_rates)) if p_rates else 0.0
 
+    # Travel & Match Detail Scores
+    dist_km = _safe_float(facets.get("travel_distance_km") or facets.get("detail_travel_distance_km"))
+    dog_travel = (dist_km if dog == 2 else 0.0) if dist_km is not None else None
+    fav_travel = (dist_km if fav == 2 else 0.0) if dist_km is not None else None
+
+    sc1_avg = _safe_float(facets.get("p1_scored_avg") or facets.get("detail_p1_scored_avg"))
+    sc2_avg = _safe_float(facets.get("p2_scored_avg") or facets.get("detail_p2_scored_avg"))
+    conc1_avg = _safe_float(facets.get("p1_conceded_avg") or facets.get("detail_p1_conceded_avg"))
+    conc2_avg = _safe_float(facets.get("p2_conceded_avg") or facets.get("detail_p2_conceded_avg"))
+
+    dog_sc_avg = sc1_avg if dog == 1 else sc2_avg
+    fav_sc_avg = sc2_avg if dog == 1 else sc1_avg
+    dog_conc_avg = conc1_avg if dog == 1 else conc2_avg
+    fav_conc_avg = conc2_avg if dog == 1 else conc1_avg
+    net_pts_gap = None
+    if dog_sc_avg is not None and dog_conc_avg is not None and fav_sc_avg is not None and fav_conc_avg is not None:
+        net_pts_gap = (dog_sc_avg - dog_conc_avg) - (fav_sc_avg - fav_conc_avg)
+
     return BasketballFeatures(
         is_home_dog=is_home_dog,
         dog_index=dog,
@@ -370,6 +406,14 @@ def extract_basketball_features(
         h2h_dog_win_rate=h2h_wr,
         h2h_has_dog_win=has_dog_win,
         h2h_period_dog_win_rate=h2h_period_wr,
+        travel_distance_km=dist_km,
+        dog_travel_distance=dog_travel,
+        fav_travel_distance=fav_travel,
+        dog_scored_avg=dog_sc_avg,
+        fav_scored_avg=fav_sc_avg,
+        dog_conceded_avg=dog_conc_avg,
+        fav_conceded_avg=fav_conc_avg,
+        net_points_differential_gap=net_pts_gap,
         legacy_robber_score=candidate.score,
         legacy_raw_confidence=candidate.raw_confidence,
     )
@@ -463,6 +507,13 @@ def detect_basketball_robber(
         elif rate >= 0.45:
             score += 8.0
             reasons.append(f"Solid form {recent.wins}W/{recent.games}G")
+
+    # Travel & Environmental Catalysts
+    facets = event.pre_event_facets()
+    dist = _safe_float(facets.get("travel_distance_km") or facets.get("detail_travel_distance_km"))
+    if dist and dist >= 500.0 and dog_idx == 1:
+        score += 5.0
+        reasons.append(f"Fav Away Road Fatigue ({int(dist)}km)")
 
     # Odds Value Factor (Moneyline 2-Way)
     if odds_avail and dog_odds is not None:

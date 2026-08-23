@@ -5,13 +5,13 @@ Volleyball is a 2-way sport (Best of 5 sets: 3-0, 3-1, 3-2, 2-3, 1-3, 0-3) chara
 - Set margin dynamics and decider match volatility (3-2 / 2-3 deciders)
 - Set point margins (25-point standard sets vs 15-point tiebreak 5th set)
 - 2-way moneyline market pricing
-- Pronounced home court advantage (service/reception familiarity)
+- Pronounced home court advantage (service/reception familiarity) and travel fatigue
 - Standings set differential and win-loss ratio metrics
 
 This module provides:
-- Volleyball-specific feature extraction (set splits, 5-set decider proxy, 2-way de-vigging)
+- Volleyball-specific feature extraction (set splits, 5-set decider proxy, 2-way de-vigging, travel distance)
 - Standings, set ratio, and form metrics
-- Dedicated 2-way Robber detector with home-underdog and decider bonuses
+- Dedicated 2-way Robber detector with home-underdog, travel, and decider bonuses
 - Leak-safe numeric vector builder with explicit missingness flags
 """
 from __future__ import annotations
@@ -127,14 +127,24 @@ class VolleyballFeatures:
     standings_pts_gap: float | None
     standings_set_diff_gap: float | None
 
+    # Spatial & Detail Match Averages
+    travel_distance_km: float | None = None
+    dog_travel_distance: float | None = None
+    fav_travel_distance: float | None = None
+    dog_scored_avg: float | None = None
+    fav_scored_avg: float | None = None
+    dog_conceded_avg: float | None = None
+    fav_conceded_avg: float | None = None
+    net_set_differential_gap: float | None = None
+
     # H2H Matchup History
-    h2h_total_games: float
-    h2h_dog_win_rate: float
-    h2h_has_dog_win: float
+    h2h_total_games: float = 0.0
+    h2h_dog_win_rate: float = 0.0
+    h2h_has_dog_win: float = 0.0
 
     # Legacy & Meta
-    legacy_robber_score: float
-    legacy_raw_confidence: float
+    legacy_robber_score: float = 0.0
+    legacy_raw_confidence: float = 0.0
 
     def to_dict(self) -> dict[str, float]:
         features: dict[str, float] = {
@@ -179,6 +189,14 @@ class VolleyballFeatures:
             ("vb_rank_gap", self.rank_gap),
             ("vb_standings_pts_gap", self.standings_pts_gap),
             ("vb_standings_set_diff_gap", self.standings_set_diff_gap),
+            ("vb_travel_distance_km", self.travel_distance_km),
+            ("vb_dog_travel_distance", self.dog_travel_distance),
+            ("vb_fav_travel_distance", self.fav_travel_distance),
+            ("vb_dog_scored_avg", self.dog_scored_avg),
+            ("vb_fav_scored_avg", self.fav_scored_avg),
+            ("vb_dog_conceded_avg", self.dog_conceded_avg),
+            ("vb_fav_conceded_avg", self.fav_conceded_avg),
+            ("vb_net_set_differential_gap", self.net_set_differential_gap),
         ]
 
         for name, val in optional_fields:
@@ -285,6 +303,24 @@ def extract_volleyball_features(
     if dog == 2 and gd_gap is not None:
         gd_gap = -gd_gap
 
+    # Travel & Detail Match Averages
+    dist_km = _safe_float(facets.get("travel_distance_km") or facets.get("detail_travel_distance_km"))
+    dog_travel = (dist_km if dog == 2 else 0.0) if dist_km is not None else None
+    fav_travel = (dist_km if fav == 2 else 0.0) if dist_km is not None else None
+
+    sc1_avg = _safe_float(facets.get("p1_scored_avg") or facets.get("detail_p1_scored_avg"))
+    sc2_avg = _safe_float(facets.get("p2_scored_avg") or facets.get("detail_p2_scored_avg"))
+    conc1_avg = _safe_float(facets.get("p1_conceded_avg") or facets.get("detail_p1_conceded_avg"))
+    conc2_avg = _safe_float(facets.get("p2_conceded_avg") or facets.get("detail_p2_conceded_avg"))
+
+    dog_sc_avg = sc1_avg if dog == 1 else sc2_avg
+    fav_sc_avg = sc2_avg if dog == 1 else sc1_avg
+    dog_conc_avg = conc1_avg if dog == 1 else conc2_avg
+    fav_conc_avg = conc2_avg if dog == 1 else conc1_avg
+    net_set_gap = None
+    if dog_sc_avg is not None and dog_conc_avg is not None and fav_sc_avg is not None and fav_conc_avg is not None:
+        net_set_gap = (dog_sc_avg - dog_conc_avg) - (fav_sc_avg - fav_conc_avg)
+
     # H2H
     h2h_games = float(h2h.total_games or facets.get("h2h_total_games") or 0)
     h2h_dog_wins = float(h2h.wins(dog) or 0)
@@ -327,6 +363,14 @@ def extract_volleyball_features(
         rank_gap=rank_gap,
         standings_pts_gap=pts_gap,
         standings_set_diff_gap=gd_gap,
+        travel_distance_km=dist_km,
+        dog_travel_distance=dog_travel,
+        fav_travel_distance=fav_travel,
+        dog_scored_avg=dog_sc_avg,
+        fav_scored_avg=fav_sc_avg,
+        dog_conceded_avg=dog_conc_avg,
+        fav_conceded_avg=fav_conc_avg,
+        net_set_differential_gap=net_set_gap,
         h2h_total_games=h2h_games,
         h2h_dog_win_rate=h2h_wr,
         h2h_has_dog_win=has_dog_win,
@@ -342,7 +386,7 @@ def detect_volleyball_robber(
     recent_2: RecentForm | None = None,
     config: RobberConfig | None = None,
 ) -> RobberCandidate | None:
-    """Dedicated Volleyball 2-Way Robber detector with home-court and decider bonuses."""
+    """Dedicated Volleyball 2-Way Robber detector with home-court, travel, and decider bonuses."""
     config = config or RobberConfig()
     h2h = h2h or H2HStats()
 
@@ -422,6 +466,13 @@ def detect_volleyball_robber(
         elif rate >= 0.45:
             score += 8.0
             reasons.append(f"Solid form {recent.wins}W/{recent.games}G")
+
+    # Travel Road Fatigue Catalyst
+    facets = event.pre_event_facets()
+    dist = _safe_float(facets.get("travel_distance_km") or facets.get("detail_travel_distance_km"))
+    if dist and dist >= 500.0 and dog_idx == 1:
+        score += 5.0
+        reasons.append(f"Fav Away Road Fatigue ({int(dist)}km)")
 
     # Odds Value Factor (Moneyline 2-Way)
     if odds_avail and dog_odds is not None:

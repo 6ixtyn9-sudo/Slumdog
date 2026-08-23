@@ -30,15 +30,19 @@ def test_mma_parser_does_not_reuse_team_sport_contract():
 def test_football_detail_contract_keeps_football_only_fields():
     body = b'''<html><body><h2>Head to head</h2><h3>Team Last 6 matches</h3>
     Weather conditions HT/FT Probability Avg. corners Cards score Both teams scored
+    Straight line distance 510 km Fouls Tackles Ball possession
     </body></html>'''
     facets = parse_detail(body, "football")
-    assert facets.sport_specific == {
-        "weather_present": True,
-        "htft_present": True,
-        "corners_present": True,
-        "cards_present": True,
-        "btts_present": True,
-    }
+    assert facets.sport_specific["weather_present"] is True
+    assert facets.sport_specific["htft_present"] is True
+    assert facets.sport_specific["corners_present"] is True
+    assert facets.sport_specific["cards_present"] is True
+    assert facets.sport_specific["btts_present"] is True
+    assert facets.sport_specific["distance_present"] is True
+    assert facets.sport_specific["fouls_present"] is True
+    assert facets.sport_specific["tackles_present"] is True
+    assert facets.sport_specific["possession_present"] is True
+    assert facets.common["travel_distance_km"] == 510.0
 
 
 def test_detail_form_and_h2h_become_pipeline_keys():

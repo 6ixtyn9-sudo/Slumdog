@@ -99,29 +99,41 @@ class TennisFeatures:
     surface_fav_sample: float
     surface_specialist_dog: float  # 1.0 if dog surface win rate >= 0.60, else 0.0
 
+    # Specific Surface Win Rate Gaps
+    clay_win_rate_gap: float | None = None
+    hard_win_rate_gap: float | None = None
+    grass_win_rate_gap: float | None = None
+
     # Sets & Game Expectations
-    predicted_set_margin_dog: float | None
-    dog_predicted_sets: float | None
-    fav_predicted_sets: float | None
-    predicted_total_games: float | None
+    predicted_set_margin_dog: float | None = None
+    dog_predicted_sets: float | None = None
+    fav_predicted_sets: float | None = None
+    predicted_total_games: float | None = None
 
     # Player Attributes & Form
-    dog_height_inches: float | None
-    fav_height_inches: float | None
-    height_gap_inches: float | None
-    dog_recent_win_rate: float
-    favorite_recent_win_rate: float
-    win_rate_gap: float
-    dog_recent_games: float
+    dog_height_inches: float | None = None
+    fav_height_inches: float | None = None
+    height_gap_inches: float | None = None
+    dog_recent_win_rate: float = 0.0
+    favorite_recent_win_rate: float = 0.0
+    win_rate_gap: float = 0.0
+    dog_recent_games: float = 0.0
+
+    # Detail Match Averages
+    dog_scored_avg: float | None = None
+    fav_scored_avg: float | None = None
+    dog_conceded_avg: float | None = None
+    fav_conceded_avg: float | None = None
+    net_set_differential_gap: float | None = None
 
     # H2H Matchup History
-    h2h_total_matches: float
-    h2h_dog_win_rate: float
-    h2h_has_dog_win: float
+    h2h_total_matches: float = 0.0
+    h2h_dog_win_rate: float = 0.0
+    h2h_has_dog_win: float = 0.0
 
     # Legacy & Meta
-    legacy_robber_score: float
-    legacy_raw_confidence: float
+    legacy_robber_score: float = 0.0
+    legacy_raw_confidence: float = 0.0
 
     def to_dict(self) -> dict[str, float]:
         features: dict[str, float] = {
@@ -156,6 +168,9 @@ class TennisFeatures:
             ("ten_surface_dog_win_rate", self.surface_dog_win_rate),
             ("ten_surface_fav_win_rate", self.surface_fav_win_rate),
             ("ten_surface_win_rate_gap", self.surface_win_rate_gap),
+            ("ten_clay_win_rate_gap", self.clay_win_rate_gap),
+            ("ten_hard_win_rate_gap", self.hard_win_rate_gap),
+            ("ten_grass_win_rate_gap", self.grass_win_rate_gap),
             ("ten_predicted_set_margin_dog", self.predicted_set_margin_dog),
             ("ten_dog_predicted_sets", self.dog_predicted_sets),
             ("ten_fav_predicted_sets", self.fav_predicted_sets),
@@ -163,6 +178,11 @@ class TennisFeatures:
             ("ten_dog_height_inches", self.dog_height_inches),
             ("ten_fav_height_inches", self.fav_height_inches),
             ("ten_height_gap_inches", self.height_gap_inches),
+            ("ten_dog_scored_avg", self.dog_scored_avg),
+            ("ten_fav_scored_avg", self.fav_scored_avg),
+            ("ten_dog_conceded_avg", self.dog_conceded_avg),
+            ("ten_fav_conceded_avg", self.fav_conceded_avg),
+            ("ten_net_set_differential_gap", self.net_set_differential_gap),
         ]
 
         for name, val in optional_fields:
@@ -212,6 +232,16 @@ def extract_tennis_features(
     surf_gap = (dog_surf_wr - fav_surf_wr) if (dog_surf_wr is not None and fav_surf_wr is not None) else None
     specialist = 1.0 if (dog_surf_wr is not None and dog_surf_wr >= 0.60 and dog_surf_s >= 10.0) else 0.0
 
+    # Specific surface win rate gaps
+    def _surf_gap(s_name: str) -> float | None:
+        d_wr = _safe_float(facets.get(f"p{dog}_{s_name}_win_rate"))
+        f_wr = _safe_float(facets.get(f"p{fav}_{s_name}_win_rate"))
+        return (d_wr - f_wr) if (d_wr is not None and f_wr is not None) else None
+
+    clay_gap = _surf_gap("clay")
+    hard_gap = _surf_gap("hard")
+    grass_gap = _surf_gap("grass")
+
     # Sets & Games
     match_sets = re.search(r"(\d+)\s*[-:]\s*(\d+)", str(event.predicted_score or ""))
     s1, s2 = (float(match_sets.group(1)), float(match_sets.group(2))) if match_sets else (None, None)
@@ -233,6 +263,20 @@ def extract_tennis_features(
     dog_wr = (dog_recent.win_rate or 0.0) if dog_recent else 0.0
     fav_wr = (fav_recent.win_rate or 0.0) if fav_recent else 0.0
     dog_games = float(dog_recent.games if dog_recent else 0)
+
+    # Detail Match Averages
+    sc1_avg = _safe_float(facets.get("p1_scored_avg") or facets.get("detail_p1_scored_avg"))
+    sc2_avg = _safe_float(facets.get("p2_scored_avg") or facets.get("detail_p2_scored_avg"))
+    conc1_avg = _safe_float(facets.get("p1_conceded_avg") or facets.get("detail_p1_conceded_avg"))
+    conc2_avg = _safe_float(facets.get("p2_conceded_avg") or facets.get("detail_p2_conceded_avg"))
+
+    dog_sc_avg = sc1_avg if dog == 1 else sc2_avg
+    fav_sc_avg = sc2_avg if dog == 1 else sc1_avg
+    dog_conc_avg = conc1_avg if dog == 1 else conc2_avg
+    fav_conc_avg = conc2_avg if dog == 1 else conc1_avg
+    net_set_gap = None
+    if dog_sc_avg is not None and dog_conc_avg is not None and fav_sc_avg is not None and fav_conc_avg is not None:
+        net_set_gap = (dog_sc_avg - dog_conc_avg) - (fav_sc_avg - fav_conc_avg)
 
     # H2H
     h2h_games = float(h2h.total_games or facets.get("h2h_total_games") or 0)
@@ -262,6 +306,9 @@ def extract_tennis_features(
         surface_dog_sample=dog_surf_s,
         surface_fav_sample=fav_surf_s,
         surface_specialist_dog=specialist,
+        clay_win_rate_gap=clay_gap,
+        hard_win_rate_gap=hard_gap,
+        grass_win_rate_gap=grass_gap,
         predicted_set_margin_dog=set_margin,
         dog_predicted_sets=dog_sets,
         fav_predicted_sets=fav_sets,
@@ -273,6 +320,11 @@ def extract_tennis_features(
         favorite_recent_win_rate=fav_wr,
         win_rate_gap=dog_wr - fav_wr,
         dog_recent_games=dog_games,
+        dog_scored_avg=dog_sc_avg,
+        fav_scored_avg=fav_sc_avg,
+        dog_conceded_avg=dog_conc_avg,
+        fav_conceded_avg=fav_conc_avg,
+        net_set_differential_gap=net_set_gap,
         h2h_total_matches=h2h_games,
         h2h_dog_win_rate=h2h_wr,
         h2h_has_dog_win=has_dog_win,
@@ -322,6 +374,13 @@ def detect_tennis_robber(
     if dog_surf_wr is not None and dog_surf_wr >= 0.60 and dog_surf_s >= 8.0:
         score += 6.0
         reasons.append(f"Surface Specialist ({surface.capitalize()} {round(dog_surf_wr * 100)}%)")
+
+    # Height Advantage Factor (Server Advantage)
+    h_dog = _safe_float(facets.get(f"p{dog_idx}_height_inches"))
+    h_fav = _safe_float(facets.get(f"p{fav_idx}_height_inches"))
+    if h_dog and h_fav and (h_dog - h_fav) >= 4.0:
+        score += 4.0
+        reasons.append(f"Height / Serve Edge (+{int(h_dog - h_fav)}in)")
 
     # Favorite Strength Factor
     if odds_avail and fav_odds is not None:

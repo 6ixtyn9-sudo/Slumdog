@@ -82,6 +82,47 @@ def test_extract_volleyball_features():
     assert feat_dict["vb_is_home_dog"] == 1.0
     assert feat_dict["vb_decider_match_expectation"] == 1.0
     assert feat_dict["vb_predicted_total_sets"] == 5.0
+    assert feat_dict["vb_travel_distance_km_missing"] == 1.0
+
+
+def test_extract_volleyball_features_with_detail_differentials():
+    event = EventSnapshot(
+        event_id="volleyball:905",
+        sport="volleyball",
+        event_date="2026-08-23",
+        captured_at="2026-08-23T10:00:00+00:00",
+        source_url="https://www.forebet.com/en/volleyball/matches/home-away-905",
+        participant_1="ZAKSA",
+        participant_2="Jastrzebski Wegiel",
+        probability_1=0.42,
+        probability_2=0.58,
+        forebet_pick=2,
+        odds_1=2.40,
+        odds_2=1.58,
+        predicted_score="2-3",
+        predicted_total=5.0,
+        facets={
+            "travel_distance_km": 680.0,
+            "p1_scored_avg": 3.0,
+            "p1_conceded_avg": 1.5,
+            "p2_scored_avg": 3.0,
+            "p2_conceded_avg": 1.2,
+        },
+        facet_timing={k: TimingClass.PRE_EVENT for k in [
+            "travel_distance_km", "p1_scored_avg", "p1_conceded_avg", "p2_scored_avg", "p2_conceded_avg",
+        ]},
+    )
+    candidate = detect_volleyball_robber(event)
+    assert candidate is not None
+    assert any("Fav Away Road Fatigue" in r for r in candidate.reasons)
+
+    vf = extract_volleyball_features(event, candidate)
+    assert vf.travel_distance_km == 680.0
+    assert vf.dog_travel_distance == 0.0
+    assert vf.fav_travel_distance == 680.0
+    # net set diff: (3.0 - 1.5) - (3.0 - 1.2) = 1.5 - 1.8 = -0.3
+    assert round(vf.net_set_differential_gap, 1) == -0.3
+
 
 
 def test_detect_volleyball_robber_decider_bonus():

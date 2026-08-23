@@ -1,7 +1,19 @@
 """Sport-specific Forebet match-detail facet extraction.
 
-The parser preserves section text and extracts only timing-safe, reproducible
-numeric summaries. Unknown or ambiguous values stay missing rather than zero.
+The parser preserves section text and extracts all timing-safe, reproducible
+numeric summaries and detailed match statistics from Forebet detail pages:
+- Standings & quality differentials (rank, pts, gp, w, d, l, gf, ga, gd)
+- Head-to-head match histories and HT split scores
+- Form counts (wins, draws, losses across L6 and home/away splits)
+- Match distance in kilometers (straight line travel)
+- Pairwise stat metrics (clean sheets, corners, goal kicks, throw-ins, offsides,
+  penalties, GK saves, yellow/red cards, fouls, tackles, total/dangerous attacks,
+  total shots, passes)
+- Possession & accuracy percentages
+- Goal distribution averages (scored/conceded overall and home/away)
+- Tennis surface splits, MMA tale-of-the-tape records/reaches, sport-specific indicators.
+
+Unknown or ambiguous values stay missing rather than zero.
 """
 from __future__ import annotations
 
@@ -186,6 +198,20 @@ def _metric_pair_tables(soup: BeautifulSoup) -> dict[str, float]:
         "corners": "corners",
         "red cards": "red_cards",
         "yellow cards": "yellow_cards",
+        "goal kicks": "goal_kicks",
+        "throws in": "throws_in",
+        "throw ins": "throws_in",
+        "offsides": "offsides",
+        "penalties": "penalties",
+        "gk saves": "gk_saves",
+        "fouls": "fouls",
+        "tackles": "tackles",
+        "total attacks": "total_attacks",
+        "attacks": "total_attacks",
+        "dangerous attacks": "dangerous_attacks",
+        "total shots": "total_shots",
+        "shots": "total_shots",
+        "passes": "passes",
     }
     out: dict[str, float] = {}
     for table in soup.select("table"):
@@ -193,7 +219,7 @@ def _metric_pair_tables(soup: BeautifulSoup) -> dict[str, float]:
             cells = [_clean(cell.get_text(" ", strip=True)) for cell in tr.find_all(["th", "td"])]
             if len(cells) < 5:
                 continue
-            label = cells[2].casefold()
+            label = cells[2].casefold().strip(" :*")
             key = labels.get(label)
             if key is None:
                 continue
@@ -286,6 +312,18 @@ def _mma_fields(text: str) -> dict[str, float | str]:
     return out
 
 
+def _distance_and_weather(text: str) -> dict[str, float]:
+    """Extract travel distance (km) and weather temperature (°C) from detail prose."""
+    out: dict[str, float] = {}
+    dist_match = re.search(r"(\d+(?:\.\d+)?)\s*km", text, re.I)
+    if dist_match:
+        out["travel_distance_km"] = float(dist_match.group(1))
+    temp_match = re.search(r"(\d+(?:\.\d+)?)\s*°", text)
+    if temp_match:
+        out["weather_temperature_c"] = float(temp_match.group(1))
+    return out
+
+
 def parse_detail(
     body: bytes,
     sport: str,
@@ -319,6 +357,7 @@ def parse_detail(
     common.update(_standings_from_page(soup, participant_1, participant_2))
     common.update(_metric_pair_tables(soup))
     common.update(_goal_avgs(soup))
+    common.update(_distance_and_weather(text))
     specific: dict[str, Any] = {}
 
     if sport == "football":
@@ -332,6 +371,12 @@ def parse_detail(
             "corners_present": ("avg. corners", "corners"),
             "cards_present": ("avg. cards", "cards"),
             "btts_present": ("btts", "both teams scored"),
+            "distance_present": ("straight line distance", "distance"),
+            "fouls_present": ("fouls",),
+            "tackles_present": ("tackles",),
+            "possession_present": ("ball possession", "possession"),
+            "attacks_present": ("total attacks", "dangerous attacks"),
+            "shots_present": ("total shots", "on target"),
         }.items():
             specific[key] = any(phrase in lower for phrase in phrases)
         specific["cards_present"] = "avg. cards" in lower or "cards score" in lower or "cards" in lower

@@ -85,6 +85,48 @@ def test_extract_rugby_features():
     assert feat_dict["rg_try_margin_expectation"] == 1.0
     assert feat_dict["rg_penalty_margin_expectation"] == 1.0
     assert feat_dict["rg_predicted_point_margin_dog"] == -3.0
+    assert feat_dict["rg_travel_distance_km_missing"] == 1.0
+
+
+def test_extract_rugby_features_with_detail_differentials():
+    event = EventSnapshot(
+        event_id="rugby:705",
+        sport="rugby",
+        event_date="2026-08-23",
+        captured_at="2026-08-23T10:00:00+00:00",
+        source_url="https://www.forebet.com/en/rugby/matches/home-away-705",
+        participant_1="Bulls",
+        participant_2="Stormers",
+        probability_1=0.42,
+        draw_probability=0.04,
+        probability_2=0.54,
+        forebet_pick=2,
+        odds_1=2.50,
+        odds_2=1.58,
+        predicted_score="18-23",
+        predicted_total=41.0,
+        facets={
+            "travel_distance_km": 1400.0,
+            "p1_scored_avg": 28.5,
+            "p1_conceded_avg": 20.0,
+            "p2_scored_avg": 29.0,
+            "p2_conceded_avg": 18.0,
+        },
+        facet_timing={k: TimingClass.PRE_EVENT for k in [
+            "travel_distance_km", "p1_scored_avg", "p1_conceded_avg", "p2_scored_avg", "p2_conceded_avg",
+        ]},
+    )
+    candidate = detect_rugby_robber(event)
+    assert candidate is not None
+    assert any("Fav Away Road Fatigue" in r for r in candidate.reasons)
+
+    rf = extract_rugby_features(event, candidate)
+    assert rf.travel_distance_km == 1400.0
+    assert rf.dog_travel_distance == 0.0
+    assert rf.fav_travel_distance == 1400.0
+    # net pts diff: (28.5 - 20.0) - (29.0 - 18.0) = 8.5 - 11.0 = -2.5
+    assert round(rf.net_points_differential_gap, 1) == -2.5
+
 
 
 def test_detect_rugby_robber_try_margin_bonus():
