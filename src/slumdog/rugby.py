@@ -5,13 +5,13 @@ Rugby is a 3-way sport (1X2 regulation with low draw probability) characterized 
 - High-variance discrete scoring (tries: 5pts, conversions: 2pts, penalties/drop-goals: 3pts)
 - Converted try margin (within 7 points) and penalty kick margin (within 3 points)
 - 3-way pricing (1X2) with draw pressure dynamics
-- Substantial home ground advantage (travel/pitch familiarity)
+- Substantial home ground advantage (travel/pitch familiarity) and road fatigue
 - Standings points differential (PD) and bonus-point table dynamics
 
 This module provides:
-- Rugby-specific feature extraction (halves splits, try margin proxy, 3-way de-vigging)
-- Standings, point differential, and win-percentage gap metrics
-- Dedicated 3-way Robber detector with home-underdog and close-margin bonuses
+- Rugby-specific feature extraction (halves splits, try margin proxy, 3-way de-vigging, travel distance)
+- Standings, point differential, scoring averages, and win-percentage gap metrics
+- Dedicated 3-way Robber detector with home-underdog, travel, and close-margin bonuses
 - Leak-safe numeric vector builder with explicit missingness flags
 """
 from __future__ import annotations
@@ -138,14 +138,24 @@ class RugbyFeatures:
     standings_pts_gap: float | None
     standings_gd_gap: float | None
 
+    # Spatial & Detail Match Averages
+    travel_distance_km: float | None = None
+    dog_travel_distance: float | None = None
+    fav_travel_distance: float | None = None
+    dog_scored_avg: float | None = None
+    fav_scored_avg: float | None = None
+    dog_conceded_avg: float | None = None
+    fav_conceded_avg: float | None = None
+    net_points_differential_gap: float | None = None
+
     # H2H Matchup History
-    h2h_total_games: float
-    h2h_dog_win_rate: float
-    h2h_has_dog_win: float
+    h2h_total_games: float = 0.0
+    h2h_dog_win_rate: float = 0.0
+    h2h_has_dog_win: float = 0.0
 
     # Legacy & Meta
-    legacy_robber_score: float
-    legacy_raw_confidence: float
+    legacy_robber_score: float = 0.0
+    legacy_raw_confidence: float = 0.0
 
     def to_dict(self) -> dict[str, float]:
         features: dict[str, float] = {
@@ -193,6 +203,14 @@ class RugbyFeatures:
             ("rg_rank_gap", self.rank_gap),
             ("rg_standings_pts_gap", self.standings_pts_gap),
             ("rg_standings_gd_gap", self.standings_gd_gap),
+            ("rg_travel_distance_km", self.travel_distance_km),
+            ("rg_dog_travel_distance", self.dog_travel_distance),
+            ("rg_fav_travel_distance", self.fav_travel_distance),
+            ("rg_dog_scored_avg", self.dog_scored_avg),
+            ("rg_fav_scored_avg", self.fav_scored_avg),
+            ("rg_dog_conceded_avg", self.dog_conceded_avg),
+            ("rg_fav_conceded_avg", self.fav_conceded_avg),
+            ("rg_net_points_differential_gap", self.net_points_differential_gap),
         ]
 
         for name, val in optional_fields:
@@ -298,6 +316,24 @@ def extract_rugby_features(
     if dog == 2 and gd_gap is not None:
         gd_gap = -gd_gap
 
+    # Travel & Detail Match Averages
+    dist_km = _safe_float(facets.get("travel_distance_km") or facets.get("detail_travel_distance_km"))
+    dog_travel = (dist_km if dog == 2 else 0.0) if dist_km is not None else None
+    fav_travel = (dist_km if fav == 2 else 0.0) if dist_km is not None else None
+
+    sc1_avg = _safe_float(facets.get("p1_scored_avg") or facets.get("detail_p1_scored_avg"))
+    sc2_avg = _safe_float(facets.get("p2_scored_avg") or facets.get("detail_p2_scored_avg"))
+    conc1_avg = _safe_float(facets.get("p1_conceded_avg") or facets.get("detail_p1_conceded_avg"))
+    conc2_avg = _safe_float(facets.get("p2_conceded_avg") or facets.get("detail_p2_conceded_avg"))
+
+    dog_sc_avg = sc1_avg if dog == 1 else sc2_avg
+    fav_sc_avg = sc2_avg if dog == 1 else sc1_avg
+    dog_conc_avg = conc1_avg if dog == 1 else conc2_avg
+    fav_conc_avg = conc2_avg if dog == 1 else conc1_avg
+    net_pts_gap = None
+    if dog_sc_avg is not None and dog_conc_avg is not None and fav_sc_avg is not None and fav_conc_avg is not None:
+        net_pts_gap = (dog_sc_avg - dog_conc_avg) - (fav_sc_avg - fav_conc_avg)
+
     # H2H
     h2h_games = float(h2h.total_games or facets.get("h2h_total_games") or 0)
     h2h_dog_wins = float(h2h.wins(dog) or 0)
@@ -343,6 +379,14 @@ def extract_rugby_features(
         rank_gap=rank_gap,
         standings_pts_gap=pts_gap,
         standings_gd_gap=gd_gap,
+        travel_distance_km=dist_km,
+        dog_travel_distance=dog_travel,
+        fav_travel_distance=fav_travel,
+        dog_scored_avg=dog_sc_avg,
+        fav_scored_avg=fav_sc_avg,
+        dog_conceded_avg=dog_conc_avg,
+        fav_conceded_avg=fav_conc_avg,
+        net_points_differential_gap=net_pts_gap,
         h2h_total_games=h2h_games,
         h2h_dog_win_rate=h2h_wr,
         h2h_has_dog_win=has_dog_win,
@@ -358,7 +402,7 @@ def detect_rugby_robber(
     recent_2: RecentForm | None = None,
     config: RobberConfig | None = None,
 ) -> RobberCandidate | None:
-    """Dedicated Rugby 3-Way Robber detector with home-underdog and try-margin bonuses."""
+    """Dedicated Rugby 3-Way Robber detector with home-underdog, travel, and try-margin bonuses."""
     config = config or RobberConfig()
     h2h = h2h or H2HStats()
 
@@ -438,6 +482,13 @@ def detect_rugby_robber(
         elif rate >= 0.45:
             score += 8.0
             reasons.append(f"Solid form {recent.wins}W/{recent.games}G")
+
+    # Travel Road Fatigue Catalyst
+    facets = event.pre_event_facets()
+    dist = _safe_float(facets.get("travel_distance_km") or facets.get("detail_travel_distance_km"))
+    if dist and dist >= 600.0 and dog_idx == 1:
+        score += 5.0
+        reasons.append(f"Fav Away Road Fatigue ({int(dist)}km)")
 
     # Odds Value Factor (1X2 3-Way)
     if odds_avail and dog_odds is not None:
