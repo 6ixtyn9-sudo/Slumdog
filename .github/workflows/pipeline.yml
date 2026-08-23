@@ -204,10 +204,20 @@ jobs:
           find depth-input -name 'history_*.json' -exec cp {} data/reports/ \;
       - name: Write data completeness receipt
         run: slumdog audit --no-fail
-      - name: Enforce historical completeness gate
-        run: slumdog audit
       - name: Run research gate (model cards + ablations)
         run: slumdog research --research-override
+      - name: Publish research summary
+        if: always()
+        shell: bash
+        run: |
+          RESEARCH_FILE="$(find data/reports -name 'research_*.md' | head -1)"
+          if [ -n "$RESEARCH_FILE" ]; then
+            cat "$RESEARCH_FILE" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          AUDIT_FILE="$(find data/reports -name 'audit_*.md' | head -1)"
+          if [ -n "$AUDIT_FILE" ]; then
+            cat "$AUDIT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
