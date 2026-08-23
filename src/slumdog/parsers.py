@@ -218,6 +218,76 @@ def parse_html_events(
     return events
 
 
+def _form_record(values) -> dict[str, float]:
+    """Turn a Forebet form array like ['w','d','l'] into counts. Missing stays empty."""
+    if not isinstance(values, (list, tuple)):
+        return {}
+    letters = [str(item).strip().casefold()[:1] for item in values if str(item).strip()]
+    if not letters:
+        return {}
+    return {
+        "wins": float(sum(1 for item in letters if item == "w")),
+        "draws": float(sum(1 for item in letters if item == "d")),
+        "losses": float(sum(1 for item in letters if item == "l")),
+        "games": float(len(letters)),
+    }
+
+
+def _league_position(value) -> float | None:
+    return _number(str(value or ""))
+
+
+def promote_football_listing(event: EventSnapshot, row: dict) -> None:
+    """Lift numbers already on the 1X2 JSON row into named pre-event facets.
+
+    The raw row stays in ``event.facets`` for audit. These aliases are the
+    fields later stages can actually consume (numeric(), H2H/form scorer).
+    """
+    host = _form_record(row.get("host_form"))
+    guest = _form_record(row.get("guest_form"))
+    if host:
+        event.facets["recent_1_wins"] = host["wins"]
+        event.facets["recent_1_draws"] = host["draws"]
+        event.facets["recent_1_losses"] = host["losses"]
+        event.facets["recent_1_games"] = host["games"]
+    if guest:
+        event.facets["recent_2_wins"] = guest["wins"]
+        event.facets["recent_2_draws"] = guest["draws"]
+        event.facets["recent_2_losses"] = guest["losses"]
+        event.facets["recent_2_games"] = guest["games"]
+
+    pos_1 = _league_position(row.get("host_pos"))
+    pos_2 = _league_position(row.get("guest_pos"))
+    if pos_1 is not None:
+        event.facets["standings_1"] = pos_1
+    if pos_2 is not None:
+        event.facets["standings_2"] = pos_2
+    if pos_1 is not None and pos_2 is not None:
+        event.facets["standings_gap"] = pos_1 - pos_2
+
+    for key in ("weather_high", "weather_low", "weather_code", "kelly", "goalsavg"):
+        number = _number(row.get(key))
+        if number is not None:
+            event.facets[key] = number
+
+    draw_odds = decimal_odds(str(row.get("best_odd_X") or ""))
+    if draw_odds is not None:
+        event.facets["odds_draw"] = draw_odds
+    round_number = _number(row.get("Round"))
+    if round_number is not None:
+        event.facets["round_number"] = round_number
+
+    for key in (
+        "recent_1_wins", "recent_1_draws", "recent_1_losses", "recent_1_games",
+        "recent_2_wins", "recent_2_draws", "recent_2_losses", "recent_2_games",
+        "standings_1", "standings_2", "standings_gap",
+        "weather_high", "weather_low", "weather_code", "kelly", "goalsavg",
+        "odds_draw", "round_number",
+    ):
+        if key in event.facets:
+            event.facet_timing[key] = TimingClass.PRE_EVENT
+
+
 def parse_football_json(
     body: bytes,
     target_date: str,
@@ -269,6 +339,7 @@ def parse_football_json(
                 odds_1=decimal_odds(str(row.get("best_odd_1") or "")),
                 odds_2=decimal_odds(str(row.get("best_odd_2") or "")),
                 league=str(row.get("short_tag") or ""),
+                round_name=str(row.get("Round") or ""),
                 kickoff=str(row.get("DATE_BAH") or ""),
                 predicted_score=f"{row.get('host_sc_pr', '')}-{row.get('guest_sc_pr', '')}",
                 predicted_total=_number(row.get("goalsavg")),
@@ -277,6 +348,7 @@ def parse_football_json(
                 facet_timing=timing,
             )
         )
+        promote_football_listing(events[-1], row)
     return events
 
 
