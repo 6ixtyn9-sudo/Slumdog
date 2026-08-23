@@ -86,6 +86,53 @@ def test_extract_hockey_features_with_periods():
     assert feat_dict["hk_is_home_dog"] == 1.0
     assert feat_dict["hk_low_total_environment"] == 1.0
     assert feat_dict["hk_predicted_total_goals"] == 5.0
+    assert feat_dict["hk_travel_distance_km_missing"] == 1.0
+
+
+def test_extract_hockey_features_with_detail_differentials():
+    event = EventSnapshot(
+        event_id="hockey:405",
+        sport="hockey",
+        event_date="2026-08-23",
+        captured_at="2026-08-23T10:00:00+00:00",
+        source_url="https://www.forebet.com/en/hockey/matches/home-away-405",
+        participant_1="Calgary Flames",
+        participant_2="New York Rangers",
+        probability_1=0.40,
+        probability_2=0.60,
+        forebet_pick=2,
+        odds_1=2.50,
+        odds_2=1.55,
+        predicted_score="2-3",
+        predicted_total=5.0,
+        facets={
+            "travel_distance_km": 3200.0,
+            "p1_scored_avg": 3.2,
+            "p1_conceded_avg": 2.8,
+            "p2_scored_avg": 3.4,
+            "p2_conceded_avg": 2.5,
+            "p1_total_shots_avg": 32.5,
+            "p2_total_shots_avg": 30.0,
+        },
+        facet_timing={k: TimingClass.PRE_EVENT for k in [
+            "travel_distance_km", "p1_scored_avg", "p1_conceded_avg",
+            "p2_scored_avg", "p2_conceded_avg", "p1_total_shots_avg", "p2_total_shots_avg",
+        ]},
+    )
+    candidate = detect_hockey_robber(event)
+    assert candidate is not None
+    assert any("Fav Away Road Fatigue" in r for r in candidate.reasons)
+
+    hf = extract_hockey_features(event, candidate)
+    assert hf.travel_distance_km == 3200.0
+    assert hf.dog_travel_distance == 0.0
+    assert hf.fav_travel_distance == 3200.0
+    assert hf.dog_shots_avg == 32.5
+    assert hf.fav_shots_avg == 30.0
+    assert hf.shots_avg_gap == 2.5
+    # net goal diff: (3.2 - 2.8) - (3.4 - 2.5) = 0.4 - 0.9 = -0.5
+    assert round(hf.net_goal_differential_gap, 1) == -0.5
+
 
 
 def test_detect_hockey_robber_tight_total_bonus():

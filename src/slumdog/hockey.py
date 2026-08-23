@@ -5,12 +5,12 @@ Ice Hockey is a 2-way sport (including Overtime and Shootouts) characterized by:
 - High overtime/shootout frequency (~20-25% of games go to extra time)
 - Low total goal expectations (typically 4.5 to 6.5 goals)
 - High variance / one-goal margin frequency
-- Home ice advantage (last line change, faceoff positioning)
+- Home ice advantage (last line change, faceoff positioning) and road fatigue
 
 This module provides:
-- Hockey-specific feature extraction (period splits, tight-game / OT proxy, 2-way de-vigging)
-- Goal differential and standings point gap metrics
-- Dedicated 2-way hockey Robber detector with home-ice and tight-total bonuses
+- Hockey-specific feature extraction (period splits, tight-game / OT proxy, 2-way de-vigging, travel distance)
+- Goal differential, shot metrics, and standings point gap metrics
+- Dedicated 2-way hockey Robber detector with home-ice, travel, and tight-total bonuses
 - Leak-safe numeric vector builder with explicit missingness flags
 """
 from __future__ import annotations
@@ -126,15 +126,28 @@ class HockeyFeatures:
     standings_pts_gap: float | None
     standings_gd_gap: float | None
 
+    # Spatial, Detail & Tactical Differentials
+    travel_distance_km: float | None = None
+    dog_travel_distance: float | None = None
+    fav_travel_distance: float | None = None
+    dog_scored_avg: float | None = None
+    fav_scored_avg: float | None = None
+    dog_conceded_avg: float | None = None
+    fav_conceded_avg: float | None = None
+    net_goal_differential_gap: float | None = None
+    dog_shots_avg: float | None = None
+    fav_shots_avg: float | None = None
+    shots_avg_gap: float | None = None
+
     # H2H Matchup History
-    h2h_total_games: float
-    h2h_dog_win_rate: float
-    h2h_has_dog_win: float
-    h2h_period_dog_win_rate: float
+    h2h_total_games: float = 0.0
+    h2h_dog_win_rate: float = 0.0
+    h2h_has_dog_win: float = 0.0
+    h2h_period_dog_win_rate: float = 0.0
 
     # Legacy & Meta
-    legacy_robber_score: float
-    legacy_raw_confidence: float
+    legacy_robber_score: float = 0.0
+    legacy_raw_confidence: float = 0.0
 
     def to_dict(self) -> dict[str, float]:
         features: dict[str, float] = {
@@ -180,6 +193,17 @@ class HockeyFeatures:
             ("hk_rank_gap", self.rank_gap),
             ("hk_standings_pts_gap", self.standings_pts_gap),
             ("hk_standings_gd_gap", self.standings_gd_gap),
+            ("hk_travel_distance_km", self.travel_distance_km),
+            ("hk_dog_travel_distance", self.dog_travel_distance),
+            ("hk_fav_travel_distance", self.fav_travel_distance),
+            ("hk_dog_scored_avg", self.dog_scored_avg),
+            ("hk_fav_scored_avg", self.fav_scored_avg),
+            ("hk_dog_conceded_avg", self.dog_conceded_avg),
+            ("hk_fav_conceded_avg", self.fav_conceded_avg),
+            ("hk_net_goal_differential_gap", self.net_goal_differential_gap),
+            ("hk_dog_shots_avg", self.dog_shots_avg),
+            ("hk_fav_shots_avg", self.fav_shots_avg),
+            ("hk_shots_avg_gap", self.shots_avg_gap),
         ]
 
         for name, val in optional_fields:
@@ -280,6 +304,30 @@ def extract_hockey_features(
     if dog == 2 and gd_gap is not None:
         gd_gap = -gd_gap
 
+    # Travel & Detail Match Averages
+    dist_km = _safe_float(facets.get("travel_distance_km") or facets.get("detail_travel_distance_km"))
+    dog_travel = (dist_km if dog == 2 else 0.0) if dist_km is not None else None
+    fav_travel = (dist_km if fav == 2 else 0.0) if dist_km is not None else None
+
+    sc1_avg = _safe_float(facets.get("p1_scored_avg") or facets.get("detail_p1_scored_avg"))
+    sc2_avg = _safe_float(facets.get("p2_scored_avg") or facets.get("detail_p2_scored_avg"))
+    conc1_avg = _safe_float(facets.get("p1_conceded_avg") or facets.get("detail_p1_conceded_avg"))
+    conc2_avg = _safe_float(facets.get("p2_conceded_avg") or facets.get("detail_p2_conceded_avg"))
+
+    dog_sc_avg = sc1_avg if dog == 1 else sc2_avg
+    fav_sc_avg = sc2_avg if dog == 1 else sc1_avg
+    dog_conc_avg = conc1_avg if dog == 1 else conc2_avg
+    fav_conc_avg = conc2_avg if dog == 1 else conc1_avg
+    net_goal_gap = None
+    if dog_sc_avg is not None and dog_conc_avg is not None and fav_sc_avg is not None and fav_conc_avg is not None:
+        net_goal_gap = (dog_sc_avg - dog_conc_avg) - (fav_sc_avg - fav_conc_avg)
+
+    sh1_avg = _safe_float(facets.get("p1_total_shots_avg") or facets.get("detail_p1_total_shots_avg"))
+    sh2_avg = _safe_float(facets.get("p2_total_shots_avg") or facets.get("detail_p2_total_shots_avg"))
+    dog_sh = sh1_avg if dog == 1 else sh2_avg
+    fav_sh = sh2_avg if dog == 1 else sh1_avg
+    sh_gap = (dog_sh - fav_sh) if (dog_sh is not None and fav_sh is not None) else None
+
     # H2H
     h2h_games = float(h2h.total_games or facets.get("h2h_total_games") or 0)
     h2h_dog_wins = float(h2h.wins(dog) or 0)
@@ -324,6 +372,17 @@ def extract_hockey_features(
         rank_gap=rank_gap,
         standings_pts_gap=pts_gap,
         standings_gd_gap=gd_gap,
+        travel_distance_km=dist_km,
+        dog_travel_distance=dog_travel,
+        fav_travel_distance=fav_travel,
+        dog_scored_avg=dog_sc_avg,
+        fav_scored_avg=fav_sc_avg,
+        dog_conceded_avg=dog_conc_avg,
+        fav_conceded_avg=fav_conc_avg,
+        net_goal_differential_gap=net_goal_gap,
+        dog_shots_avg=dog_sh,
+        fav_shots_avg=fav_sh,
+        shots_avg_gap=sh_gap,
         h2h_total_games=h2h_games,
         h2h_dog_win_rate=h2h_wr,
         h2h_has_dog_win=has_dog_win,
@@ -422,6 +481,13 @@ def detect_hockey_robber(
         elif rate >= 0.45:
             score += 8.0
             reasons.append(f"Solid form {recent.wins}W/{recent.games}G")
+
+    # Travel Road Fatigue Catalyst
+    facets = event.pre_event_facets()
+    dist = _safe_float(facets.get("travel_distance_km") or facets.get("detail_travel_distance_km"))
+    if dist and dist >= 500.0 and dog_idx == 1:
+        score += 5.0
+        reasons.append(f"Fav Away Road Fatigue ({int(dist)}km)")
 
     # Odds Value Factor
     if odds_avail and dog_odds is not None:
