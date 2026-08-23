@@ -79,6 +79,47 @@ def test_extract_american_football_features():
     assert feat_dict["af_one_score_game_expectation"] == 1.0
     assert feat_dict["af_field_goal_game_expectation"] == 1.0
     assert feat_dict["af_predicted_point_margin_dog"] == -3.0
+    assert feat_dict["af_travel_distance_km_missing"] == 1.0
+
+
+def test_extract_american_football_features_with_detail_differentials():
+    event = EventSnapshot(
+        event_id="af:605",
+        sport="american_football",
+        event_date="2026-08-23",
+        captured_at="2026-08-23T10:00:00+00:00",
+        source_url="https://www.forebet.com/en/american-football/matches/home-away-605",
+        participant_1="Seattle Seahawks",
+        participant_2="Miami Dolphins",
+        probability_1=0.42,
+        probability_2=0.58,
+        forebet_pick=2,
+        odds_1=2.40,
+        odds_2=1.60,
+        predicted_score="20-23",
+        predicted_total=43.0,
+        facets={
+            "travel_distance_km": 4400.0,
+            "p1_scored_avg": 24.2,
+            "p1_conceded_avg": 21.0,
+            "p2_scored_avg": 26.5,
+            "p2_conceded_avg": 22.0,
+        },
+        facet_timing={k: TimingClass.PRE_EVENT for k in [
+            "travel_distance_km", "p1_scored_avg", "p1_conceded_avg", "p2_scored_avg", "p2_conceded_avg",
+        ]},
+    )
+    candidate = detect_american_football_robber(event)
+    assert candidate is not None
+    assert any("Fav Cross-Country Travel Fatigue" in r for r in candidate.reasons)
+
+    aff = extract_american_football_features(event, candidate)
+    assert aff.travel_distance_km == 4400.0
+    assert aff.dog_travel_distance == 0.0
+    assert aff.fav_travel_distance == 4400.0
+    # net pts diff: (24.2 - 21.0) - (26.5 - 22.0) = 3.2 - 4.5 = -1.3
+    assert round(aff.net_points_differential_gap, 1) == -1.3
+
 
 
 def test_detect_american_football_robber_one_score_bonus():
