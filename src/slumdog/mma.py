@@ -8,9 +8,9 @@ MMA is a 2-way fight sport (3 or 5 rounds of 5 minutes each) characterized by:
 - 2-way moneyline pricing
 
 This module provides:
-- MMA-specific feature extraction (reach advantage, finish indicators, 2-way de-vigging)
-- Physical differential and form metrics
-- Dedicated 2-way Robber detector with reach advantage and finish potential bonuses
+- MMA-specific feature extraction (reach advantage, finish indicators, strike/takedown differentials, 2-way de-vigging)
+- Physical differential, stance matchups, and form metrics
+- Dedicated 2-way Robber detector with reach advantage, southpaw edge, and finish potential bonuses
 - Leak-safe numeric vector builder with explicit missingness flags
 """
 from __future__ import annotations
@@ -99,10 +99,15 @@ class MMAFeatures:
     reach_gap_cm: float | None
     has_reach_advantage_dog: float # 1.0 if reach gap >= 5.0 cm
     is_southpaw_dog: float
+    is_southpaw_fav: float
 
     # Striking & Grappling Metrics
     takedown_avg_dog: float | None
+    takedown_avg_fav: float | None
+    takedown_differential: float | None
     sig_strikes_landed_dog: float | None
+    sig_strikes_landed_fav: float | None
+    sig_strikes_differential: float | None
     ko_finish_potential: float
     sub_finish_potential: float
 
@@ -131,6 +136,7 @@ class MMAFeatures:
             "mma_forebet_calls_dog": self.forebet_calls_dog,
             "mma_has_reach_advantage_dog": self.has_reach_advantage_dog,
             "mma_is_southpaw_dog": self.is_southpaw_dog,
+            "mma_is_southpaw_fav": self.is_southpaw_fav,
             "mma_ko_finish_potential": self.ko_finish_potential,
             "mma_sub_finish_potential": self.sub_finish_potential,
             "mma_price_available": self.price_available,
@@ -159,7 +165,11 @@ class MMAFeatures:
             ("mma_fav_reach_cm", self.fav_reach_cm),
             ("mma_reach_gap_cm", self.reach_gap_cm),
             ("mma_takedown_avg_dog", self.takedown_avg_dog),
+            ("mma_takedown_avg_fav", self.takedown_avg_fav),
+            ("mma_takedown_differential", self.takedown_differential),
             ("mma_sig_strikes_landed_dog", self.sig_strikes_landed_dog),
+            ("mma_sig_strikes_landed_fav", self.sig_strikes_landed_fav),
+            ("mma_sig_strikes_differential", self.sig_strikes_differential),
         ]
 
         for name, val in optional_fields:
@@ -217,19 +227,25 @@ def extract_mma_features(
     st_1 = str(facets.get("fighter_1_stance") or facets.get("stance_1") or "").lower()
     st_2 = str(facets.get("fighter_2_stance") or facets.get("stance_2") or "").lower()
     dog_st = st_1 if dog == 1 else st_2
-    is_southpaw = 1.0 if "southpaw" in dog_st else 0.0
+    fav_st = st_2 if dog == 1 else st_1
+    is_southpaw_dog = 1.0 if "southpaw" in dog_st else 0.0
+    is_southpaw_fav = 1.0 if "southpaw" in fav_st else 0.0
 
     method_str = str(facets.get("predicted_method") or "").lower()
     ko_finish = 1.0 if ("ko" in method_str or "tko" in method_str) else 0.0
     sub_finish = 1.0 if ("sub" in method_str or "submission" in method_str) else 0.0
 
-    td_1 = _safe_float(facets.get("takedowns_1"))
-    td_2 = _safe_float(facets.get("takedowns_2"))
+    td_1 = _safe_float(facets.get("takedowns_1") or facets.get("fighter_1_takedowns"))
+    td_2 = _safe_float(facets.get("takedowns_2") or facets.get("fighter_2_takedowns"))
     dog_td = td_1 if dog == 1 else td_2
+    fav_td = td_2 if dog == 1 else td_1
+    td_diff = (dog_td - fav_td) if (dog_td is not None and fav_td is not None) else None
 
-    strk_1 = _safe_float(facets.get("strikes_1"))
-    strk_2 = _safe_float(facets.get("strikes_2"))
+    strk_1 = _safe_float(facets.get("strikes_1") or facets.get("fighter_1_strikes"))
+    strk_2 = _safe_float(facets.get("strikes_2") or facets.get("fighter_2_strikes"))
     dog_strk = strk_1 if dog == 1 else strk_2
+    fav_strk = strk_2 if dog == 1 else strk_1
+    strk_diff = (dog_strk - fav_strk) if (dog_strk is not None and fav_strk is not None) else None
 
     # Form
     dog_recent = recent_1 if dog == 1 else recent_2
@@ -267,9 +283,14 @@ def extract_mma_features(
         fav_reach_cm=fav_r,
         reach_gap_cm=reach_gap,
         has_reach_advantage_dog=reach_adv,
-        is_southpaw_dog=is_southpaw,
+        is_southpaw_dog=is_southpaw_dog,
+        is_southpaw_fav=is_southpaw_fav,
         takedown_avg_dog=dog_td,
+        takedown_avg_fav=fav_td,
+        takedown_differential=td_diff,
         sig_strikes_landed_dog=dog_strk,
+        sig_strikes_landed_fav=fav_strk,
+        sig_strikes_differential=strk_diff,
         ko_finish_potential=ko_finish,
         sub_finish_potential=sub_finish,
         dog_recent_win_rate=dog_wr,
@@ -291,7 +312,7 @@ def detect_mma_robber(
     recent_2: RecentForm | None = None,
     config: RobberConfig | None = None,
 ) -> RobberCandidate | None:
-    """Dedicated MMA 2-Way Robber detector with physical and finish bonuses."""
+    """Dedicated MMA 2-Way Robber detector with physical, southpaw, and finish bonuses."""
     config = config or RobberConfig()
     h2h = h2h or H2HStats()
 
@@ -327,6 +348,15 @@ def detect_mma_robber(
         if (dog_r - fav_r) >= 5.0:
             score += 4.0
             reasons.append(f"Reach advantage ({dog_r - fav_r:+.1f}cm)")
+
+    # Southpaw Stance Bonus
+    st_1 = str(facets.get("fighter_1_stance") or facets.get("stance_1") or "").lower()
+    st_2 = str(facets.get("fighter_2_stance") or facets.get("stance_2") or "").lower()
+    dog_st = st_1 if dog_idx == 1 else st_2
+    fav_st = st_2 if dog_idx == 1 else st_1
+    if "southpaw" in dog_st and "southpaw" not in fav_st:
+        score += 3.0
+        reasons.append("Southpaw stance advantage vs Orthodox (+3)")
 
     # Favorite Strength Factor
     if odds_avail and fav_odds is not None:
