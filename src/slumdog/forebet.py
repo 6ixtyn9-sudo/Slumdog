@@ -222,19 +222,23 @@ class RawCapture:
 # backfill. They are useful for today's shadow run, but nine requests per
 # historical date would turn a parser enhancement into an Actions-budget
 # change. The row keys are preserved as facets, not treated as extra targets.
+# Only endpoints that return a distinct numeric surface. `tp=corners` and
+# `tp=goalscorer` currently echo the 1X2 payload — keeping them would fake
+# a corners/scorer picture.
 FOOTBALL_MARKETS: tuple[str, ...] = (
-    "uo", "bts", "ht", "htft", "ah", "corners", "cards", "goalscorer",
+    "uo", "bts", "ht", "htft", "ah", "cards",
 )
 FOOTBALL_MARKET_KEYS: dict[str, tuple[str, ...]] = {
-    "uo": ("pr_over", "pr_under", "odds_under_over"),
+    "uo": ("pr_over", "pr_under", "odds_under_over", "best_over", "best_under"),
     "bts": ("Pred_gg", "Pred_no_gg", "odds_gg_y", "odds_gg_n"),
     "ht": ("Pred_1_HT", "Pred_X_HT", "Pred_2_HT", "best_odd_ht"),
-    "htft": ("odds_ht_ft",),
-    "ah": ("odds_ah",),
-    "corners": ("best_odd",),
-    "cards": ("avg_cards", "host_yellowcards", "guest_yellowcards",
-              "host_redcards", "guest_redcards"),
-    "goalscorer": ("best_odd",),
+    "htft": ("odds_ht_ft", "Pred_1_HT", "Pred_X_HT", "Pred_2_HT"),
+    "ah": ("odds_ah", "AH_type", "predAH"),
+    "cards": (
+        "avg_cards", "host_card_pred", "guest_card_pred", "pred_line",
+        "pred_over", "pred_under", "host_yellowcards", "guest_yellowcards",
+        "host_redcards", "guest_redcards",
+    ),
 }
 
 
