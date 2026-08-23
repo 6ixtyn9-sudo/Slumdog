@@ -83,3 +83,4 @@ def test_research_job_downloads_history_and_runs_gate():
 def test_history_job_runs_on_every_trigger():
     data, _ = _workflow()
     assert "if" not in data["jobs"]["history"]
+    assert "ticket" not in data["jobs"]
