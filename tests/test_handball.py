@@ -85,6 +85,48 @@ def test_extract_handball_features():
     assert feat_dict["hb_is_home_dog"] == 1.0
     assert feat_dict["hb_close_game_expectation"] == 1.0
     assert feat_dict["hb_predicted_goal_margin_dog"] == -1.0
+    assert feat_dict["hb_travel_distance_km_missing"] == 1.0
+
+
+def test_extract_handball_features_with_detail_differentials():
+    event = EventSnapshot(
+        event_id="handball:805",
+        sport="handball",
+        event_date="2026-08-23",
+        captured_at="2026-08-23T10:00:00+00:00",
+        source_url="https://www.forebet.com/en/handball/matches/home-away-805",
+        participant_1="Veszprem",
+        participant_2="PSG Handball",
+        probability_1=0.42,
+        draw_probability=0.08,
+        probability_2=0.50,
+        forebet_pick=2,
+        odds_1=2.45,
+        odds_2=1.60,
+        predicted_score="28-30",
+        predicted_total=58.0,
+        facets={
+            "travel_distance_km": 1250.0,
+            "p1_scored_avg": 32.5,
+            "p1_conceded_avg": 27.0,
+            "p2_scored_avg": 34.0,
+            "p2_conceded_avg": 28.0,
+        },
+        facet_timing={k: TimingClass.PRE_EVENT for k in [
+            "travel_distance_km", "p1_scored_avg", "p1_conceded_avg", "p2_scored_avg", "p2_conceded_avg",
+        ]},
+    )
+    candidate = detect_handball_robber(event)
+    assert candidate is not None
+    assert any("Fav Away Road Fatigue" in r for r in candidate.reasons)
+
+    hf = extract_handball_features(event, candidate)
+    assert hf.travel_distance_km == 1250.0
+    assert hf.dog_travel_distance == 0.0
+    assert hf.fav_travel_distance == 1250.0
+    # net goal diff: (32.5 - 27.0) - (34.0 - 28.0) = 5.5 - 6.0 = -0.5
+    assert round(hf.net_goal_differential_gap, 1) == -0.5
+
 
 
 def test_detect_handball_robber_close_game_bonus():
