@@ -161,15 +161,36 @@ def enrich_events_from_details(
         path = _detail_path(root, sport, event_id)
         if not path.exists():
             continue
-        facets = parse_detail(path.read_bytes(), sport)
+        facets = parse_detail(
+            path.read_bytes(),
+            sport,
+            str(event.get("participant_1") or ""),
+            str(event.get("participant_2") or ""),
+        )
         numeric = facets.numeric()
+        # Same-day and future boards captured before settlement are pre-event.
+        # Past dates may already include results on the detail page.
         timing_value = (
             TimingClass.PRE_EVENT.value
-            if str(event.get("event_date") or "") > capture_day
+            if str(event.get("event_date") or "") >= capture_day
             else TimingClass.UNKNOWN.value
         )
         event.setdefault("facets", {}).update(numeric)
         event.setdefault("facet_timing", {}).update({key: timing_value for key in numeric})
+        aliases = {
+            "recent_1_wins": numeric.get("detail_recent_1_wins"),
+            "recent_1_games": numeric.get("detail_recent_1_games"),
+            "recent_2_wins": numeric.get("detail_recent_2_wins"),
+            "recent_2_games": numeric.get("detail_recent_2_games"),
+            "h2h_total_games": numeric.get("detail_h2h_total_games"),
+            "h2h_participant_1_wins": numeric.get("detail_h2h_participant_1_wins"),
+            "h2h_participant_2_wins": numeric.get("detail_h2h_participant_2_wins"),
+        }
+        for key, value in aliases.items():
+            if value is None:
+                continue
+            event["facets"][key] = value
+            event["facet_timing"][key] = timing_value
         event["detail_missing"] = facets.missing
         enriched += 1
         sport_cov = coverage.setdefault(
