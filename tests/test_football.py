@@ -131,6 +131,64 @@ def test_extract_football_features_full():
     assert feat_dict["fb_is_home_dog"] == 1.0
     assert feat_dict["fb_over_25_prob_missing"] == 0.0
     assert feat_dict["fb_over_25_prob"] == 0.55
+    assert feat_dict["fb_travel_distance_km_missing"] == 1.0
+
+
+def test_extract_football_features_with_tactical_details():
+    event = EventSnapshot(
+        event_id="football:105",
+        sport="football",
+        event_date="2026-08-23",
+        captured_at="2026-08-23T10:00:00+00:00",
+        source_url="https://www.forebet.com/en/football/matches/porto-benfica-105",
+        participant_1="FC Porto",
+        participant_2="SL Benfica",
+        probability_1=0.28,
+        draw_probability=0.32,
+        probability_2=0.40,
+        forebet_pick=2,
+        odds_1=3.40,
+        odds_2=2.10,
+        facets={
+            "travel_distance_km": 310.0,
+            "p1_clean_sheets_avg": 0.45,
+            "p2_clean_sheets_avg": 0.35,
+            "p1_corners_avg": 6.2,
+            "p2_corners_avg": 4.8,
+            "p1_total_shots_avg": 14.5,
+            "p2_total_shots_avg": 12.0,
+            "p1_scored_avg": 2.1,
+            "p1_conceded_avg": 0.9,
+            "p2_scored_avg": 1.8,
+            "p2_conceded_avg": 1.1,
+        },
+        facet_timing={k: TimingClass.PRE_EVENT for k in [
+            "travel_distance_km", "p1_clean_sheets_avg", "p2_clean_sheets_avg",
+            "p1_corners_avg", "p2_corners_avg", "p1_total_shots_avg",
+            "p2_total_shots_avg", "p1_scored_avg", "p1_conceded_avg",
+            "p2_scored_avg", "p2_conceded_avg",
+        ]},
+    )
+    candidate = detect_football_robber(event)
+    assert candidate is not None
+    fb = extract_football_features(event, candidate)
+
+    assert fb.travel_distance_km == 310.0
+    assert fb.dog_clean_sheets_avg == 0.45
+    assert fb.fav_clean_sheets_avg == 0.35
+    assert round(fb.clean_sheets_avg_gap, 2) == 0.10
+    assert fb.dog_corners_avg == 6.2
+    assert round(fb.corners_avg_gap, 1) == 1.4
+    assert fb.dog_total_shots_avg == 14.5
+    assert round(fb.total_shots_avg_gap, 1) == 2.5
+    # net_eff: (2.1 - 0.9) - (1.8 - 1.1) = 1.2 - 0.7 = 0.5
+    assert round(fb.net_goal_efficiency_gap, 2) == 0.50
+
+    feat_dict = fb.to_dict()
+    assert feat_dict["fb_travel_distance_km"] == 310.0
+    assert feat_dict["fb_travel_distance_km_missing"] == 0.0
+    assert round(feat_dict["fb_clean_sheets_avg_gap"], 2) == 0.10
+
 
 
 def test_detect_football_robber_home_advantage():
