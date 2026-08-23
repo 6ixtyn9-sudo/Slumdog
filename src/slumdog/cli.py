@@ -93,10 +93,21 @@ def main() -> int:
     _date_arg(report)
     report.add_argument("--root", default=".")
 
-    daily = sub.add_parser("run-daily", help="capture -> parse -> robbers -> suggestions")
+    daily = sub.add_parser("run-daily", help="settle yesterday, ticket today+tomorrow")
     _date_arg(daily)
     daily.add_argument("--root", default=".")
     daily.add_argument("--workers", type=int, default=4)
+    daily.add_argument("--skip-capture", action="store_true")
+
+    ticket = sub.add_parser("ticket", help="freeze every underdog on a parsed events file")
+    ticket.add_argument("--events", required=True)
+    _date_arg(ticket)
+    ticket.add_argument("--root", default=".")
+    ticket.add_argument("--robbers", default=None)
+
+    audit_ticket = sub.add_parser("audit-ticket", help="grade a frozen ticket against settled recapture")
+    _date_arg(audit_ticket)
+    audit_ticket.add_argument("--root", default=".")
 
     analysis = sub.add_parser("analyze", help="turn census + history receipts into a research report")
     _date_arg(analysis, help_text="YYYY-MM-DD label for the report (default: today)")
@@ -165,18 +176,33 @@ def main() -> int:
         path = render_suggestions(args.ledger, resolved(args.date), args.root)
         print(path)
         return 0
+    if args.command == "ticket":
+        from .slate import build_ticket_from_events
+
+        day = resolved(args.date)
+        ledger, report = build_ticket_from_events(
+            args.events, day, args.root, robber_ledger=args.robbers,
+        )
+        print(report)
+        print(ledger)
+        return 0
+    if args.command == "audit-ticket":
+        from .ticket_audit import audit_ticket
+
+        path = audit_ticket(resolved(args.date), args.root)
+        print(path)
+        return 0
     if args.command == "run-daily":
         root = Path(args.root)
         day = resolved(args.date)
-        ForebetCollector(root, workers=args.workers).capture_all(day)
+        if not args.skip_capture:
+            ForebetCollector(root, workers=args.workers).capture_all(day)
         events = parse_capture_receipt(day, root)
-        history = root / "data" / "interim" / "settled_history.json"
-        ledger = run_from_json(
-            events, day, root,
-            history_path=history if history.exists() else None,
-        )
-        report_path = render_suggestions(ledger, day, root)
-        print(report_path)
+        print(events)
+        try:
+            print(enrich_events_from_details(events, root))
+        except Exception as exc:
+            print(f"enrich skipped: {type(exc).__name__}: {exc}")
         return 0
     if args.command == "analyze":
         path = analyze_depth(args.root, args.date)
