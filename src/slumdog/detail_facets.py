@@ -61,6 +61,170 @@ def _extract_sections(soup: BeautifulSoup) -> dict[str, str]:
     return sections
 
 
+def _h2h_from_page(
+    soup: BeautifulSoup,
+    text: str,
+    participant_1: str = "",
+    participant_2: str = "",
+) -> dict[str, float]:
+    """Numeric H2H if the page states it. Missing stays missing — never zero-fill."""
+    out: dict[str, float] = {}
+    lowered = text.lower()
+    idx = lowered.find("head to head")
+    window = text[idx:idx + 800] if idx >= 0 else ""
+    wins = [int(value) for value in re.findall(r"(\d+)\s+wins?", window, re.I)]
+    draws = [int(value) for value in re.findall(r"(\d+)\s+draws?", window, re.I)]
+    if len(wins) >= 2:
+        out["h2h_participant_1_wins"] = float(wins[0])
+        out["h2h_participant_2_wins"] = float(wins[1])
+        total = wins[0] + wins[1] + (draws[0] if draws else 0)
+        out["h2h_total_games"] = float(total)
+        return out
+
+    if participant_1 and participant_2:
+        cleaned = re.sub(r"\([^)]*\)", " ", window or text)
+        left = re.escape(participant_1)
+        right = re.escape(participant_2)
+        p1 = p2 = draws_n = games = 0
+        for match in re.finditer(
+            rf"{left}\s+(\d+)\s*-\s*(\d+)\s+{right}|{right}\s+(\d+)\s*-\s*(\d+)\s+{left}",
+            cleaned,
+            re.I,
+        ):
+            if match.group(1) is not None:
+                a, b = int(match.group(1)), int(match.group(2))
+            else:
+                a, b = int(match.group(4)), int(match.group(3))
+            games += 1
+            if a > b:
+                p1 += 1
+            elif b > a:
+                p2 += 1
+            else:
+                draws_n += 1
+        if games:
+            out["h2h_participant_1_wins"] = float(p1)
+            out["h2h_participant_2_wins"] = float(p2)
+            out["h2h_draws"] = float(draws_n)
+            out["h2h_total_games"] = float(games)
+            return out
+
+    scores = []
+    for row in soup.select("table tr, .h2h tr, .h2h_div tr"):
+        numbers = [float(value) for value in re.findall(r"\d+(?:\.\d+)?", row.get_text(" ", strip=True))]
+        if len(numbers) >= 2:
+            scores.append((numbers[0], numbers[1]))
+    if len(scores) >= 2:
+        p1 = sum(1 for home, away in scores if home > away)
+        p2 = sum(1 for home, away in scores if away > home)
+        out["h2h_participant_1_wins"] = float(p1)
+        out["h2h_participant_2_wins"] = float(p2)
+        out["h2h_total_games"] = float(len(scores))
+    return out
+
+
+def _standings_from_page(
+    soup: BeautifulSoup,
+    participant_1: str,
+    participant_2: str,
+) -> dict[str, float]:
+    """League table row for each named side. Missing stays missing."""
+    if not participant_1 or not participant_2:
+        return {}
+    wanted = {1: participant_1.casefold(), 2: participant_2.casefold()}
+    found: dict[int, dict[str, float]] = {}
+    for table in soup.select("table"):
+        headers: list[str] = []
+        for tr in table.select("tr"):
+            cells = [_clean(cell.get_text(" ", strip=True)) for cell in tr.find_all(["th", "td"])]
+            if not cells:
+                continue
+            upper = [cell.upper() for cell in cells]
+            if "PTS" in upper and "GP" in upper:
+                headers = upper
+                continue
+            if not headers:
+                continue
+            blob = " ".join(cells).casefold()
+            who = next((index for index, name in wanted.items() if name and name in blob), None)
+            if who is None or who in found:
+                continue
+            numbers = []
+            for cell in cells:
+                if re.fullmatch(r"[-+]?\d+(?:\.\d+)?", cell):
+                    numbers.append(float(cell))
+            # rank, pts, gp, w, d, l, gf, ga, gd — rank may be first
+            if len(numbers) < 8:
+                continue
+            rank, pts, gp, wins, draws, losses, gf, ga = numbers[:8]
+            gd = numbers[8] if len(numbers) > 8 else gf - ga
+            found[who] = {
+                f"standings_{who}_rank": rank,
+                f"standings_{who}_pts": pts,
+                f"standings_{who}_gp": gp,
+                f"standings_{who}_wins": wins,
+                f"standings_{who}_draws": draws,
+                f"standings_{who}_losses": losses,
+                f"standings_{who}_gf": gf,
+                f"standings_{who}_ga": ga,
+                f"standings_{who}_gd": gd,
+            }
+        if len(found) == 2:
+            break
+    out: dict[str, float] = {}
+    for payload in found.values():
+        out.update(payload)
+    if 1 in found and 2 in found:
+        out["standings_gap"] = found[1]["standings_1_rank"] - found[2]["standings_2_rank"]
+    return out
+
+
+def _metric_pair_tables(soup: BeautifulSoup) -> dict[str, float]:
+    """Two-sided stat tables: avg | total | label | total | avg."""
+    labels = {
+        "clean sheets": "clean_sheets",
+        "corners": "corners",
+        "red cards": "red_cards",
+        "yellow cards": "yellow_cards",
+    }
+    out: dict[str, float] = {}
+    for table in soup.select("table"):
+        for tr in table.select("tr"):
+            cells = [_clean(cell.get_text(" ", strip=True)) for cell in tr.find_all(["th", "td"])]
+            if len(cells) < 5:
+                continue
+            label = cells[2].casefold()
+            key = labels.get(label)
+            if key is None:
+                continue
+            left_avg, left_total = _number(cells[0]), _number(cells[1])
+            right_total, right_avg = _number(cells[3]), _number(cells[4])
+            if left_avg is not None:
+                out[f"p1_{key}_avg"] = left_avg
+            if left_total is not None:
+                out[f"p1_{key}_total"] = left_total
+            if right_avg is not None:
+                out[f"p2_{key}_avg"] = right_avg
+            if right_total is not None:
+                out[f"p2_{key}_total"] = right_total
+    return out
+
+
+def _goal_avgs(soup: BeautifulSoup) -> dict[str, float]:
+    """Overall-statistics scored/conceded block. Order is p1 then p2."""
+    cells = [_clean(node.get_text(" ", strip=True)) for node in soup.select(".os_goals_section1_child")]
+    if len(cells) < 8:
+        return {}
+    numbers = [_number(cell) for cell in cells[:8]]
+    if any(item is None for item in numbers):
+        return {}
+    keys = (
+        "p1_scored", "p1_scored_avg", "p1_conceded", "p1_conceded_avg",
+        "p2_scored", "p2_scored_avg", "p2_conceded", "p2_conceded_avg",
+    )
+    return {key: float(value) for key, value in zip(keys, numbers)}
+
+
 def _form_counts(soup: BeautifulSoup) -> tuple[dict[str, int], dict[str, int]]:
     containers = soup.select(".prformcont")
     output = []
@@ -122,11 +286,18 @@ def _mma_fields(text: str) -> dict[str, float | str]:
     return out
 
 
-def parse_detail(body: bytes, sport: str) -> DetailFacets:
+def parse_detail(
+    body: bytes,
+    sport: str,
+    participant_1: str = "",
+    participant_2: str = "",
+) -> DetailFacets:
     soup = BeautifulSoup(body, "html.parser")
     text = _clean(soup.get_text(" ", strip=True))
     lower = text.lower()
     p1_form, p2_form = _form_counts(soup)
+    p1_games = p1_form["wins"] + p1_form["losses"] + p1_form["draws"]
+    p2_games = p2_form["wins"] + p2_form["losses"] + p2_form["draws"]
     common: dict[str, Any] = {
         "h2h_present": "head to head" in lower,
         "last6_present": "last 6 matches" in lower,
@@ -139,7 +310,15 @@ def parse_detail(body: bytes, sport: str) -> DetailFacets:
         "p2_form_wins": p2_form["wins"],
         "p2_form_losses": p2_form["losses"],
         "p2_form_draws": p2_form["draws"],
+        "recent_1_wins": p1_form["wins"],
+        "recent_1_games": p1_games,
+        "recent_2_wins": p2_form["wins"],
+        "recent_2_games": p2_games,
     }
+    common.update(_h2h_from_page(soup, text, participant_1, participant_2))
+    common.update(_standings_from_page(soup, participant_1, participant_2))
+    common.update(_metric_pair_tables(soup))
+    common.update(_goal_avgs(soup))
     specific: dict[str, Any] = {}
 
     if sport == "football":
