@@ -299,6 +299,40 @@ def test_parse_football_settled_with_ht_scores_and_disposition():
     assert m2.score_1 is None
 
 
+def test_parse_football_settled_carries_identity_facets_and_cup_disposition():
+    import json
+    from slumdog.settlement import parse_football_settled
+
+    row = {
+        "id": "301", "host_id": "55", "guest_id": "77", "league_id": "4",
+        "DATE_BAH": "2026-08-23 20:00",
+        "HOST_NAME": "Home Cup", "GUEST_NAME": "Away Cup",
+        "Host_SC": "1", "Guest_SC": "1", "Host_SC_HT": "0", "Guest_SC_HT": "0",
+        "extra_time_score": "1-1", "penalty_score": "4-5",
+        "Pred_1": "40", "Pred_X": "30", "Pred_2": "30",
+        "best_odd_1": "2.4", "best_odd_2": "2.8",
+        "short_tag": "CUP", "comment": "FT",
+        "host_stadium": "National Stadium", "weather_temp_f": "68",
+        "move_1": "up", "isCup": "1",
+        "trend": {"en": "Home side are unbeaten at home in cup ties."},
+    }
+    settled = parse_football_settled(json.dumps([[row]]).encode(), "2026-08-23")
+    assert len(settled) == 1
+    m = settled[0]
+    # Regulation draw -> winner_index 0 even though penalties decided progression
+    assert m.winner_index == 0
+    assert m.disposition == "SETTLED_CUP"
+    assert m.participant_1_id == "55"
+    assert m.participant_2_id == "77"
+    assert m.league_id == "4"
+    assert m.facets["host_stadium"] == "National Stadium"
+    assert m.facets["weather_temp_f"] == "68"
+    assert m.facets["extra_time_score"] == "1-1"
+    assert m.facets["penalty_score"] == "4-5"
+    assert m.facets["trend_en"] == "Home side are unbeaten at home in cup ties."
+    assert m.facets["move_1"] == "up"
+
+
 def test_football_walk_forward_training_pipeline():
     from slumdog.contracts import SettledEvent
     from slumdog.training import build_training_rows, validation_summary

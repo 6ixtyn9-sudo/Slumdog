@@ -52,6 +52,9 @@ class EventSnapshot:
     predicted_score: str = ""
     predicted_total: float | None = None
     raw_sha256: str = ""
+    participant_1_id: str = ""
+    participant_2_id: str = ""
+    league_id: str = ""
     facets: dict[str, Any] = field(default_factory=dict)
     facet_timing: dict[str, TimingClass] = field(default_factory=dict)
 
@@ -136,6 +139,10 @@ class SettledEvent:
     source_url: str = ""
     reconstruction: str = "HISTORICAL_PAGE"
     disposition: str = "SETTLED"
+    participant_1_id: str = ""
+    participant_2_id: str = ""
+    league_id: str = ""
+    facets: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.winner_index not in (0, 1, 2):

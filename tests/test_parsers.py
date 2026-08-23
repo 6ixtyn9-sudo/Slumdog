@@ -1,6 +1,7 @@
 import json
 
-from slumdog.parsers import decimal_odds, parse_football_json, parse_html_events
+from slumdog.parsers import decimal_odds, parse_football_json, parse_html_events, _participant_odds
+from bs4 import BeautifulSoup
 
 
 HTML = b"""
@@ -95,3 +96,67 @@ def test_football_listing_promotes_form_standings_weather_and_draw_odds():
     assert event.facets["odds_draw"] == 3.6
     assert event.facets["weather_high"] == 14
     assert event.facet_timing["recent_1_wins"].value == "PRE_EVENT"
+
+
+def test_football_listing_promotes_verified_identity_and_market_fields():
+    # Shape mirrors a live getrs.php 1X2 row verified 2026-08-23.
+    row = {
+        "id": "2417439", "host_id": "1099", "guest_id": "6254", "league_id": "19",
+        "HOST_NAME": "CA Huracan", "GUEST_NAME": "Deportivo Riestra",
+        "Pred_1": "47", "Pred_X": "28", "Pred_2": "25",
+        "best_odd_1": "2.4", "best_odd_X": "2.4", "best_odd_2": "4.33",
+        "best_odd_1_am": "+140", "best_odd_X_am": "+140", "best_odd_2_am": "+333",
+        "short_tag": "Ar1", "DATE_BAH": "2026-08-23 02:00:00",
+        "host_sc_pr": "1", "guest_sc_pr": "0", "goalsavg": "1.58",
+        "Host_SC": None, "Guest_SC": None, "comment": "",
+        "host_stadium": "Estadio Tomas A. Duco",
+        "weather_low": "11", "weather_high": "11", "weather_temp_f": "52",
+        "weather_code": "25", "kelly": "0.03", "Round": "27",
+        "host_short": "HUR", "guest_short": "DER", "code": "ar",
+        "move_1": "no", "move_X": "up", "move_2": "down",
+        "isCup": "0", "is_international_club_cup": "0",
+        "is_nationalteam_cup": "0",
+        "Host_SC_HT": "0", "Guest_SC_HT": "0",
+        "penalty_score": None, "extra_time_score": None,
+        "trend": {"en": "Deportivo Riestra have failed to win 19 of last 21 away."},
+    }
+    body = json.dumps([[row]]).encode()
+    events = parse_football_json(
+        body, "2026-08-23", "2026-08-23T00:00:00+00:00", "u", "abc",
+    )
+    event = events[0]
+    # Stable identity (not name-based) on the snapshot itself.
+    assert event.participant_1_id == "1099"
+    assert event.participant_2_id == "6254"
+    assert event.league_id == "19"
+    assert event.facets["stadium"] == "Estadio Tomas A. Duco"
+    assert event.facets["weather_temp_f"] == 52.0
+    assert event.facets["kelly"] == 0.03
+    assert event.facets["odds_1_am"] == "+140"
+    assert event.facets["odds_2_am"] == "+333"
+    assert event.facets["move_X"] == "up"
+    assert event.facets["code"] == "ar"
+    assert event.facets["host_short"] == "HUR"
+    assert event.facets["isCup"] == 0.0
+    assert event.facets["trend_en"].startswith("Deportivo Riestra")
+    # Halftime/cup scores are RESULT_ONLY, never pre-event features.
+    assert event.facet_timing["Host_SC_HT"].value == "RESULT_ONLY"
+    assert event.facet_timing["stadium"].value == "PRE_EVENT"
+
+
+def test_handball_three_way_board_reads_two_haodd_prices_when_draw_blank():
+    # Verified on live handball 2026-08-23 (Tunisia v Greece): .haodd holds two
+    # American prices and a blank draw span. The old parser demanded three
+    # values for draw_possible sports and dropped both prices entirely.
+    html = (
+        "<div class='rcnt'>"
+        "<div class='haodd' style='display:none;'>"
+        "<span>+500</span><span>-909</span><span></span></div>"
+        "<span class='lscrsp'>+500</span>"
+        "</div>"
+    )
+    row = BeautifulSoup(html, "html.parser").select_one(".rcnt")
+    home, away, raw = _participant_odds(row, draw_possible=True)
+    assert round(home, 2) == 6.0
+    assert round(away, 2) == 1.11
+    assert raw == ["+500", "-909"]

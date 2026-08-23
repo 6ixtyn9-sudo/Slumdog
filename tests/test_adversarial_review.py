@@ -118,8 +118,9 @@ def test_american_odds_rejects_one_sided_or_short_signed_tokens():
     assert _american_odds_row(row) is None
 
 
-def test_current_day_market_capture_is_hard_date_bounded(tmp_path, monkeypatch):
-    monkeypatch.setattr("slumdog.forebet.today_iso", lambda: "2026-08-22")
+def test_football_market_capture_runs_for_any_date_and_is_resumable(tmp_path, monkeypatch):
+    # The five distinct JSON markets cover a whole date in one request each,
+    # so historical capture is allowed; a prior markets.json is reused.
     calls = []
 
     def fake_market(url, expected_url, timeout=45, max_retries=2):
@@ -127,12 +128,19 @@ def test_current_day_market_capture_is_hard_date_bounded(tmp_path, monkeypatch):
         return b'[[{"id": "7", "pr_over": 55}]]'
 
     monkeypatch.setattr("slumdog.forebet.relay_get_markdown", fake_market)
-    output = fetch_football_markets("2026-08-22", tmp_path)
+    output = fetch_football_markets("2024-01-01", tmp_path)
     assert output is not None
     assert len(calls) == len(FOOTBALL_MARKETS)
     assert json.loads(output.read_text())[0]["pr_over"] == 55
-    assert fetch_football_markets("2024-01-01", tmp_path) is None
+
+    # Second call reuses the file on disk without re-fetching.
+    again = fetch_football_markets("2024-01-01", tmp_path)
+    assert again == output
     assert len(calls) == len(FOOTBALL_MARKETS)
+
+    # force=True bypasses the cache.
+    fetch_football_markets("2024-01-01", tmp_path, force=True)
+    assert len(calls) == 2 * len(FOOTBALL_MARKETS)
 
 
 def test_market_merge_marks_only_selected_fields_pre_event(tmp_path):

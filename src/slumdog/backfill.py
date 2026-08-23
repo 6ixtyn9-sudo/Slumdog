@@ -94,7 +94,7 @@ def backfill_sport(
     workers: int = 6,
     batch_size: int = 18,
     delay_seconds: float = 62.0,
-    keep_raw: bool = False,
+    keep_raw: bool = True,
 ) -> Path:
     """Accumulate one sport's dated archive into a rolling compressed ledger.
 
@@ -102,6 +102,12 @@ def backfill_sport(
     (``history_<sport>.json``) persist across runs: dates already captured are
     skipped, so a re-dispatch or a scheduled follow-up only fetches the days
     that are actually new. ``end`` defaults to yesterday from the runner clock.
+
+    Raw bodies are retained by default (content-addressed under
+    ``data/raw/<sport>/<date>/``). This honors the "freeze every source page"
+    contract: parser improvements can be replayed against history without
+    re-fetching. Each settled row in the ledger carries its source
+    ``raw_sha256`` so a row always points back to the exact bytes parsed.
     """
     if sport not in SPORTS or SPORTS[sport].current_only:
         raise ValueError("sport must have a dated Forebet archive")
@@ -132,6 +138,7 @@ def backfill_sport(
     # runner). Smaller batches + backoff yield higher completion per run.
     safe_batch = max(1, min(int(batch_size), 6))
 
+    raw_bytes_retained = 0
     if pending:
         with gzip.open(history_path, "at", encoding="utf-8") as output:
             for offset in range(0, len(pending), safe_batch):
@@ -144,16 +151,25 @@ def backfill_sport(
                             body_path = root / capture.body_path
                             rows = _parse_settled_body(sport, body_path.read_bytes(), day)
                             for row in rows:
-                                output.write(json.dumps(asdict(row), sort_keys=True) + "\n")
+                                payload = asdict(row)
+                                # Link every ledger row back to its exact raw
+                                # body so facet extraction is replayable.
+                                payload.setdefault("facets", {})
+                                if isinstance(payload.get("facets"), dict):
+                                    payload["facets"]["raw_sha256"] = capture.sha256
+                                output.write(json.dumps(payload, sort_keys=True) + "\n")
                                 total_rows += 1
                                 priced_rows += row.odds_1 is not None and row.odds_2 is not None
                                 void_rows += row.disposition == "VOID"
+                            if keep_raw:
+                                raw_bytes_retained += capture.bytes
                             # A valid page with zero settled rows is a covered
                             # (empty) day, not a failure.
                             manifest.append({
                                 "date": day, "source_url": capture.source_url,
                                 "sha256": capture.sha256, "bytes": capture.bytes,
                                 "settled_rows": len(rows),
+                                "raw_retained": keep_raw,
                             })
                             if not keep_raw:
                                 shutil.rmtree(body_path.parent, ignore_errors=True)
@@ -169,6 +185,8 @@ def backfill_sport(
         "dates_requested": len(covered_dates), "dates_completed": len(manifest),
         "settled_rows": total_rows, "priced_rows": priced_rows,
         "void_rows": void_rows, "failures": failures,
+        "raw_bytes_retained_this_run": raw_bytes_retained,
+        "keep_raw": keep_raw,
         "history_file": str(history_path.relative_to(root)),
         "daily_receipts": manifest,
     }, indent=2, sort_keys=True))

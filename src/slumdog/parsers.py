@@ -97,9 +97,14 @@ def _american_odds_row(row) -> tuple[float | None, float | None] | None:
 def _participant_odds(row, draw_possible: bool) -> tuple[float | None, float | None, list[str]]:
     values = [_text(span) for span in row.select(".haodd span") if _text(span)]
     parsed = [decimal_odds(value) for value in values]
+    # Full three-way board (home, draw, away) — verified on football.
     if draw_possible and len(parsed) >= 3 and parsed[0] is not None and parsed[2] is not None:
         return parsed[0], parsed[2], values
-    if not draw_possible and len(parsed) >= 2 and parsed[0] is not None and parsed[1] is not None:
+    # Two-way board, or a draw-possible sport (handball, cricket) where Forebet
+    # only lists home/away in .haodd and leaves the draw cell blank. Verified on
+    # handball 2026-08-23: .haodd contains [home, away] American prices and a
+    # trailing empty span; dropping those rows misreported 0% price coverage.
+    if len(parsed) >= 2 and parsed[0] is not None and parsed[1] is not None:
         return parsed[0], parsed[1], values
 
     # Some boards expose only American prices in .lscrsp; also fall back when
@@ -277,12 +282,75 @@ def promote_football_listing(event: EventSnapshot, row: dict) -> None:
     if round_number is not None:
         event.facets["round_number"] = round_number
 
+    # Stable identity and venue (verified present on getrs.php 1X2 rows).
+    # participant_*_id and league_id are set on the EventSnapshot directly in
+    # parse_football_json; mirror them into facets for the feature vector.
+    for row_key in ("participant_1_id", "participant_2_id", "league_id"):
+        value = getattr(event, row_key, "")
+        if value:
+            event.facets[row_key] = value
+    stadium = str(row.get("host_stadium") or "")
+    if stadium:
+        event.facets["stadium"] = stadium
+
+    # Free pre-event fields already present on the 1X2 row.
+    for key in (
+        "weather_temp_f", "kelly", "goalsavg", "host_sc_pr", "guest_sc_pr",
+        "host_short", "guest_short", "code", "isCup",
+        "is_international_club_cup", "is_nationalteam_cup",
+    ):
+        value = row.get(key)
+        if value in (None, ""):
+            continue
+        if key in ("code", "host_short", "guest_short"):
+            event.facets[key] = str(value)
+        elif key in ("isCup", "is_international_club_cup", "is_nationalteam_cup"):
+            event.facets[key] = float(1 if str(value) == "1" else 0)
+        else:
+            number = _number(value)
+            if number is not None:
+                event.facets[key] = number
+    # Odds movement direction (no/move) — pre-event.
+    for key in ("move_1", "move_X", "move_2"):
+        value = row.get(key)
+        if value not in (None, ""):
+            event.facets[key] = str(value)
+    # American-format participant odds when present.
+    for key, attr in (
+        ("best_odd_1_am", "odds_1_am"),
+        ("best_odd_X_am", "odds_draw_am"),
+        ("best_odd_2_am", "odds_2_am"),
+    ):
+        value = str(row.get(key) or "")
+        if value and value not in ("-",):
+            event.facets[attr] = value
+    # Multilingual trend statement; English text only for modeling, rest retained raw.
+    trend = row.get("trend")
+    if isinstance(trend, dict):
+        en_trend = str(trend.get("en") or "").strip()
+        if en_trend:
+            event.facets["trend_en"] = en_trend
+        event.facets["trend_raw"] = trend
+
+    # Result-only fields retained for audit/settlement, never features.
+    # (Host/Guest halftime and cup tiebreaker scores are post-kickoff facts.)
+    for key in ("penalty_score", "extra_time_score", "Host_SC_HT", "Guest_SC_HT"):
+        value = row.get(key)
+        if value not in (None, ""):
+            event.facets[key] = value
+            event.facet_timing[key] = TimingClass.RESULT_ONLY
+
     for key in (
         "recent_1_wins", "recent_1_draws", "recent_1_losses", "recent_1_games",
         "recent_2_wins", "recent_2_draws", "recent_2_losses", "recent_2_games",
         "standings_1", "standings_2", "standings_gap",
-        "weather_high", "weather_low", "weather_code", "kelly", "goalsavg",
-        "host_sc_pr", "guest_sc_pr", "odds_draw", "round_number",
+        "weather_high", "weather_low", "weather_code", "weather_temp_f",
+        "kelly", "goalsavg", "host_sc_pr", "guest_sc_pr", "odds_draw",
+        "round_number", "stadium", "host_short", "guest_short", "code",
+        "move_1", "move_X", "move_2", "odds_1_am", "odds_draw_am", "odds_2_am",
+        "trend_en",
+        "participant_1_id", "participant_2_id", "league_id",
+        "isCup", "is_international_club_cup", "is_nationalteam_cup",
     ):
         if key in event.facets:
             event.facet_timing[key] = TimingClass.PRE_EVENT
@@ -344,6 +412,9 @@ def parse_football_json(
                 predicted_score=f"{row.get('host_sc_pr', '')}-{row.get('guest_sc_pr', '')}",
                 predicted_total=_number(row.get("goalsavg")),
                 raw_sha256=raw_sha256,
+                participant_1_id=str(row.get("host_id") or ""),
+                participant_2_id=str(row.get("guest_id") or ""),
+                league_id=str(row.get("league_id") or ""),
                 facets=dict(row),
                 facet_timing=timing,
             )

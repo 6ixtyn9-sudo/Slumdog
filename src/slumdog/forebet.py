@@ -19,7 +19,6 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .clock import today_iso
 from .sports import SPORTS, SportSpec
 
 RELAY_BASE = "https://r.jina.ai/"
@@ -218,45 +217,65 @@ class RawCapture:
     route: str = "relay"  # "relay" (r.jina.ai) or "direct" (forebet.com)
 
 
-# The extra endpoint responses are deliberately kept out of historical
-# backfill. They are useful for today's shadow run, but nine requests per
-# historical date would turn a parser enhancement into an Actions-budget
-# change. The row keys are preserved as facets, not treated as extra targets.
-# Only endpoints that return a distinct numeric surface. `tp=corners` and
-# `tp=goalscorer` currently echo the 1X2 payload — keeping them would fake
-# a corners/scorer picture.
+# Football JSON market endpoints that return a DISTINCT numeric surface,
+# verified against live getrs.php on 2026-08-23 (714 rows each). `tp=htft`
+# returns byte-identical keys/values to `tp=ht` (single odds_ht_ft price, not
+# a 9-cell matrix), so it is excluded. `tp=corners`, `tp=doublechance` and
+# `tp=goalscorer` echo the 1X2 payload exactly at the JSON layer — their data
+# exists only on the per-match detail page (handled by detail_facets). These
+# five markets cost one request per DATE (covering all matches), so they are
+# cheap enough to capture historically, unlike per-match detail pages.
 FOOTBALL_MARKETS: tuple[str, ...] = (
-    "uo", "bts", "ht", "htft", "ah", "cards",
+    "uo", "bts", "ht", "ah", "cards",
 )
 FOOTBALL_MARKET_KEYS: dict[str, tuple[str, ...]] = {
-    "uo": ("pr_over", "pr_under", "odds_under_over", "best_over", "best_under"),
-    "bts": ("Pred_gg", "Pred_no_gg", "odds_gg_y", "odds_gg_n"),
-    "ht": ("Pred_1_HT", "Pred_X_HT", "Pred_2_HT", "best_odd_ht"),
-    "htft": ("odds_ht_ft", "Pred_1_HT", "Pred_X_HT", "Pred_2_HT"),
-    "ah": ("odds_ah", "AH_type", "predAH"),
+    "uo": (
+        "pr_over", "pr_under", "odds_under_over", "best_over", "best_under",
+        "odds_under_over_am", "best_over_am", "best_under_am",
+    ),
+    "bts": (
+        "Pred_gg", "Pred_no_gg", "odds_gg_y", "odds_gg_n",
+        "odds_gg_y_am", "odds_gg_n_am",
+    ),
+    "ht": (
+        "Pred_1_HT", "Pred_X_HT", "Pred_2_HT", "best_odd_ht",
+        "odds_ht_ft", "best_odd_am_ht",
+    ),
+    "ah": ("odds_ah", "AH_type", "predAH", "odds_ah_am"),
     "cards": (
         "avg_cards", "host_card_pred", "guest_card_pred", "pred_line",
         "pred_over", "pred_under", "host_yellowcards", "guest_yellowcards",
-        "host_redcards", "guest_redcards",
+        "host_redcards", "guest_redcards", "host_yellowredcards",
+        "guest_yellowredcards",
     ),
 }
+# Fields sourced from the per-match detail page (no JSON endpoint exists);
+# documented here so parsers/facets share one vocabulary.
+FOOTBALL_DETAIL_ONLY_MARKETS: tuple[str, ...] = ("corners", "doublechance", "goalscorer")
 
 
 def fetch_football_markets(
     target_date: str,
     root: Path | str = ".",
     timeout: int = 45,
+    force: bool = False,
 ) -> Path | None:
-    """Capture extra football markets for *today* only.
+    """Capture distinct football markets (uo, bts, ht, ah, cards) for a date.
 
-    This function is intentionally date-guarded as well as call-site guarded:
-    a manual historical capture cannot accidentally spend eight extra relay
-    requests. Each market is independent; partial success is recorded in a
-    sidecar receipt and never makes the 1X2 capture disappear.
+    Each market endpoint returns every match for the date in one request, so
+    five requests cover an entire day's board (verified 2026-08-23: 714 rows
+    each). This is cheap enough to run during historical backfill, unlike the
+    per-match detail pages. `tp=corners`, `tp=doublechance` and `tp=goalscorer`
+    are intentionally excluded: their JSON echoes the 1X2 payload and their
+    data only exists on the detail page.
+
+    A previous run's ``markets.json`` is reused unless ``force`` is set, so
+    re-dispatches never re-spend the five relay requests.
     """
-    if target_date != today_iso():
-        return None
     root = Path(root)
+    out = root / "data" / "raw" / "football" / target_date / "markets.json"
+    if out.exists() and not force:
+        return out
     base = source_url(SPORTS["football"], target_date)
     merged: dict[str, dict[str, object]] = {}
     succeeded: list[str] = []
@@ -283,7 +302,6 @@ def fetch_football_markets(
 
     if not succeeded:
         return None
-    out = root / "data" / "raw" / "football" / target_date / "markets.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(list(merged.values()), indent=2, sort_keys=True))
     receipt = {
@@ -444,10 +462,13 @@ class ForebetCollector:
                 except Exception as exc:  # each satellite fails independently
                     failures.append(f"{sport}:{type(exc).__name__}:{exc}")
 
-        # Never add the extra market requests to historical/manual captures,
-        # and never refresh them when the base football capture was reused.
+        # Capture the five distinct JSON markets for the date. They cover all
+        # matches in one request each, so they are cheap enough to fetch for
+        # historical dates too; fetch_football_markets itself skips a prior
+        # markets.json on disk. Reused (already-frozen) football captures do
+        # not re-trigger the market requests.
         markets_path: Path | None = None
-        if target_date == today_iso() and "football" in to_fetch:
+        if "football" in to_fetch:
             try:
                 markets_path = fetch_football_markets(target_date, self.root, self.timeout)
             except Exception as exc:

@@ -86,12 +86,19 @@ def parse_football_settled(body: bytes, target_date: str) -> list[SettledEvent]:
                 disposition = "SETTLED"
             except (KeyError, TypeError, ValueError):
                 continue
+        # Cup ties: extra_time_score / penalty_score decide progression but the
+        # 1X2 market (and our label) settles on regulation score. Record them as
+        # facets for audit without changing winner_index.
+        extra_time = row.get("extra_time_score")
+        penalties = row.get("penalty_score")
+        if extra_time not in (None, "") or penalties not in (None, ""):
+            disposition = "SETTLED_CUP"
         p1, p2 = _number(row.get("Pred_1")), _number(row.get("Pred_2"))
         if p1 is None or p2 is None:
             continue
         px = _number(row.get("Pred_X"))
         best = max({1: p1, 2: p2, 0: px or -1}, key={1: p1, 2: p2, 0: px or -1}.get)
-        
+
         periods_1: list[float] = []
         periods_2: list[float] = []
         ht_1, ht_2 = _number(row.get("Host_SC_HT")), _number(row.get("Guest_SC_HT"))
@@ -107,6 +114,23 @@ def parse_football_settled(body: bytes, target_date: str) -> list[SettledEvent]:
             if (host_name and guest_name and row_id) else ""
         )
 
+        # Retain the full row as facets (RESULT_ONLY by construction; settlement
+        # rows are never training features directly) plus stable identity fields.
+        facets: dict = {}
+        for key in (
+            "host_stadium", "weather_high", "weather_low", "weather_code",
+            "weather_temp_f", "goalsavg", "kelly", "Round", "host_pos", "guest_pos",
+            "move_1", "move_X", "move_2", "isCup", "is_international_club_cup",
+            "is_nationalteam_cup", "code", "host_short", "guest_short",
+            "Host_SC_HT", "Guest_SC_HT", "extra_time_score", "penalty_score",
+        ):
+            value = row.get(key)
+            if value not in (None, ""):
+                facets[key] = value
+        trend = row.get("trend")
+        if isinstance(trend, dict) and trend.get("en"):
+            facets["trend_en"] = trend["en"]
+
         settled.append(SettledEvent(
             event_id=f"football:{row_id}", sport="football", event_date=target_date,
             participant_1=host_name, participant_2=guest_name,
@@ -118,6 +142,10 @@ def parse_football_settled(body: bytes, target_date: str) -> list[SettledEvent]:
             league=str(row.get("short_tag") or ""),
             period_scores_1=tuple(periods_1), period_scores_2=tuple(periods_2),
             source_url=detail_url, disposition=disposition,
+            participant_1_id=str(row.get("host_id") or ""),
+            participant_2_id=str(row.get("guest_id") or ""),
+            league_id=str(row.get("league_id") or ""),
+            facets=facets,
         ))
     return settled
 
