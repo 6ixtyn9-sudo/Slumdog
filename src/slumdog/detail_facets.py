@@ -324,6 +324,264 @@ def _distance_and_weather(text: str) -> dict[str, float]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Football detail-page numeric extraction.
+#
+# These blocks were verified against a live Forebet detail page
+# (Brentford v Tottenham, 2026-08-22; UNAM Pumas v Club Necaxa, 2026-08-23).
+# The page renders team stats as flattened labelled prose after Jina HTML
+# relay, so extraction is label-anchored and order-based (p1 = home side,
+# which always precedes p2 on Forebet). A missing label leaves the value
+# missing rather than zero-filled.
+# ---------------------------------------------------------------------------
+
+_PCT = r"(\d+(?:\.\d+)?)\s*%"
+
+
+def _following_numbers(text: str, label: str, count: int, flags: int = re.I) -> list[float] | None:
+    """Return up to `count` numeric tokens immediately after `label`."""
+    match = re.search(re.escape(label) + r"\s*([^a-zA-Z%]{0,120})", text, flags)
+    if not match:
+        return None
+    nums = re.findall(r"\d+(?:\.\d+)?", match.group(1))
+    return [float(n) for n in nums[:count]]
+
+
+def _football_shots(text: str) -> dict[str, float]:
+    out: dict[str, float] = {}
+    # Block per side: "Total shots <n> Avg. per game <avg> Blocked <n> Avg. per game <avg>
+    #                 <off>% OFF target <on>% ON target <in>% Inside box <out>% Outside box"
+    blocks = list(re.finditer(
+        r"Total\s+shots\s+(\d+(?:\.\d+)?).*?Blocked\s+(\d+(?:\.\d+)?)"
+        r".*?(\d+(?:\.\d+)?)%\s*OFF\s+target.*?(\d+(?:\.\d+)?)%\s*ON\s+target"
+        r".*?(\d+(?:\.\d+)?)%\s*Inside\s+box",
+        text, re.I | re.S,
+    ))
+    for idx, m in enumerate(blocks[:2], 1):
+        total, blocked, off_pct, on_pct, inside_pct = (float(g) for g in m.groups())
+        avg = _following_numbers(text[m.start():m.start() + 120], "Total shots", 2)
+        blocked_avg = _following_numbers(text[m.start():m.start() + 200], "Blocked", 2)
+        out[f"p{idx}_shots_total"] = total
+        out[f"p{idx}_shots_blocked"] = blocked
+        out[f"p{idx}_shots_on_target_pct"] = on_pct
+        out[f"p{idx}_shots_off_target_pct"] = off_pct
+        out[f"p{idx}_shots_inside_box_pct"] = inside_pct
+        if avg and len(avg) >= 2:
+            out[f"p{idx}_shots_avg"] = avg[1]
+        if blocked_avg and len(blocked_avg) >= 2:
+            out[f"p{idx}_shots_blocked_avg"] = blocked_avg[1]
+    return out
+
+
+def _football_passes(text: str) -> dict[str, float]:
+    out: dict[str, float] = {}
+    # "Total <n> Avg. per game <avg> Accurate <n> <pct>% Ball Possession <pct>%"
+    blocks = list(re.finditer(
+        r"(?<!\w)Total\s+(\d+(?:\.\d+)?)\s+Avg\.\s*per\s+game\s+(\d+(?:\.\d+)?)"
+        r"\s+Accurate\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)%\s*Ball\s+Possession\s+(\d+(?:\.\d+)?)%",
+        text, re.I,
+    ))
+    for idx, m in enumerate(blocks[:2], 1):
+        total, avg, accurate, acc_pct, poss = (float(g) for g in m.groups())
+        out[f"p{idx}_passes_total"] = total
+        out[f"p{idx}_passes_avg"] = avg
+        out[f"p{idx}_passes_accurate"] = accurate
+        out[f"p{idx}_passes_accuracy_pct"] = acc_pct
+        out[f"p{idx}_possession_pct"] = poss
+    return out
+
+
+def _football_attacks(text: str) -> dict[str, float]:
+    out: dict[str, float] = {}
+    # Each attack section lists p1 then p2 ("Brentford 565 Avg. 94.17 ...
+    # Tottenham 563 Avg. 93.83"). Split on the section label and parse both
+    # team numbers from the bounded window, since a non-greedy match would only
+    # ever return the first side.
+    for label, prefix in (("Total attacks", "total_attacks"),
+                          ("Dangerous attacks", "dangerous_attacks")):
+        idx = text.lower().find(label.lower())
+        if idx < 0:
+            continue
+        window = text[idx + len(label): idx + 260]
+        pairs = re.findall(r"(\d+(?:\.\d+)?)\s+Avg\.?\s*(\d+(?:\.\d+)?)", window, re.I)
+        for side, (total, avg) in enumerate(pairs[:2], 1):
+            out[f"p{side}_{prefix}_total"] = float(total)
+            out[f"p{side}_{prefix}_avg"] = float(avg)
+    return out
+
+
+def _football_event_times(text: str) -> dict[str, float]:
+    """Avg. event time: first goal / first corner / first card in minutes."""
+    out: dict[str, float] = {}
+    idx = text.lower().find("avg. event time")
+    if idx < 0:
+        return out
+    window = text[idx:idx + 600]
+    for label, key in (("first goal", "first_goal_min"),
+                       ("first corner", "first_corner_min"),
+                       ("first card", "first_card_min")):
+        match = re.search(label + r".*?(\d+)\s*'", window, re.I | re.S)
+        if match:
+            out[key] = float(match.group(1))
+    return out
+
+
+def _football_uo_btts(text: str) -> dict[str, float]:
+    """Recent-matches under/over counts (1.5/2.5/3.5 lines) and BTTS yes/no.
+
+    The page renders two single-digit counts (under, over) for the last six
+    matches; in Jina's markdown view they concatenate ("15") while HTML mode
+    spaces them ("1 5"). Both shapes are accepted.
+    """
+    out: dict[str, float] = {}
+    for line in (1.5, 2.5, 3.5):
+        match = re.search(
+            r"Under/Over\s+(\d)\s*(\d)\s+(\d+(?:\.\d+)?)%\s+(\d+(?:\.\d+)?)%\s+"
+            + re.escape(str(line)) + r"\s+Goals",
+            text, re.I,
+        )
+        if match:
+            under_count, over_count, under_pct, over_pct = (float(g) for g in match.groups())
+            out[f"recent_uo_{line}_under"] = under_count
+            out[f"recent_uo_{line}_over"] = over_count
+            out[f"recent_uo_{line}_under_pct"] = under_pct
+            out[f"recent_uo_{line}_over_pct"] = over_pct
+    # BTTS block (two sides): "Yes <n> <pct>% <pct>% No <n>"
+    btts = list(re.finditer(
+        r"Both\s+scored\s+Yes\s+(\d+)\s+(\d+(?:\.\d+)?)%\s+(\d+(?:\.\d+)?)%\s+No\s+(\d+)",
+        text, re.I,
+    ))
+    for idx, m in enumerate(btts[:2], 1):
+        yes, yes_pct, no_pct, no = (float(g) for g in m.groups())
+        out[f"p{idx}_btts_yes"] = yes
+        out[f"p{idx}_btts_no"] = no
+        out[f"p{idx}_btts_yes_pct"] = yes_pct
+    return out
+
+
+def _football_next_difficulty(text: str) -> dict[str, float]:
+    """Average difficulty (1=easy .. 5=severe) of each side's upcoming fixtures."""
+    out: dict[str, float] = {}
+    idx = text.lower().find("next matches")
+    if idx < 0:
+        return out
+    window = text[idx:idx + 4000]
+    # Difficulty ratings render as bare integers 1..5 inside fixture rows.
+    # Count the first run of 1-5 tokens before the second side's section.
+    halves = re.split(r"next matches", window, flags=re.I)
+    for side, chunk in enumerate(halves[1:3], 1):
+        ratings = [float(n) for n in re.findall(r"\b([1-5])\b", chunk) if 0 < float(n) <= 5]
+        # The page lists ~12 fixtures per side; filter to plausible runs.
+        ratings = [n for n in ratings if 1 <= n <= 5][:12]
+        if ratings:
+            out[f"p{side}_next_fixtures_count"] = float(len(ratings))
+            out[f"p{side}_next_difficulty_avg"] = round(sum(ratings) / len(ratings), 3)
+    return out
+
+
+def _football_lg_form(text: str) -> dict[str, float]:
+    """Forebet's embedded last-6 W/D/L arrays: ``{"lg_-1_6":[w,d,l,total], ...}``.
+
+    `lg_-1_6` aggregates all competitions; `lg_1_6` is league-only. The first
+    two JSON objects on the page correspond to p1 then p2. Only the `_6`
+    arrays are interpreted (their [1,3,2,6] shape matched the displayed
+    "Win 1 Draw 3 Lost 2" line on the verified page).
+    """
+    out: dict[str, float] = {}
+    decoder = json.JSONDecoder()
+    found = 0
+    for match in re.finditer(r'\{\s*"lg_-1"', text):
+        try:
+            record, _ = decoder.raw_decode(text[match.start():])
+        except Exception:
+            continue
+        if not isinstance(record, dict):
+            continue
+        found += 1
+        side = found
+        if side > 2:
+            break
+        for comp, key in (("lg_-1_6", "all"), ("lg_1_6", "league")):
+            arr = record.get(comp)
+            if isinstance(arr, list) and len(arr) >= 4:
+                w, d, l, total = (float(x or 0) for x in arr[:4])
+                out[f"p{side}_l6_{key}_wins"] = w
+                out[f"p{side}_l6_{key}_draws"] = d
+                out[f"p{side}_l6_{key}_losses"] = l
+                if total:
+                    out[f"p{side}_l6_{key}_win_rate"] = w / total
+                    out[f"p{side}_l6_{key}_draw_rate"] = d / total
+    return out
+
+
+def _football_tab_markets(text: str) -> dict[str, float | str]:
+    """Top-of-page prediction tabs: corners/cards/double-chance/scorers.
+
+    These markets have NO distinct JSON endpoint (tp=corners/doublechance/
+    goalscorer echo 1X2); the detail page is their only source. Extraction is
+    deliberately narrow so a layout change leaves values missing rather than
+    wrong.
+    """
+    out: dict[str, float | str] = {}
+    # Corners tab (detail page only; JSON tp=corners echoes 1X2). The flattened
+    # tab text is "<p1> <p2> Over <pred_low>-<pred_high> <line> Corners",
+    # e.g. "46 54 Over 5-6 5 - 6 9.57 Corners". Also accept the alternate
+    # "Avg. corners <line>" prose shape.
+    corn = re.search(
+        r"(\d{1,3})\s+(\d{1,3})\s+Over\s+(\d+)\s*-\s*(\d+)\s+"
+        r"\d+\s*-\s*\d+\s+(\d+(?:\.\d+)?)\s+Corners",
+        text, re.I,
+    )
+    if not corn:
+        corn = re.search(
+            r"(\d{1,3})\s+(\d{1,3})\s+Over\s+(\d+)\s*-\s*(\d+)"
+            r".*?Avg\.\s*corners\s+(\d+(?:\.\d+)?)",
+            text, re.I | re.S,
+        )
+    if corn:
+        out["corners_p1_prob"] = float(corn.group(1))
+        out["corners_p2_prob"] = float(corn.group(2))
+        out["corners_pred_low"] = float(corn.group(3))
+        out["corners_pred_high"] = float(corn.group(4))
+        out["corners_avg_line"] = float(corn.group(5))
+    # Cards: same two shapes as corners.
+    cards = re.search(
+        r"(\d{1,3})\s+(\d{1,3})\s+Over\s+(\d+)\s*-\s*(\d+)\s+"
+        r"\d+\s*-\s*\d+\s+(\d+(?:\.\d+)?)\s+Cards",
+        text, re.I,
+    )
+    if not cards:
+        cards = re.search(
+            r"(\d{1,3})\s+(\d{1,3})\s+Over\s+(\d+)\s*-\s*(\d+)"
+            r".*?Avg\.\s*cards\s+(\d+(?:\.\d+)?)",
+            text, re.I | re.S,
+        )
+    if cards:
+        out["cards_p1_prob"] = float(cards.group(1))
+        out["cards_p2_prob"] = float(cards.group(2))
+        out["cards_pred_low"] = float(cards.group(3))
+        out["cards_pred_high"] = float(cards.group(4))
+        out["cards_avg_line"] = float(cards.group(5))
+    # Double chance: "71% ... 1X/12/X2 ... predicted score".
+    dc = re.search(r"(\d+(?:\.\d+)?)%\s*(1X|12|X2)\b", text, re.I)
+    if dc:
+        out["doublechance_prob"] = float(dc.group(1))
+        out["doublechance_pick"] = dc.group(2).upper()
+    return out
+
+
+def _football_detail_stats(text: str) -> dict[str, float | str]:
+    stats: dict[str, float | str] = {}
+    for extractor in (
+        _football_shots, _football_passes, _football_attacks,
+        _football_event_times, _football_uo_btts, _football_next_difficulty,
+        _football_lg_form,
+    ):
+        stats.update(extractor(text))
+    stats.update(_football_tab_markets(text))
+    return stats
+
+
 def parse_detail(
     body: bytes,
     sport: str,
@@ -380,6 +638,9 @@ def parse_detail(
         }.items():
             specific[key] = any(phrase in lower for phrase in phrases)
         specific["cards_present"] = "avg. cards" in lower or "cards score" in lower or "cards" in lower
+        # Numeric football detail stats (shots/passes/possession/attacks/etc.)
+        # are pre-event by construction for an upcoming-match detail page.
+        specific.update(_football_detail_stats(text))
     elif sport in {"basketball", "american_football"}:
         specific["quarter_data_present"] = all(f"q{i}" in lower for i in range(1, 5))
     elif sport == "tennis":

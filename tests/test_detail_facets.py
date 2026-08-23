@@ -116,3 +116,52 @@ def test_football_matches_real_page_labels_not_just_prose():
     assert facets.sport_specific["cards_present"] is True
     assert facets.sport_specific["weather_present"] is True
     assert facets.missing == []
+
+
+def test_football_numeric_detail_stats_from_observed_page():
+    # Text mirrors the verified Brentford v Tottenham detail page (22/08/2026)
+    # and the UNAM Pumas v Necaxa top-of-page tabs (23/08/2026).
+    body = b"""<html><body>
+    Shots BRE Total shots 68 11.33 Blocked 17 2.83 49% OFF target 31% ON target 74% Inside box 26% Outside box
+    TOT Total shots 79 13.17 Blocked 23 3.83 56% OFF target 27% ON target 73% Inside box 27% Outside box
+    Passes Total 2305 Avg. per game 384.17 Accurate 1856 81% Ball Possession 48%
+    Total 2577 Avg. per game 429.5 Accurate 2172 84% Ball Possession 53%
+    Avg. event time First goal 68' First corner 30' First card 0'
+    Total attacks Brentford 565 Avg. 94.17 Tottenham 563 Avg. 93.83
+    Dangerous attacks Brentford 303 Avg. 50.5 Tottenham 269 Avg. 44.83
+    Under/Over 1 5 17% 83% 1.5 Goals Under/Over 2 4 33% 67% 2.5 Goals Under/Over 3 3 50% 50% 3.5 Goals
+    Both scored Yes 3 50% 50% No 3
+    Both scored Yes 4 67% 33% No 2
+    next matches Easy 1 Severe 5 BRE 2 2 3 2 4 3 TOT 3 2 3 2 2 4
+    {"lg_-1":[1,3,2,6],"lg_-1_6":[1,3,2,6],"lg_1":[1,3,2,6],"lg_1_6":[1,3,2,6]}
+    {"lg_-1":[3,2,1,6],"lg_-1_6":[3,2,1,6],"lg_1":[3,2,1,6],"lg_1_6":[3,2,1,6]}
+    46 54 Over 5-6 5 - 6 9.57 Corners 44 56 Over 1-4 1 - 4 5.04 Cards
+    71% 12 2-0
+    </body></html>"""
+    facets = parse_detail(body, "football", "Brentford", "Tottenham")
+    s = facets.sport_specific
+    assert s["p1_shots_total"] == 68
+    assert s["p1_shots_avg"] == 11.33
+    assert s["p1_shots_on_target_pct"] == 31
+    assert s["p2_shots_inside_box_pct"] == 73
+    assert s["p1_passes_total"] == 2305
+    assert s["p1_passes_accuracy_pct"] == 81
+    assert s["p2_possession_pct"] == 53
+    assert s["p1_total_attacks_total"] == 565
+    assert s["p2_dangerous_attacks_avg"] == 44.83
+    assert s["first_goal_min"] == 68
+    assert s["first_corner_min"] == 30
+    assert s["recent_uo_2.5_under_pct"] == 33
+    assert s["recent_uo_2.5_over_pct"] == 67
+    assert s["p1_btts_yes"] == 3
+    assert s["p2_btts_yes_pct"] == 67
+    assert s["p1_l6_all_win_rate"] == 1 / 6
+    assert s["p2_l6_all_wins"] == 3
+    assert s["corners_avg_line"] == 9.57
+    assert s["cards_pred_low"] == 1
+    assert s["doublechance_prob"] == 71
+    assert s["doublechance_pick"] == "12"
+    # Numeric values surface with football prefix via numeric()
+    numeric = facets.numeric()
+    assert numeric["football_p1_shots_total"] == 68
+    assert numeric["football_corners_avg_line"] == 9.57

@@ -101,6 +101,19 @@ Markdown-mode path on the next run).
   raw_sha256 and the workflow caches data/raw/<sport> between runs. Cup ties
   settled on penalties/ET are tagged SETTLED_CUP (regulation score decides
   winner_index; tiebreakers retained as facets).
+- Phase B (football detail numeric extraction) added to detail_facets:
+  shots (total/avg/blocked/on-off-target %/inside-box %), passes
+  (total/avg/accurate/accuracy %/possession %), total+dangerous attacks,
+  avg event times (first goal/corner/card), recent UO distributions at
+  1.5/2.5/3.5, BTTS yes/no per side, next-fixture difficulty (1-5 avg),
+  Forebet's embedded lg_-1_6/lg_1_6 W/D/L JSON, and the detail-only
+  corners/cards/double-chance panels (their JSON endpoints echo 1X2). These
+  are label-anchored regexes against the flattened page text; the "Others"
+  pair table and disciplinary table remain parsed by _metric_pair_tables.
+  The regex shapes were built from observed page text but MUST be verified
+  against a real Jina-HTML detail capture (CLI: slumdog details + enrich)
+  before being treated as production-accurate; a layout change leaves values
+  missing rather than wrong.
 
 Next gates
 Review the first census + history receipts (from the scheduled pipeline), then
