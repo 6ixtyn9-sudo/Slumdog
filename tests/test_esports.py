@@ -82,6 +82,44 @@ def test_extract_esports_features():
     assert feat_dict["es_is_home_dog"] == 1.0
     assert feat_dict["es_decider_map_expectation"] == 1.0
     assert feat_dict["es_predicted_total_maps"] == 3.0
+    assert feat_dict["es_net_map_differential_gap_missing"] == 1.0
+
+
+def test_extract_esports_features_with_detail_differentials():
+    event = EventSnapshot(
+        event_id="esports:1005",
+        sport="esports",
+        event_date="2026-08-23",
+        captured_at="2026-08-23T10:00:00+00:00",
+        source_url="https://www.forebet.com/en/esports/matches/home-away-1005",
+        participant_1="Complexity",
+        participant_2="MOUZ",
+        probability_1=0.42,
+        probability_2=0.58,
+        forebet_pick=2,
+        odds_1=2.40,
+        odds_2=1.58,
+        predicted_score="1-2",
+        predicted_total=3.0,
+        facets={
+            "p1_scored_avg": 1.6,
+            "p1_conceded_avg": 1.1,
+            "p2_scored_avg": 1.9,
+            "p2_conceded_avg": 0.8,
+        },
+        facet_timing={k: TimingClass.PRE_EVENT for k in [
+            "p1_scored_avg", "p1_conceded_avg", "p2_scored_avg", "p2_conceded_avg",
+        ]},
+    )
+    candidate = detect_esports_robber(event)
+    assert candidate is not None
+
+    ef = extract_esports_features(event, candidate)
+    assert ef.dog_scored_avg == 1.6
+    assert ef.fav_scored_avg == 1.9
+    # net map diff: (1.6 - 1.1) - (1.9 - 0.8) = 0.5 - 1.1 = -0.6
+    assert round(ef.net_map_differential_gap, 1) == -0.6
+
 
 
 def test_detect_esports_robber_decider_bonus():

@@ -9,7 +9,7 @@ Esports is a 2-way sport (Bo3: 2-0, 2-1, 1-2, 0-2 or Bo5: 3-0, 3-1, 3-2, 2-3, 1-
 
 This module provides:
 - Esports-specific feature extraction (map splits, decider map proxy, 2-way de-vigging)
-- Standings, map differential, and form metrics
+- Standings, map differential, scoring averages, and form metrics
 - Dedicated 2-way Robber detector with decider map and momentum bonuses
 - Leak-safe numeric vector builder with explicit missingness flags
 """
@@ -126,14 +126,21 @@ class EsportsFeatures:
     standings_pts_gap: float | None
     standings_map_diff_gap: float | None
 
+    # Detail Match Averages
+    dog_scored_avg: float | None = None
+    fav_scored_avg: float | None = None
+    dog_conceded_avg: float | None = None
+    fav_conceded_avg: float | None = None
+    net_map_differential_gap: float | None = None
+
     # H2H Matchup History
-    h2h_total_games: float
-    h2h_dog_win_rate: float
-    h2h_has_dog_win: float
+    h2h_total_games: float = 0.0
+    h2h_dog_win_rate: float = 0.0
+    h2h_has_dog_win: float = 0.0
 
     # Legacy & Meta
-    legacy_robber_score: float
-    legacy_raw_confidence: float
+    legacy_robber_score: float = 0.0
+    legacy_raw_confidence: float = 0.0
 
     def to_dict(self) -> dict[str, float]:
         features: dict[str, float] = {
@@ -178,6 +185,11 @@ class EsportsFeatures:
             ("es_rank_gap", self.rank_gap),
             ("es_standings_pts_gap", self.standings_pts_gap),
             ("es_standings_map_diff_gap", self.standings_map_diff_gap),
+            ("es_dog_scored_avg", self.dog_scored_avg),
+            ("es_fav_scored_avg", self.fav_scored_avg),
+            ("es_dog_conceded_avg", self.dog_conceded_avg),
+            ("es_fav_conceded_avg", self.fav_conceded_avg),
+            ("es_net_map_differential_gap", self.net_map_differential_gap),
         ]
 
         for name, val in optional_fields:
@@ -286,6 +298,20 @@ def extract_esports_features(
     if dog == 2 and gd_gap is not None:
         gd_gap = -gd_gap
 
+    # Detail Match Averages
+    sc1_avg = _safe_float(facets.get("p1_scored_avg") or facets.get("detail_p1_scored_avg"))
+    sc2_avg = _safe_float(facets.get("p2_scored_avg") or facets.get("detail_p2_scored_avg"))
+    conc1_avg = _safe_float(facets.get("p1_conceded_avg") or facets.get("detail_p1_conceded_avg"))
+    conc2_avg = _safe_float(facets.get("p2_conceded_avg") or facets.get("detail_p2_conceded_avg"))
+
+    dog_sc_avg = sc1_avg if dog == 1 else sc2_avg
+    fav_sc_avg = sc2_avg if dog == 1 else sc1_avg
+    dog_conc_avg = conc1_avg if dog == 1 else conc2_avg
+    fav_conc_avg = conc2_avg if dog == 1 else conc1_avg
+    net_map_gap = None
+    if dog_sc_avg is not None and dog_conc_avg is not None and fav_sc_avg is not None and fav_conc_avg is not None:
+        net_map_gap = (dog_sc_avg - dog_conc_avg) - (fav_sc_avg - fav_conc_avg)
+
     # H2H
     h2h_games = float(h2h.total_games or facets.get("h2h_total_games") or 0)
     h2h_dog_wins = float(h2h.wins(dog) or 0)
@@ -328,6 +354,11 @@ def extract_esports_features(
         rank_gap=rank_gap,
         standings_pts_gap=pts_gap,
         standings_map_diff_gap=gd_gap,
+        dog_scored_avg=dog_sc_avg,
+        fav_scored_avg=fav_sc_avg,
+        dog_conceded_avg=dog_conc_avg,
+        fav_conceded_avg=fav_conc_avg,
+        net_map_differential_gap=net_map_gap,
         h2h_total_games=h2h_games,
         h2h_dog_win_rate=h2h_wr,
         h2h_has_dog_win=has_dog_win,
