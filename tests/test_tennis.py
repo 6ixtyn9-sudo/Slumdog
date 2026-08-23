@@ -75,6 +75,34 @@ def test_extract_tennis_features_with_surface_specialist():
     feat_dict = tf.to_dict()
     assert feat_dict["ten_surface_specialist_dog"] == 1.0
     assert feat_dict["ten_surface_win_rate_gap_missing"] == 0.0
+    assert round(feat_dict["ten_clay_win_rate_gap"], 2) == 0.17
+    assert feat_dict["ten_hard_win_rate_gap_missing"] == 1.0
+
+
+def test_tennis_robber_detector_height_advantage():
+    event = EventSnapshot(
+        event_id="tennis:305",
+        sport="tennis",
+        event_date="2026-08-23",
+        captured_at="2026-08-23T10:00:00+00:00",
+        source_url="https://www.forebet.com/en/tennis/matches/a-b-305",
+        participant_1="Big Server",
+        participant_2="Short Returner",
+        probability_1=0.38,
+        probability_2=0.62,
+        forebet_pick=2,
+        odds_1=2.60,
+        odds_2=1.52,
+        facets={
+            "p1_height_inches": 80.0,
+            "p2_height_inches": 71.0,
+        },
+        facet_timing={"p1_height_inches": TimingClass.PRE_EVENT, "p2_height_inches": TimingClass.PRE_EVENT},
+    )
+    candidate = detect_tennis_robber(event)
+    assert candidate is not None
+    assert any("Height / Serve Edge" in r for r in candidate.reasons)
+
 
 
 def test_tennis_robber_detector_surface_bonus():
