@@ -79,4 +79,4 @@ from pre-event data and out-of-time outcomes.
 - Robbers were sorted by confidence but not capped; the UI showed only a top-3
   preview while the returned candidate array contained every Robber.
 
-Slumdog likewise has no output-count cap, but every v0.1 row remains shadow.
+Slumdog likewise has no output-count cap, but every candidate row remains shadow.

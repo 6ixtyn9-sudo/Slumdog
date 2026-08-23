@@ -265,7 +265,7 @@ def promote_football_listing(event: EventSnapshot, row: dict) -> None:
     if pos_1 is not None and pos_2 is not None:
         event.facets["standings_gap"] = pos_1 - pos_2
 
-    for key in ("weather_high", "weather_low", "weather_code", "kelly", "goalsavg"):
+    for key in ("weather_high", "weather_low", "weather_code", "kelly", "goalsavg", "host_sc_pr", "guest_sc_pr"):
         number = _number(row.get(key))
         if number is not None:
             event.facets[key] = number
@@ -282,7 +282,7 @@ def promote_football_listing(event: EventSnapshot, row: dict) -> None:
         "recent_2_wins", "recent_2_draws", "recent_2_losses", "recent_2_games",
         "standings_1", "standings_2", "standings_gap",
         "weather_high", "weather_low", "weather_code", "kelly", "goalsavg",
-        "odds_draw", "round_number",
+        "host_sc_pr", "guest_sc_pr", "odds_draw", "round_number",
     ):
         if key in event.facets:
             event.facet_timing[key] = TimingClass.PRE_EVENT

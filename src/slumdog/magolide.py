@@ -209,7 +209,7 @@ def detect_robber(
         legacy_confidence = min(95.0, max(50.0, round(raw_confidence)))
         state = CandidateState.SHADOW_UNPRICED
 
-    # v0.1 is shadow-only. The minimum controls the high-confidence output
+    # Slumdog is shadow-only. The minimum controls the high-confidence output
     # surface but never forces a fixed number of picks.
     if legacy_confidence < config.emit_min_confidence:
         return None

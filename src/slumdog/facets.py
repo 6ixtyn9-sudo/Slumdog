@@ -116,4 +116,41 @@ def build_numeric_features(
         if number is not None:
             features[feature_key] = number
 
+    if event.sport == "football":
+        from .football import extract_football_features
+        features.update(extract_football_features(event, candidate, h2h, recent_1, recent_2).to_dict())
+    elif event.sport == "basketball":
+        from .basketball import extract_basketball_features
+        features.update(extract_basketball_features(event, candidate, h2h, recent_1, recent_2).to_dict())
+    elif event.sport == "tennis":
+        from .tennis import extract_tennis_features
+        features.update(extract_tennis_features(event, candidate, h2h, recent_1, recent_2).to_dict())
+    elif event.sport == "hockey":
+        from .hockey import extract_hockey_features
+        features.update(extract_hockey_features(event, candidate, h2h, recent_1, recent_2).to_dict())
+    elif event.sport == "baseball":
+        from .baseball import extract_baseball_features
+        features.update(extract_baseball_features(event, candidate, h2h, recent_1, recent_2).to_dict())
+    elif event.sport == "american_football":
+        from .american_football import extract_american_football_features
+        features.update(extract_american_football_features(event, candidate, h2h, recent_1, recent_2).to_dict())
+    elif event.sport == "rugby":
+        from .rugby import extract_rugby_features
+        features.update(extract_rugby_features(event, candidate, h2h, recent_1, recent_2).to_dict())
+    elif event.sport == "handball":
+        from .handball import extract_handball_features
+        features.update(extract_handball_features(event, candidate, h2h, recent_1, recent_2).to_dict())
+    elif event.sport == "volleyball":
+        from .volleyball import extract_volleyball_features
+        features.update(extract_volleyball_features(event, candidate, h2h, recent_1, recent_2).to_dict())
+    elif event.sport == "esports":
+        from .esports import extract_esports_features
+        features.update(extract_esports_features(event, candidate, h2h, recent_1, recent_2).to_dict())
+    elif event.sport == "cricket":
+        from .cricket import extract_cricket_features
+        features.update(extract_cricket_features(event, candidate, h2h, recent_1, recent_2).to_dict())
+    elif event.sport == "mma":
+        from .mma import extract_mma_features
+        features.update(extract_mma_features(event, candidate, h2h, recent_1, recent_2).to_dict())
+
     return features

@@ -17,7 +17,7 @@ unknown and the output is not actionable.
 Outputs are not capped. Every candidate passing the configured confidence
 threshold is emitted.
 No candidate is called certain or guaranteed.
-v0.1 emits shadow research only.
+Slumdog emits shadow research only.
 Architecture
 text
 
@@ -89,7 +89,7 @@ text
 SHADOW_UNPRICED  probability-defined Robber; Forebet price missing
 SHADOW_PRICED    Forebet price exists; model not certified
 CERTIFIED        reserved for later sport-specific prospective proof
-v0.1 never emits CERTIFIED.
+Slumdog never emits CERTIFIED.
 
 Quick start
 Bash

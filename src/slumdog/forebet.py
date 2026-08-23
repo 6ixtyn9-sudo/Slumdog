@@ -87,7 +87,7 @@ def relay_get(url: str, timeout: int = 45, max_retries: int = 3) -> bytes:
         request = urllib.request.Request(
             url,
             headers={
-                "User-Agent": "Slumdog/0.1",
+                "User-Agent": "Slumdog",
                 "Accept": "text/plain",
                 "X-No-Cache": "true",
                 "X-Return-Format": "html",

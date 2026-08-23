@@ -9,7 +9,7 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 
 from .contracts import SettledEvent
-from .parsers import _event_day, _load_football_payload, _number, _participant_odds, _text
+from .parsers import _event_day, _load_football_payload, _number, _participant_odds, _slug, _text
 from .sports import SPORTS
 
 
@@ -74,25 +74,50 @@ def parse_football_settled(body: bytes, target_date: str) -> list[SettledEvent]:
     for row in rows:
         if str(row.get("DATE_BAH") or "")[:10] != target_date:
             continue
-        try:
-            score_1, score_2 = float(row["Host_SC"]), float(row["Guest_SC"])
-        except (KeyError, TypeError, ValueError):
-            continue
+        comment = str(row.get("comment") or "").upper()
+        if any(tok in comment for tok in ("CANCL", "POSTP", "ABAND", "INT")):
+            disposition = "VOID"
+            score_1, score_2 = None, None
+            winner = 0
+        else:
+            try:
+                score_1, score_2 = float(row["Host_SC"]), float(row["Guest_SC"])
+                winner = 1 if score_1 > score_2 else 2 if score_2 > score_1 else 0
+                disposition = "SETTLED"
+            except (KeyError, TypeError, ValueError):
+                continue
         p1, p2 = _number(row.get("Pred_1")), _number(row.get("Pred_2"))
         if p1 is None or p2 is None:
             continue
         px = _number(row.get("Pred_X"))
-        winner = 1 if score_1 > score_2 else 2 if score_2 > score_1 else 0
         best = max({1: p1, 2: p2, 0: px or -1}, key={1: p1, 2: p2, 0: px or -1}.get)
+        
+        periods_1: list[float] = []
+        periods_2: list[float] = []
+        ht_1, ht_2 = _number(row.get("Host_SC_HT")), _number(row.get("Guest_SC_HT"))
+        if ht_1 is not None and ht_2 is not None and score_1 is not None and score_2 is not None:
+            periods_1 = [ht_1, score_1]
+            periods_2 = [ht_2, score_2]
+
+        host_name = str(row.get("HOST_NAME") or "")
+        guest_name = str(row.get("GUEST_NAME") or "")
+        row_id = str(row.get("id") or "")
+        detail_url = (
+            f"https://www.forebet.com/en/football/matches/{_slug(host_name)}-{_slug(guest_name)}-{row_id}"
+            if (host_name and guest_name and row_id) else ""
+        )
+
         settled.append(SettledEvent(
-            event_id=f"football:{row.get('id')}", sport="football", event_date=target_date,
-            participant_1=str(row.get("HOST_NAME") or ""), participant_2=str(row.get("GUEST_NAME") or ""),
+            event_id=f"football:{row_id}", sport="football", event_date=target_date,
+            participant_1=host_name, participant_2=guest_name,
             winner_index=winner, score_1=score_1, score_2=score_2,
             probability_1=p1/100, probability_2=p2/100,
             draw_probability=px/100 if px is not None else None,
             forebet_pick=best if best in (1, 2) else None,
             odds_1=_number(row.get("best_odd_1")), odds_2=_number(row.get("best_odd_2")),
-            league=str(row.get("short_tag") or ""), source_url="",
+            league=str(row.get("short_tag") or ""),
+            period_scores_1=tuple(periods_1), period_scores_2=tuple(periods_2),
+            source_url=detail_url, disposition=disposition,
         ))
     return settled
 

@@ -87,7 +87,7 @@ def render_suggestions(ledger_path: Path | str, target_date: str, root: Path | s
         lines.append("")
     lines.extend([
         "Ma Golide confidence is reproduced for forensic comparison and is not",
-        "a learned win probability. Actionable certification is disabled in v0.1.",
+        "a learned win probability. Actionable certification is disabled.",
     ])
     output = root / "data" / "reports" / f"suggestions_{target_date}.txt"
     output.parent.mkdir(parents=True, exist_ok=True)
