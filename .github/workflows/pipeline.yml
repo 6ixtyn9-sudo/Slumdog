@@ -111,10 +111,15 @@ jobs:
           python-version: "3.13"
           cache: pip
       - run: python -m pip install -e '.[dev]'
-      - name: Restore accumulated history ledger (cache)
+      - name: Restore accumulated history ledger and raw bodies (cache)
         uses: actions/cache/restore@v4
         with:
-          path: data/reports
+          # data/reports holds the rolling ledger + manifest; data/raw/<sport>
+          # holds every frozen raw body (keep_raw=True) so parser improvements
+          # can be replayed against history without re-fetching.
+          path: |
+            data/reports
+            data/raw/${{ matrix.sport }}
           key: slumdog-history-${{ matrix.sport }}-${{ github.run_id }}
           restore-keys: |
             slumdog-history-${{ matrix.sport }}-
@@ -130,11 +135,13 @@ jobs:
             --workers 6 \
             --batch-size 6 \
             --delay 62
-      - name: Persist accumulated history ledger (cache)
+      - name: Persist accumulated history ledger and raw bodies (cache)
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: data/reports
+          path: |
+            data/reports
+            data/raw/${{ matrix.sport }}
           key: slumdog-history-${{ matrix.sport }}-${{ github.run_id }}
       - name: Publish sport history receipt
         if: always()
