@@ -305,3 +305,27 @@ provenance retention. Current backfill writes `facets.raw_sha256` for new rows.
 Legacy provenance can only be restored by rebuilding from retained raw captures;
 hashes must never be fabricated. The existing derived ledger is not rewritten
 automatically.
+
+### Cross-sport legacy duplicate audit (2026-08-24)
+
+A read-only scan found 279 byte-identical extra rows (278 repeated same-date
+keys) across the legacy ledgers. Forebet numeric IDs are not globally unique:
+many IDs recur on different dates for distinct fixtures, including rematches
+between the same participants with different settled scores. Ledger identity
+must therefore include `(sport, event_id, event_date)`; global event-ID dedupe
+would destroy valid history.
+
+Four cross-date pairs became byte-identical after removing only `event_date`:
+`basketball:198045`, `basketball:198046`, `football:2041406`, and
+`volleyball:96303`. They may be rescheduled or date-boundary listings, but are
+explicitly unresolved and are not automatically removed. Raw files were absent
+for the seven sampled suspicious dates. Their manifest receipts retain source
+URL, byte count, and SHA-256, but a hash cannot reconstruct source bytes and a
+refetch would be a new capture.
+
+One same-key conflict is also unresolved: `hockey:278977` on 2023-08-20 has two
+settled rows for Netherlands W v Denmark W, one 1-6 and one 0-4. With no sampled
+raw file available, neither result can be selected honestly. New backfills
+collapse only canonical-identical same-key rows; conflicting same-key payloads
+fail the complete day before any rows are appended, with differing fields in
+the error. Existing ledgers remain untouched.

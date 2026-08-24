@@ -100,3 +100,26 @@ additional fixes.
 When the user says the work is complete, update this file with final evidence
 and a section titled `After merge: next session starts here`. Commit that update
 on this branch, then merge PR #4 only with explicit user authorization.
+
+## Cross-sport duplicate findings (2026-08-24)
+
+A local read-only scan of all available `history_*.jsonl.gz` files found 279
+byte-identical extra rows across 278 repeated same-date keys. Forebet IDs also
+recur across dates for genuinely distinct fixtures, so the valid identity is
+`(sport, event_id, event_date)`, never event ID alone.
+
+Four legacy cross-date pairs are identical after removing only `event_date`:
+`basketball:198045`, `basketball:198046`, `football:2041406`, and
+`volleyball:96303`. Treat these as unresolved; do not auto-delete them. A
+same-key conflict also exists for `hockey:278977` on 2023-08-20: the ledger has
+incompatible 1-6 and 0-4 results. Neither can be selected without source bytes.
+
+Raw files were absent for seven sampled suspicious dates, although manifest
+receipts preserve source URL, byte count, and SHA-256. This is a sampled result,
+not a claim that every legacy raw file is absent. Hashes alone cannot restore
+provenance and a refetch is not the historical capture.
+
+The backfill write path now validates a complete day before output: exact
+same-key payloads collapse, while conflicting payloads raise with identifying
+fields before any day rows are appended. `append_settled_from_capture` remains
+out of scope because it writes a separate interim artifact.

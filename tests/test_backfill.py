@@ -1,8 +1,11 @@
 import json
 import urllib.error
 
+import pytest
+
 from slumdog import backfill as backfill_mod
-from slumdog.backfill import backfill_sport
+from slumdog.backfill import _validated_ledger_payloads, backfill_sport
+from slumdog.contracts import SettledEvent
 
 
 def _http_422(day, sport="handball"):
@@ -81,3 +84,36 @@ def test_non_422_error_still_retried(tmp_path, monkeypatch):
     assert manifest["dates_completed"] == 0
     assert manifest["empty_days"] == 0
     assert any("RuntimeError" in f for f in manifest["failures"])
+
+
+def _settled(score_1=2.0, score_2=1.0):
+    return SettledEvent(
+        event_id="hockey:7", sport="hockey", event_date="2026-01-02",
+        participant_1="Home", participant_2="Away", winner_index=1,
+        score_1=score_1, score_2=score_2, probability_1=0.6,
+        probability_2=0.4, draw_probability=None, forebet_pick=1,
+    )
+
+
+def test_ledger_payload_validation_collapses_exact_duplicate():
+    payloads = _validated_ledger_payloads(
+        [_settled(), _settled()], "hockey", "abc123"
+    )
+    assert len(payloads) == 1
+    assert payloads[0]["facets"]["raw_sha256"] == "abc123"
+
+
+def test_ledger_payload_validation_rejects_conflict_before_write(tmp_path):
+    ledger = tmp_path / "history_hockey.jsonl"
+    with pytest.raises(ValueError, match=(
+        r"sport=hockey date=2026-01-02 event_id=hockey:7; "
+        r"differing_fields=.*score_1"
+    )):
+        payloads = _validated_ledger_payloads(
+            [_settled(), _settled(score_1=0.0, score_2=4.0)],
+            "hockey", "abc123",
+        )
+        with ledger.open("a", encoding="utf-8") as output:
+            for payload in payloads:
+                output.write(json.dumps(payload) + "\n")
+    assert not ledger.exists()

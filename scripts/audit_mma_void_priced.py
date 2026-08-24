@@ -42,29 +42,30 @@ def main(argv: list[str]) -> int:
     with gzip.open(argv[1], "rt", encoding="utf-8") as handle:
         rows = [json.loads(line) for line in handle]
 
-    by_id: dict[str, list[dict]] = defaultdict(list)
+    by_key: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for row in rows:
-        by_id[str(row.get("event_id") or "")].append(row)
+        key = (str(row.get("event_id") or ""), str(row.get("event_date") or ""))
+        by_key[key].append(row)
 
-    duplicate_ids = {event_id: copies for event_id, copies in by_id.items()
-                     if event_id and len(copies) > 1}
+    duplicate_ids = {key: copies for key, copies in by_key.items()
+                     if key[0] and len(copies) > 1}
     exact_ids = []
     conflicting_ids = []
-    for event_id, copies in duplicate_ids.items():
+    for key, copies in duplicate_ids.items():
         digests = {hashlib.sha256(canonical(row)).hexdigest() for row in copies}
         if len(digests) == 1:
-            exact_ids.append(event_id)
+            exact_ids.append(key)
         else:
-            conflicting_ids.append(event_id)
+            conflicting_ids.append(key)
 
     unique_rows = []
     seen = set()
     for row in rows:
-        event_id = str(row.get("event_id") or "")
-        if event_id and event_id in seen:
+        key = (str(row.get("event_id") or ""), str(row.get("event_date") or ""))
+        if key[0] and key in seen:
             continue
-        if event_id:
-            seen.add(event_id)
+        if key[0]:
+            seen.add(key)
         unique_rows.append(row)
 
     any_hash = sum(bool(row.get("raw_sha256") or (row.get("facets") or {}).get("raw_sha256"))
@@ -73,9 +74,9 @@ def main(argv: list[str]) -> int:
 
     print(f"stored rows={len(rows)}")
     print(f"unique rows={len(unique_rows)}")
-    print(f"duplicate event ids={len(duplicate_ids)}: {sorted(duplicate_ids)}")
-    print(f"exact duplicate ids={len(exact_ids)}: {sorted(exact_ids)}")
-    print(f"conflicting duplicate ids={len(conflicting_ids)}: {sorted(conflicting_ids)}")
+    print(f"duplicate event/date keys={len(duplicate_ids)}: {sorted(duplicate_ids)}")
+    print(f"exact duplicate keys={len(exact_ids)}: {sorted(exact_ids)}")
+    print(f"conflicting duplicate keys={len(conflicting_ids)}: {sorted(conflicting_ids)}")
     print(f"rows with raw_sha256={any_hash}/{len(rows)}")
     print(f"rows with captured_at={captured}/{len(rows)}")
     print_cross("STORED CROSS-TAB", rows)
