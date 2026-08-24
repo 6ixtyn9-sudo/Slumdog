@@ -315,22 +315,24 @@ raw `21`/dash behavior, aligned scorers, empty rows, mismatch suppression, and
 out-of-root lookalikes. `tests/test_detail_facets.py` now proves the established
 text extractor still coexists with DOM-scoped DC extraction.
 
-## Current-session verification (unmerged DOM market implementation)
+## Current-session verification (DOM market implementation)
 
-- `python3 -m py_compile scripts/*.py src/slumdog/*.py tests/*.py`: passed.
-- `git diff --check`: passed.
-- `python -m pytest -q`: not run; Arena Python lacks `pytest` (`No module named pytest`).
-- `pyflakes scripts/*.py src/slumdog/*.py tests`: not run; `pyflakes` executable is absent.
-- A direct parser smoke test also could not import `slumdog.detail_facets` because Arena Python lacks `bs4` (`No module named 'bs4'`). This is an environment dependency failure, not a parser result.
+Codespace verification completed on 2026-08-24 at commit
+`e1a7716a99ae4e545b57c04df7d26cb57c1269fb`, after installing the project with
+`python -m pip install -e '.[dev]'`.
 
-Run in the dependency-equipped Codespace before merge:
-```bash
-cd /workspaces/Slumdog
-python -m pytest -q
-python3 -m py_compile scripts/*.py src/slumdog/*.py tests/*.py
-pyflakes scripts/*.py src/slumdog/*.py tests
-git diff --check
-```
+- Full `python -m pytest -q`: passed (184 collected tests).
+- Focused `python -m pytest -q tests/test_football_dom_markets.py tests/test_detail_facets.py`:
+  passed (16 tests).
+- `python -m py_compile scripts/*.py src/slumdog/*.py tests/*.py`: passed.
+- `python -m pyflakes scripts src/slumdog tests`: passed with no findings.
+- `git diff --check`: passed with no output.
+- `python -m pytest --collect-only -q | grep -E '::' | wc -l`: `184`.
+- Temporary `football-detail-samples.tar.gz` was removed in Codespace; subsequent
+  `git status --short` was empty. No raw captures or ledgers appear in the PR diff.
+
+The earlier Arena-only dependency limitations remain true of that sandbox, but
+are superseded as merge-gate evidence by this dependency-equipped Codespace run.
 
 
 ## After merge: next session starts here
