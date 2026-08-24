@@ -321,13 +321,18 @@ Codespace verification completed on 2026-08-24 at commit
 `e1a7716a99ae4e545b57c04df7d26cb57c1269fb`, after installing the project with
 `python -m pip install -e '.[dev]'`.
 
-- Full `python -m pytest -q`: passed (184 collected tests).
+- Full `python -m pytest -q`: passed. Its quiet progress output did not establish
+  a count.
 - Focused `python -m pytest -q tests/test_football_dom_markets.py tests/test_detail_facets.py`:
   passed (16 tests).
 - `python -m py_compile scripts/*.py src/slumdog/*.py tests/*.py`: passed.
 - `python -m pyflakes scripts src/slumdog tests`: passed with no findings.
 - `git diff --check`: passed with no output.
-- `python -m pytest --collect-only -q | grep -E '::' | wc -l`: `184`.
+- Exact collection was subsequently measured, after synchronizing to
+  `8e292046340886bac087a9b3bb71372ebe8e2058`, with a pytest collection hook:
+  `EXACT_COLLECTED_TESTS=192`. A prior `grep '::' | wc -l` command returned `0`
+  because quiet collection output has no matching node-ID lines; it is not a
+  test count and must not be reused.
 - Temporary `football-detail-samples.tar.gz` was removed in Codespace; subsequent
   `git status --short` was empty. No raw captures or ledgers appear in the PR diff.
 
