@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-24
 Branch: `arena/01a03377-slumdog`
-Pull request: none opened for this follow-up
+Pull request: #5 (open; do not merge without explicit user authorization)
 Phase: Forebet depth audit; model training remains frozen
 
 This file is a living continuation record. Update it as evidence is gathered and
