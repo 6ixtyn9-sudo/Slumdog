@@ -5,6 +5,7 @@ import gzip
 import json
 import shutil
 import time
+import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import date, timedelta
@@ -86,6 +87,21 @@ def _load_manifest(report_dir: Path, sport: str) -> dict:
     return {}
 
 
+def _is_empty_day_error(sport: str, exc: BaseException) -> bool:
+    """Whether a fetch error means "no games on that date", not a real failure.
+
+    For the HTML-listing sports (everything but football), Forebet serves an
+    empty/unprocessable page on out-of-season dates which the relay surfaces as
+    an HTTP 422. We treat that as a *covered empty day* so off-season ranges
+    don't get retried forever. Football uses the getrs.php JSON endpoint, which
+    returns ``[]`` (already handled as zero rows) and never 422s for an empty
+    day -- so a 422 there stays a genuine failure and must not be swallowed.
+    """
+    if sport == "football":
+        return False
+    return isinstance(exc, urllib.error.HTTPError) and exc.code == 422
+
+
 def backfill_sport(
     sport: str,
     end: str | None = None,
@@ -128,6 +144,7 @@ def backfill_sport(
     total_rows = int(previous.get("settled_rows") or 0)
     priced_rows = int(previous.get("priced_rows") or 0)
     void_rows = int(previous.get("void_rows") or 0)
+    empty_days = int(previous.get("empty_days") or 0)
     failures = list(previous.get("failures") or [])
     manifest = [item for item in previous.get("daily_receipts", []) if isinstance(item, dict)]
     done = {str(item.get("date")) for item in manifest}
@@ -174,7 +191,18 @@ def backfill_sport(
                             if not keep_raw:
                                 shutil.rmtree(body_path.parent, ignore_errors=True)
                         except Exception as exc:
-                            failures.append(f"{day}:{type(exc).__name__}:{exc}")
+                            if _is_empty_day_error(sport, exc):
+                                # No listing for this date (e.g. off-season):
+                                # record it as covered so it is never retried.
+                                empty_days += 1
+                                manifest.append({
+                                    "date": day,
+                                    "source_url": f"https://www.forebet.com/en/{sport}/predictions/{day}",
+                                    "empty": True,
+                                    "reason": "relay 422: no event listing for date",
+                                })
+                            else:
+                                failures.append(f"{day}:{type(exc).__name__}:{exc}")
                 if offset + safe_batch < len(pending) and delay_seconds > 0:
                     time.sleep(delay_seconds)
 
@@ -184,7 +212,7 @@ def backfill_sport(
         "sport": sport, "start": min(covered_dates), "end": max(covered_dates),
         "dates_requested": len(covered_dates), "dates_completed": len(manifest),
         "settled_rows": total_rows, "priced_rows": priced_rows,
-        "void_rows": void_rows, "failures": failures,
+        "void_rows": void_rows, "empty_days": empty_days, "failures": failures,
         "raw_bytes_retained_this_run": raw_bytes_retained,
         "keep_raw": keep_raw,
         "history_file": str(history_path.relative_to(root)),
