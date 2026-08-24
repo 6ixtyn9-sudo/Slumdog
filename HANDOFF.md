@@ -1,368 +1,217 @@
-# Slumdog living handoff
+# Slumdog Living Handoff
 
-Last updated: 2026-08-24
-Branch: `arena/01a03377-slumdog`
-Pull request: #5 (open; do not merge without explicit user authorization)
-Phase: Forebet depth audit; model training remains frozen
+**Last updated:** 2026-08-24 (UTC)
+**Branch:** `arena/01a033af-slumdog`
+**HEAD SHA:** `2e3daa40b60ed520a0bcb2f178ef4219fad4d026` (main merge of PR #5, before Milestone 0 commits)
+**Phase:** Milestone 0 — repository truth and documentation governance; training frozen
+**Mission:** Slumdog identifies a small daily shortlist of participants that Forebet considers underdogs but whose available pre-event evidence indicates a credible outright-win upset.
 
-This file is a living continuation record. Update it as evidence is gathered and
-again immediately before the final merge.
+This file is a living continuation record. Update it as evidence is gathered and again immediately before final merge.
 
-## Constraints
+## Product Invariants (from AGENTS.md)
 
-- Keep PR #4 open until the user explicitly authorizes the single final merge.
-- Discuss findings before code changes unless the user already authorized them.
-- Forebet is the sole external source. Preserve immutable raw captures and never
-  fabricate provenance.
-- Be gentle with Forebet: at most 6 workers, small batches, and 62-second pauses
-  for collection. Read-only local audits do not use the network.
-- Do not modify or unlock model training.
-- Avoid drive-by refactors and speculative abstractions.
-- Verify factual claims from code, retained bytes, or an executed probe. Mark
-  anything else unverified.
+- Target is UNDERDOG_WIN outright win only; never selects draws; draw = failed UNDERDOG_WIN in draw-capable sports.
+- Odds optional metadata only — not required, not model feature, not eligibility gate, missing odds must not lower confidence.
+- Never force daily pick; NO_STRONG_UNDERDOG valid; never promise profit/guaranteed wins.
+- Training frozen until user approves dataset/target/timing/validation contract.
+- Main is only permanent branch; Arena branch is delivery only; never force-push main.
 
-## Work currently in PR #4
+## Work Completed in This Session (Milestone 0)
 
-### Football truncated relay responses
+### A. Move STATE.md into docs
 
-`src/slumdog/forebet.py` now fully parses raw or HTML-wrapped football JSON
-before accepting a capture. A truncated HTTP-200 response raises `ValueError`
-and the football path retries up to three times. Regression tests are in
-`tests/test_forebet.py`.
+- Executed `git mv STATE.md docs/STATE.md` — verified via `git status --short` shows `R  STATE.md -> docs/STATE.md`
+- Updated references: `README.md` now references `docs/STATE.md` (not root); `AGENTS.md` read order points to `docs/STATE.md`; `docs/README.md` and `docs/STATE.md` self-document canonical path
+- Proof: `grep -Rni --exclude-dir=.git 'STATE\.md' .` shows only `docs/STATE.md` references, no stale root references
 
-### H2H fabrication
+### B. Agent Entrypoint AGENTS.md
 
-`src/slumdog/detail_facets.py` restricts score-pair fallback extraction to an
-explicit H2H container. Regression tests cover standings-only markup and a real
-`.h2h` table. `scripts/audit_detail_h2h.py` was run against the user's retained
-captures on 2026-08-24 and reported `suspicious pages: 0`.
+- Created concise root `AGENTS.md` with:
+  - Read order: AGENTS.md → README.md → docs/STATE.md → HANDOFF.md → docs/FOREBET_DEPTH_AUDIT.md → source/tests
+  - Permanent product mission
+  - 15 invariants (underdog win only, no draws, odds optional, no forced picks, no profit claims, training frozen, main only permanent branch, filesystem separation, change control, doc governance)
+  - Verification gates
 
-### MMA duplicate settlement rows
+### C. docs/STATE.md Current Truth Rewrite
 
-The user's `data/reports/history_mma.jsonl.gz` contained 759 rows and 757 unique
-event IDs. `mma:2638` and `mma:2721` were byte-identical duplicate settled,
-priced rows from 2026-06-15. There were no conflicting duplicate dispositions.
-Deduplicated figures are 600 settled, 157 void, 153 priced, with 11 rows both
-void and priced. The earlier 159/159 equality is not reproduced and was not a
-structural equality.
+- Rewrote from append-only diary to structured current-truth contract containing:
+  - current phase, merged work, active blockers, training status, data limitations, next milestone, parked work, unresolved evidence, last verified date (2026-08-24 UTC), links to deeper docs
+  - Preserved critical evidence: football 963-date gap, relay Cloudflare 403, Jina Markdown mode works, cricket 0% price verified, American football 0% pending 2026-09-10, handball 2-price fix, hockey 99 dashes sample, MMA 11 void+priced, cross-date identical pairs (basketball:198045/198046, football:2041406, volleyball:96303), hockey 278977 conflict, missing raw bytes for 7 sampled dates, DC token 21, scorer market uncertainty
+  - Canonical path documented
 
-`parse_mma_settled` now deduplicates valid within-page event IDs. `backfill_sport`
-also has a run-local `(sport, event_id, event_date)` write guard. Existing
-ledgers are not automatically rewritten. `scripts/audit_mma_void_priced.py`
-reports stored and unique cross-tabs, duplicate classifications, and provenance
-coverage. A regression test is in `tests/test_special_settlement.py`.
+### D. Documentation Audit
 
-### Legacy MMA provenance
+Inventory under `docs/` (7 files):
 
-All 759 inspected legacy MMA rows lacked `raw_sha256` and `captured_at`. Current
-backfill writes `facets.raw_sha256` for new rows. Whether retained MMA raw pages
-are sufficient to rebuild the legacy ledger has not yet been established. Do
-not invent hashes or rebuild without user approval.
+| File | Status | Purpose |
+|------|--------|---------|
+| STATE.md | CURRENT | Canonical current truth |
+| FOREBET_DEPTH_AUDIT.md | CURRENT | Training freeze receipt + facet inventory + depth contract + duplicate audits |
+| FOREBET_ARCHIVE_DEPTH.json | REFERENCE | Annual archive probe matrix, conservative backfill starts |
+| FOREBET_DETAIL_COVERAGE.json | REFERENCE | 3-page-per-sport detail factor sample, justified parser families |
+| FOREBET_PRICE_COVERAGE.json | REFERENCE | Representative price snapshot per sport |
+| FOREBET_FACET_ANALYSIS_PLAN.md | REFERENCE | Timing classes + 10-step analysis order |
+| MA_GOLIDE_ROBBER_FORENSIC.md | HISTORICAL | Legacy Robber forensic spec, useful but not current operating truth |
 
-### No-odds documentation and probes
+- **Stale:** None proven obsolete yet
+- **Duplicate:** None
+- **UNKNOWN:** None requiring user review
+- **Proposed removals:** None — do not delete evidence to make tree look clean; ask before deleting UNKNOWN
+- **Final canonical read order:** AGENTS.md → README.md → docs/STATE.md → HANDOFF.md → FOREBET_DEPTH_AUDIT.md → other docs → source/tests
 
-`docs/FOREBET_DEPTH_AUDIT.md` records verified cricket and American-football
-coverage findings. `scripts/probe_american_football_odds.py` is parked until on
-or after approximately 2026-09-10 and must not be run early.
+### E. docs/README.md Index
 
-## Verification completed
+- Created `docs/README.md` with purpose/status/last-verified/canonical relationship for each doc, classification report, files moved, links updated, stale/duplicate findings, proposed removals, final read order, checks run, freshness lock rule
 
-- 184 tests passed on both the Arena checkout and the user's data-bearing
-  Codespace.
-- `python3 -m py_compile scripts/*.py src/slumdog/*.py` passed.
-- `git diff --check` passed.
-- PR #4 was open and mergeable with no configured GitHub status checks.
+### F. README.md Update
 
-## Remaining investigations
+- Rewrote to new price-free mission: small daily shortlist, outright underdog wins only, draws fail, odds optional context, no forced picks, no profit claims
+- Updated architecture diagram to price-free candidate contract → transparent baselines → daily shortlist → immutable shadow receipts
+- Updated candidate contract list (event identity, Forebet fav/underdog, probs, draw prob, model prob, lift, strength, evidence, missingness, status, version, provenance, optional price)
+- Updated settlement rules (two-way vs draw-capable, equal-prob handling, voids excluded)
+- Updated doc policy: AGENTS.md first, docs/STATE.md canonical, freshness lock
 
-These are evidence-gathering tasks. Discuss findings before implementing any
-additional fixes.
+### G. Freshness Lock
 
-1. Scan every `data/reports/history_*.jsonl.gz` for duplicate event IDs. Report
-   exact versus conflicting duplicates and deduplicated counts. Do not rewrite
-   a ledger automatically.
-2. Inspect the 11 MMA rows that are both void and priced against retained raw
-   captures, where available. Determine whether prices were posted before a
-   scratch/no-contest; do not assume.
-3. Inventory retained `data/raw/mma/` captures and determine whether they cover
-   the dates represented by all 759 legacy rows. Report provenance-rebuild
-   feasibility only.
-4. Broader adversarial Forebet audit, discussion before coding:
-   - detail-only corners, double chance, and top-scorer information;
-   - ensure HT/FT is treated as one combined price, not a 9-cell matrix;
-   - sparse hockey/rugby/volleyball pricing: coverage truth versus parser miss;
-   - the football 963-date backfill gap;
-   - separate esoccer audit.
-5. Run the NFL odds probe on or after approximately 2026-09-10.
+- Documented in AGENTS.md, README.md, docs/README.md, docs/STATE.md: every substantive PR must update when applicable docs/STATE.md, HANDOFF.md, docs/README.md, relevant audit doc
 
-## Final merge procedure
+## Verification Completed (This Session)
 
-When the user says the work is complete, update this file with final evidence
-and a section titled `After merge: next session starts here`. Commit that update
-on this branch, then merge PR #4 only with explicit user authorization.
+- **Full pytest:** 192 passed (measured via `python3 -m pytest -v`, collection 192 tests, 54.73s) — same count as prior Codespace measurement via hook `EXACT_COLLECTED_TESTS=192` at commit `8e292046340886bac087a9b3bb71372ebe8e2058`
+- **Focused tests:** all 192 passed; no separate focused subset needed for doc-only changes but compile/lint gates run
+- **Compile:** `python3 -m py_compile scripts/*.py src/slumdog/*.py tests/*.py` — passed
+- **Lint:** `python3 -m pyflakes scripts src/slumdog tests` — passed, no findings
+- **Diff-check:** `git diff --check` — passed (fixed trailing whitespace)
+- **Status:** `git status --short` shows `M README.md`, `R STATE.md -> docs/STATE.md`, `?? AGENTS.md`, `?? docs/README.md`
+- **Data-bearing Codespace checks:** Not run in Arena (Arena lacks retained `data/raw` and `data/reports` ledgers). Prior Codespace verification at `e1a7716a99ae4e545b57c04df7d26cb57c1269fb` recorded 192 tests passed. For this doc-only PR, Codespace re-run recommended: `python -m pip install -e '.[dev]' && python -m pytest -q`
 
-## Cross-sport duplicate findings (2026-08-24)
+## Changed Files (This Milestone 0)
 
-A local read-only scan of all available `history_*.jsonl.gz` files found 279
-byte-identical extra rows across 278 repeated same-date keys. Forebet IDs also
-recur across dates for genuinely distinct fixtures, so the valid identity is
-`(sport, event_id, event_date)`, never event ID alone.
+- `STATE.md` → `docs/STATE.md` (git mv)
+- `AGENTS.md` (new)
+- `docs/STATE.md` (rewritten from diary to current-truth contract)
+- `README.md` (rewritten to price-free mission)
+- `docs/README.md` (new index)
+- `HANDOFF.md` (this file, updated for new mission and verification)
 
-Four legacy cross-date pairs are identical after removing only `event_date`:
-`basketball:198045`, `basketball:198046`, `football:2041406`, and
-`volleyball:96303`. Treat these as unresolved; do not auto-delete them. A
-same-key conflict also exists for `hockey:278977` on 2023-08-20: the ledger has
-incompatible 1-6 and 0-4 results. Neither can be selected without source bytes.
+## Open / Parked / Unresolved
 
-Raw files were absent for seven sampled suspicious dates, although manifest
-receipts preserve source URL, byte count, and SHA-256. This is a sampled result,
-not a claim that every legacy raw file is absent. Hashes alone cannot restore
-provenance and a refetch is not the historical capture.
+**Open (Milestone 0 closure):**
+- User review of doc classification before any deletions (required by prompt)
+- Commit + push this branch, open PR from `arena/01a033af-slumdog`
 
-The backfill write path now validates a complete day before output: exact
-same-key payloads collapse, while conflicting payloads raise with identifying
-fields before any day rows are appended. `append_settled_from_capture` remains
-out of scope because it writes a separate interim artifact.
+**Parked:**
+- American football odds probe `scripts/probe_american_football_odds.py` — do not run before ~2026-09-10
+- Complex ensembles — baselines first after unlock
+- Esoccer separate audit (player-handle identity, no dated archive)
+- Dropped football getrs.php keys audit
+- Sparse hockey/rugby/volleyball/handball pricing re-check on in-season top-league dates
+- Auto-rewrite/compact legacy ledgers — prohibited without explicit authorization
 
-## MMA void-and-priced raw verification (2026-08-24)
+**Unresolved Evidence (preserved from prior audit):**
+- 4 cross-date normalized-identical pairs: `basketball:198045`, `basketball:198046`, `football:2041406`, `volleyball:96303` — rescheduled vs date-boundary? Unresolved, not auto-deleted
+- Hockey `278977` (2023-08-20) same-key conflicting results 1-6 vs 0-4 — needs source bytes
+- MMA 11 rows both void+priced — plausible pre-scratch but unverified (7 raw captures absent)
+- Absent sampled raw bytes for 7 suspicious dates — manifest retains URL/byte-count/SHA256 only
+- Football DC token `21` raw, unnormalized, preserved
+- Scorer market subtype unknown; display order preserved but not ranking; empty rows emit nothing; fill-rate unknown
+- Football 963-date backfill gap quantification + replay feasibility
 
-The 11 rows that are both `VOID` and priced span seven dates from 2026-04-19
-through 2026-07-25. Each date has a manifest receipt with source URL, byte count,
-and source SHA-256, but no corresponding local file under `data/raw/mma/<date>`.
-The derived ledger proves the rows contain both fields; it does not prove the
-history of when prices were posted relative to a scratch/no-contest. Treat the
-pre-scratch explanation as plausible but unverified. Do not refetch and present
-new bytes as the historical capture.
+## PR State
 
-## After merge: next session starts here
+- **Current branch:** `arena/01a033af-slumdog` (delivery)
+- **Base:** `main` @ `2e3daa40b60ed520a0bcb2f178ef4219fad4d026` (merge of PR #5)
+- **PR not yet opened** — will be opened from this branch after this handoff commit
+- **Mergeability:** No conflicts expected (doc-only changes + move)
+- **User authorization:** Not yet given — do not merge until user explicitly authorizes after reviewing doc audit
 
-PR #4 is the completed integrity checkpoint and was explicitly authorized for
-merge on 2026-08-24. The next session should start from updated `main`, read
-this file and `docs/FOREBET_DEPTH_AUDIT.md`, and keep model training frozen.
+## Evidence Language Compliance
 
-Next priorities, discussion before coding:
+- Verified from code: `git mv` operation, `grep` results, file lists
+- Verified from executed probe: pytest 192 passed, py_compile passed, pyflakes passed, diff-check passed
+- Plausible but unverified: none claimed as verified in this doc-only change
+- Unresolved conflict: retained competing facts (duplicate audits) without silently choosing one
 
-1. Finish the retained DOM field map for `#dbc_table .rcnt` and
-   `#gscr_table .rcnt`. Verified so far: double-chance probability/pick are
-   captured, its single selected-pick American coefficient is dropped, and
-   goalscorer containers expose three player predictions that are currently
-   dropped. Do not infer first/anytime semantics. Preserve the observed raw
-   DC token `21` until its meaning is verified.
-2. Quantify the 963-date football backfill gap and retained-capture replay
-   feasibility before fetching anything.
-3. Audit sparse pricing markup for hockey, rugby, volleyball, handball, and
-   baseball using retained bytes first.
-4. Audit dropped football getrs.php keys from retained captures where possible.
-5. Perform a separate read-only esoccer depth assessment.
-6. Run the American-football odds probe only on or after approximately
-   2026-09-10.
+## After Merge: Next Session Starts Here
 
-Unresolved legacy evidence must stay unresolved: four cross-date normalized-
-identical pairs, `hockey:278977`'s conflicting results, absent raw bytes for the
-sampled suspicious dates, and the 11 MMA void/priced rows whose pre-scratch
-explanation is plausible but unverified. Never rewrite those ledgers or invent
-provenance without explicit authorization and source bytes.
+Read `AGENTS.md` first, then `README.md`, then `docs/STATE.md`, then `HANDOFF.md`, then `docs/FOREBET_DEPTH_AUDIT.md`, then relevant source/tests.
 
-## Durable operating guide and evidence standard
+**Exact next task (Milestone 1 — audit existing underdog machinery):**
 
-This section is a mandatory continuation contract. Treat it as an engineering
-deliverable, not an informal summary. It must be updated before a merge and
-must retain evidence needed to continue without reconstructing it from chat.
+DISCUSS BEFORE CODING. Inspect existing implementation and report what already exists for:
+- candidate generation
+- favorite/underdog assignment
+- feature construction
+- historical labels
+- training
+- calibration
+- ranking
+- reporting
+- daily scheduling
+- settlement
+- model cards
+- shadow/paper outputs
 
-### Repository and workspace workflow
+Key files likely include:
+- `src/slumdog/contracts.py`
+- `src/slumdog/magolide.py`
+- `src/slumdog/training.py`
+- `src/slumdog/research.py`
+- `src/slumdog/pipeline.py`
+- `src/slumdog/history.py`
+- `src/slumdog/feature_contracts.py`
+- sport-specific modules
+- tests covering candidates/training/reports
+- `docs/STATE.md`
+- `HANDOFF.md`
 
-- `main` is the only permanent branch. Arena work is delivered from the
-  session-assigned `arena/...` branch; do not create another permanent branch,
-  rewrite `main`, force-push, or delete unmerged work.
-- Keep one coherent PR open for active-session work. Do not merge it without
-  explicit user authorization. Immediately before a user-authorized merge,
-  update this file, run/record verification, commit and push the final handoff,
-  and confirm PR mergeability.
-- Arena checkout: `/home/user/Slumdog`. User Codespace checkout:
-  `/workspaces/Slumdog`. They are separate filesystems. Uncommitted files,
-  ignored files, captures, and ledgers do not cross this boundary.
-- Tracked Git changes transfer only via commit/push/pull. Never assume a file
-  visible in Codespace is visible in Arena. Inspect retained Codespace data
-  before proposing a network refetch.
-- For small evidence, produce a compact structured report under `/tmp` and
-  paste/attach it. When exact bytes matter, transfer only relevant retained
-  files and record their SHA-256; a compact report is not equivalent to source
-  bytes. Never commit raw captures, ledgers, temporary archives, or secrets.
-- After an authorized merge, the user may safely run in Codespace:
-  ```bash
-  cd /workspaces/Slumdog
-  git status --short
-  git checkout main
-  git pull --ff-only origin main
-  git branch -d <merged-arena-branch>
-  git push origin --delete <merged-arena-branch>
-  git fetch --prune origin
-  git status
-  git branch -a
-  ```
-  Lowercase `git branch -d` is intentional: it refuses to delete unmerged work.
-
-### Evidence language
-
-Classify claims precisely:
-
-- **Verified from code:** name exact file/function/selector (and line context
-  when useful).
-- **Verified from retained bytes:** record source paths, available SHA-256,
-  selectors, and representative observed values.
-- **Verified from an executed live probe:** record date, URL, route, request
-  count, outcome, and rate-limit behavior.
-- **Derived from a ledger:** name ledger path, row counts, dedupe key, and
-  provenance limitations.
-- **Plausible but unverified:** explain why no source can prove it.
-- **Unresolved conflict:** retain competing facts; never silently choose one.
-
-Do not call chat memory, navigation labels, assumptions, or missing raw bytes
-"confirmed." Newly fetched bytes are never a replacement for a missing
-historical capture.
-
-### Change control, parser, and network rules
-
-- Discuss findings before coding unless the user explicitly authorizes a change.
-  No drive-by refactors or speculative abstractions.
-- Model training remains frozen until the user explicitly unlocks it. Forebet is
-  the sole external source. Preserve immutable captures, never fabricate
-  provenance, never automatically rewrite/compact legacy ledgers, and fail
-  loudly on conflicting source facts.
-- Missing stays missing; never zero-fill. Do not infer market semantics absent
-  from source labels. Prefer selector-scoped parsing where stable DOM exists.
-  Every parser change needs a minimal fixture-based regression test.
-- Prefer retained bytes before network access. Use existing collector/relay code,
-  never ad-hoc scraping; at most six workers, small batches, and 62-second
-  inter-batch pauses. One-off probes are sequential/minimal and must record URL,
-  date, route, and result. Do not run the NFL odds probe before approximately
-  2026-09-10.
-
-### Required handoff content and verification gates
-
-For every complete/open/parked/unresolved item, record: status; problem/root
-cause; exact files/functions; implemented behavior; test names; commands and
-results; evidence paths/values; unresolved edge cases; prohibited assumptions;
-and precise next action. DOM work additionally records root/row selectors,
-field selectors, observed values, dash/missing behavior, ambiguous tokens,
-count/order assumptions, and test fixture shapes.
-
-Before push, run and record:
-```bash
-python -m pytest -q
-python3 -m py_compile scripts/*.py src/slumdog/*.py
-pyflakes scripts/*.py src/slumdog/*.py tests
-git diff --check
-git status --short
-```
-If unavailable, record the exact failure and give the user the precise
-Codespace command. Before merge also record branch/HEAD, diffstat/files, test
-count, compile/lint/diff-check results, data-bearing Codespace audits, parked
-items, PR mergeability, and explicit user authorization.
-
-## DOM market field-map checkpoint (2026-08-24)
-
-Status: implemented on the active Arena branch; unmerged at this writing.
-Evidence: compact DOM report generated in the user Codespace from five retained
-`data/raw/details/football/*.html` captures and pasted into the session. It is
-verified retained-byte evidence, but those source bytes are not present in the
-Arena filesystem.
-
-### Verified selector map
+Produce gap analysis against price-free candidate contract:
 
 ```
-#dbc_table .rcnt
-  probability: .fprc .fpr
-  raw pick: .predict .forepr
-  selected-pick coefficient: .prmod .lscrsp
-
-#gscr_table .rcnt
-  probabilities: .fprc > .playerPred
-  names: .predict .forepr .playerPred
-  coefficients: .prmod .lscrsp
+event identity
+sport
+event date/time
+Forebet favorite
+Forebet underdog
+Forebet favorite probability
+Forebet underdog probability
+draw probability where applicable
+model underdog-win probability
+lift over Forebet underdog probability
+strength score
+supporting evidence
+contradicting evidence
+missing evidence
+candidate status
+model/version identifier
+source/provenance identifiers
+optional price context
 ```
 
-A `.rcnt` is one fixture row in both tables. In the scorer table, one fixture
-row contains up to three probability/player descendants; it is not three scorer
-rows. Observed retained examples:
+Do not implement contract until user approves audit.
 
-```
-DC: 85% / 12 / -1111; 76% / 12 / -435; 77% / 12 / -;
-    70% / 21 / -556; 73% / 12 / -345
-Scorers: 19%,18%,18% <-> Tulio,Dulay,Tesar <-> -,-,-
-         46%,24%,24% <-> Ouattara,Labeau,Stewart <-> -,-,-
-         18%,12%,12% <-> Bačić,Krilanovich,Pudić <-> -,-,-
-```
+**Required evidence for next session:**
+- Current `magolide.py` underdog cascade still odds-first (higher odds = underdog) vs new mission (lower Forebet prob = underdog)
+- `contracts.py` `PriceState` and `CandidateState` (SHADOW_UNPRICED/PRICED/CERTIFIED) vs new statuses (STRONG_UNDERDOG/WATCHLIST/INSUFFICIENT_EVIDENCE/REJECTED_SOURCE_CONFLICT/NO_STRONG_UNDERDOG)
+- `feature_contracts.py` `MODEL_TRAINING_ALLOWED = False` — remains frozen
+- `training.py`/`research.py` walk-forward vs random split, Brier, calibration
+- Settlement handling for draws (currently `winner_index 0` draw) — must count as failed UNDERDOG_WIN
 
-`21` remains raw and unnormalized. The DC coefficient prices one selected pick,
-not a matrix. Scorer market subtype is unknown; display order is preserved but
-not asserted to be a ranking. Empty scorer rows emit nothing. Sample population
-fill-rate remains unknown.
+**Safe commands:**
+- `git status --short`
+- `git diff --check`
+- `python3 -m py_compile scripts/*.py src/slumdog/*.py tests/*.py`
+- `python3 -m pyflakes scripts src/slumdog tests`
+- `python3 -m pytest -q` (or `python -m pytest -q` in Codespace after install)
+- `grep -Rni --exclude-dir=.git 'STATE\.md' .`
+- Read-only local audits of `src/slumdog/*.py`
 
-Implementation: `src/slumdog/detail_facets.py` adds a small soup-based helper
-called from the football branch of `parse_detail()`. It scopes DC/scorer parsing
-to the roots above; `_football_detail_stats(text)` retains text-only
-corners/cards extraction and no longer uses a global double-chance regex.
-Typed DC fields are `doublechance_prob`, `doublechance_pick_raw`,
-`doublechance_pick` (only `1X`, `12`, `X2`), and
-`doublechance_pick_price_am` (signed token only). Typed scorer fields pair
-probabilities/names only when nonempty, equal count, valid percentages, and at
-most three; prices are optional signed tokens. No model feature or market
-semantic is added.
+**Prohibited probes:**
+- Do not run `scripts/probe_american_football_odds.py` before ~2026-09-10
+- Do not fetch Forebet aggressively; use retained bytes where possible; at most 6 workers, 62s pauses
+- Do not train models (training frozen)
+- Do not auto-rewrite legacy ledgers
+- Do not infer undocumented market semantics
 
-Regression fixtures: `tests/test_football_dom_markets.py` covers standard DC,
-raw `21`/dash behavior, aligned scorers, empty rows, mismatch suppression, and
-out-of-root lookalikes. `tests/test_detail_facets.py` now proves the established
-text extractor still coexists with DOM-scoped DC extraction.
-
-## Current-session verification (DOM market implementation)
-
-Codespace verification completed on 2026-08-24 at commit
-`e1a7716a99ae4e545b57c04df7d26cb57c1269fb`, after installing the project with
-`python -m pip install -e '.[dev]'`.
-
-- Full `python -m pytest -q`: passed. Its quiet progress output did not establish
-  a count.
-- Focused `python -m pytest -q tests/test_football_dom_markets.py tests/test_detail_facets.py`:
-  passed (16 tests).
-- `python -m py_compile scripts/*.py src/slumdog/*.py tests/*.py`: passed.
-- `python -m pyflakes scripts src/slumdog tests`: passed with no findings.
-- `git diff --check`: passed with no output.
-- Exact collection was subsequently measured, after synchronizing to
-  `8e292046340886bac087a9b3bb71372ebe8e2058`, with a pytest collection hook:
-  `EXACT_COLLECTED_TESTS=192`. A prior `grep '::' | wc -l` command returned `0`
-  because quiet collection output has no matching node-ID lines; it is not a
-  test count and must not be reused.
-- Temporary `football-detail-samples.tar.gz` was removed in Codespace; subsequent
-  `git status --short` was empty. No raw captures or ledgers appear in the PR diff.
-
-The earlier Arena-only dependency limitations remain true of that sandbox, but
-are superseded as merge-gate evidence by this dependency-equipped Codespace run.
-
-
-## After merge: next session starts here
-
-Read `HANDOFF.md` first, then `docs/FOREBET_DEPTH_AUDIT.md`, then the DOM helper
-in `src/slumdog/detail_facets.py` and `tests/test_football_dom_markets.py`.
-Model training remains frozen.
-
-1. PR #5's DOM-market implementation has passed the recorded Codespace gates.
-   Review its final diff and mergeability, then await explicit user merge
-   authorization; do not rerun or alter it without new evidence.
-2. Quantify the 963-date football backfill gap and retained-capture replay
-   feasibility before fetching anything.
-3. Audit sparse hockey/rugby/volleyball/handball/baseball pricing from retained
-   bytes; then audit dropped football getrs.php keys and esoccer separately.
-
-Safe read-only commands include `git status --short`, `git diff --check`, the
-compile/lint/test gates above, and local retained-data inventory. Do not run the
-American-football odds probe before approximately 2026-09-10. Do not fetch to
-replace missing historical bytes. Arena currently lacks the five retained
-football detail captures; the compact Codespace DOM report is recorded above,
-but exact-byte review requires the user to transfer relevant bytes.
-
-Do not "fix" unresolved legacy evidence without new source bytes: four
-cross-date normalized-identical pairs, hockey `278977` conflicting results,
-absent sampled raw bytes, and 11 MMA void/priced rows with only a plausible
-pre-scratch explanation. Preserve raw DC token `21`, scorer-market semantic
-uncertainty, and unknown scorer sample fill rate.
+**Unresolved facts to preserve:**
+- Four cross-date identical pairs, hockey 278977 conflict, MMA 11 void+priced, absent raw bytes, DC token 21, scorer semantic uncertainty
