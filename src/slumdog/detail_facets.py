@@ -347,25 +347,47 @@ def _following_numbers(text: str, label: str, count: int, flags: int = re.I) -> 
     return [float(n) for n in nums[:count]]
 
 
+_PCT_TOKEN = r"(\d+(?:\.\d+)?|NAN)"
+
+
+def _parse_pct(token: str) -> float | None:
+    """Forebet renders no-data shot-direction splits as the literal ``NAN%``.
+
+    Treat that as missing (never zero-fill) while still extracting the
+    surrounding totals/blocked counts that are present.
+    """
+    if not token or token.upper() == "NAN":
+        return None
+    return float(token)
+
+
 def _football_shots(text: str) -> dict[str, float]:
     out: dict[str, float] = {}
-    # Block per side: "Total shots <n> Avg. per game <avg> Blocked <n> Avg. per game <avg>
-    #                 <off>% OFF target <on>% ON target <in>% Inside box <out>% Outside box"
+    # Block per side: "Total shots <n> <avg> Blocked <n> <bavg>
+    #                 <off>% OFF target <on>% ON target <in>% Inside box ...".
+    # Percentages may be the literal "NAN" when Forebet has no sample; that must
+    # not discard the total/blocked counts that are still present.
     blocks = list(re.finditer(
         r"Total\s+shots\s+(\d+(?:\.\d+)?).*?Blocked\s+(\d+(?:\.\d+)?)"
-        r".*?(\d+(?:\.\d+)?)%\s*OFF\s+target.*?(\d+(?:\.\d+)?)%\s*ON\s+target"
-        r".*?(\d+(?:\.\d+)?)%\s*Inside\s+box",
+        r".*?" + _PCT_TOKEN + r"%\s*OFF\s+target.*?" + _PCT_TOKEN
+        + r"%\s*ON\s+target.*?" + _PCT_TOKEN + r"%\s*Inside\s+box",
         text, re.I | re.S,
     ))
     for idx, m in enumerate(blocks[:2], 1):
-        total, blocked, off_pct, on_pct, inside_pct = (float(g) for g in m.groups())
+        total, blocked = float(m.group(1)), float(m.group(2))
+        off_pct = _parse_pct(m.group(3))
+        on_pct = _parse_pct(m.group(4))
+        inside_pct = _parse_pct(m.group(5))
         avg = _following_numbers(text[m.start():m.start() + 120], "Total shots", 2)
         blocked_avg = _following_numbers(text[m.start():m.start() + 200], "Blocked", 2)
         out[f"p{idx}_shots_total"] = total
         out[f"p{idx}_shots_blocked"] = blocked
-        out[f"p{idx}_shots_on_target_pct"] = on_pct
-        out[f"p{idx}_shots_off_target_pct"] = off_pct
-        out[f"p{idx}_shots_inside_box_pct"] = inside_pct
+        if on_pct is not None:
+            out[f"p{idx}_shots_on_target_pct"] = on_pct
+        if off_pct is not None:
+            out[f"p{idx}_shots_off_target_pct"] = off_pct
+        if inside_pct is not None:
+            out[f"p{idx}_shots_inside_box_pct"] = inside_pct
         if avg and len(avg) >= 2:
             out[f"p{idx}_shots_avg"] = avg[1]
         if blocked_avg and len(blocked_avg) >= 2:
