@@ -165,3 +165,25 @@ def test_football_numeric_detail_stats_from_observed_page():
     numeric = facets.numeric()
     assert numeric["football_p1_shots_total"] == 68
     assert numeric["football_corners_avg_line"] == 9.57
+
+
+def test_football_shots_nan_percentages_still_extracts_totals():
+    # Forebet renders no-data shot-direction splits as literal "NAN%" on
+    # tiny-sample amateur fixtures (Kutjevo v Svacic, 2026-08-23). That must
+    # not discard the total/blocked counts present on the same block, and
+    # NAN must surface as missing -- never zero-filled.
+    from slumdog.detail_facets import _football_shots
+
+    text = (
+        "Total shots 0 0 Blocked 0 0 NAN% OFF target NAN% ON target 0% Inside "
+        "box 0% Outside box SVA Avg. per game Total shots 0 0 Blocked 0 0 NAN% "
+        "OFF target NAN% ON target 0% Inside box 0% Outside box KUT"
+    )
+    out = _football_shots(text)
+    assert out["p1_shots_total"] == 0
+    assert out["p1_shots_blocked"] == 0
+    assert "p1_shots_on_target_pct" not in out
+    assert "p1_shots_off_target_pct" not in out
+    # The 0% inside-box value is a real (zero) figure, not NAN.
+    assert out["p1_shots_inside_box_pct"] == 0
+    assert out["p2_shots_total"] == 0
