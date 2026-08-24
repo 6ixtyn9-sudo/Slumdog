@@ -19,9 +19,11 @@ Invariants (from `AGENTS.md`):
 
 ## Current Phase
 
-**Current phase: Milestone 2 — price-free identity, label, and contract foundation**
+**Current phase: Milestone 3 — feature timing and leakage audit (read-only analysis)**
 **Milestone 0 documentation governance: COMPLETE**
 **Milestone 1 audit: COMPLETE (approved, evidence record `docs/MILESTONE1_AUDIT.md`)**
+**Milestone 2 price-free identity, label, contracts: COMPLETE (including 2E hardening)**
+**Milestone 2E hardening: COMPLETE — identity-bound label, SPORTS registry draw capability, exact reason preservation**
 **Model training: FROZEN**
 
 Milestone 0 completed:
@@ -35,35 +37,42 @@ Milestone 0 completed:
 Milestone 1 completed (read-only audit, no code changes):
 - Audited candidate generation, fav/underdog assignment, features, labels, training, calibration, ranking, reporting, scheduling, settlement, model cards, shadow outputs
 - Exposed central problem: system can operate without odds but identity, scoring, feature vectors, thresholds, research approval still materially odds-first
-- Produced `docs/MILESTONE1_AUDIT.md` with 10 gaps and staged plan, approved with refinements (NO_STRONG_UNDERDOG daily result not candidate state, preserve legacy CandidateState, separate assessment from selection, odds outside core assessment, no ranking by model prob before approval, leakage as priority blocker, missing values remain unknown, daily success needs several metrics)
+- Produced `docs/MILESTONE1_AUDIT.md` with 10 gaps and staged plan, approved with refinements
 
-Milestone 2 (current, approved next work only): Implement price-free identity, label, and contract foundation — do NOT proceed into feature-vector changes, training, ranking thresholds, or daily production yet. Implemented in `src/slumdog/underdog.py` with 30 tests.
+Milestone 2 COMPLETE (including 2E hardening):
+- 2A: Pure Forebet identity `identify_forebet_underdog(prob1, prob2, draw_prob)` — validates present/finite/[0,1], higher=favorite lower=underdog, draw does not determine identity, equal→EQUAL_PROBABILITY, missing→MISSING_PROBABILITY, non-finite→NON_FINITE, out-of-range→OUT_OF_RANGE, no fallback
+- 2B: Historical label foundation — draw-capable: underdog win 1, fav win 0, draw 0, void excluded; two-way: underdog win 1, fav win 0, unexpected draw excluded UNEXPECTED_DRAW_FOR_TWO_WAY, void excluded
+- 2C: Price-free contracts `StrongUnderdogAssessment`, `DailyUnderdogShortlist`, statuses `UnderdogAssessmentStatus` and `DailyShortlistStatus`, helper `build_assessment_from_identity()`
+- 2D: Explicit tests 30 → 40 after 2E, full suite 222 → 232
+- 2E hardening (new): UnderdogLabelResult adds identity_ineligibility_reason/sport/draw_possible, private _label_from_indices raw helper, public label_underdog_outcome(sport, identity: ForebetUnderdogIdentity, winner_index, disposition, source_conflict) derives fav/dog/eligible/reason from identity, derives draw_possible from SPORTS[sport].draw_possible, unknown sport→UNKNOWN_SPORT exclusion, preserves exact EQUAL_PROBABILITY/MISSING_PROBABILITY/NON_FINITE/OUT_OF_RANGE reasons, caller cannot reverse fav/dog or override draw capability, training frozen, no integration into legacy training.py yet
 
-Active: Milestone 2A–2D implementation — pure Forebet identity function, historical label function, new price-free contracts, explicit tests.
+Milestone 3 CURRENT (read-only, no code change): Feature timing and leakage audit — inventory every potential feature, classify PRE_EVENT/RESULT_ONLY/UNKNOWN, odds excluded, missingness policy, produce `docs/FEATURE_TIMING_CONTRACT.md` with required columns, priority investigation period_values 10 points.
 
 ## Merged Work (main @ 2e3daa4) + PR #6 Branch (arena/01a033af-slumdog)
 
 - PR #4: football truncated relay fix, H2H fabrication guard, MMA duplicate dedup, no-odds documentation (cricket 0% price verified, American football dash handling)
 - PR #5: DOM-scoped football double-chance + scorer market facets (`detail_facets.py`), regression tests `test_football_dom_markets.py`
 - Milestone 0 (branch): `STATE.md` → `docs/STATE.md` git mv, `AGENTS.md` constitution, `docs/STATE.md` rewrite to current truth, `README.md` rewrite to price-free mission, `docs/README.md` index, historical banners, price coverage reference-only clarification, 5 corrections verified, 192 tests passed
-- Milestone 1 (branch): `docs/MILESTONE1_AUDIT.md` read-only audit (10 gaps, staged plan), approved with 8 refinements (NO_STRONG_UNDERDOG daily vs candidate, preserve legacy CandidateState, separate assessment from selection, odds outside core, no ranking by model prob before approval, leakage as priority blocker, missing values remain unknown, daily success metrics)
-- Milestone 2 (branch, current): `src/slumdog/underdog.py` new price-free module — pure Forebet identity `identify_forebet_underdog()`, historical label `label_underdog_outcome()`, contracts `StrongUnderdogAssessment`, `DailyUnderdogShortlist`, statuses `UnderdogAssessmentStatus` (STRONG_UNDERDOG/WATCHLIST/INSUFFICIENT_EVIDENCE/REJECTED_SOURCE_CONFLICT/INELIGIBLE) and `DailyShortlistStatus` (CANDIDATES_FOUND/NO_STRONG_UNDERDOG/SOURCE_FAILURE), helper `build_assessment_from_identity()`, 30 new tests in `tests/test_price_free.py`, full suite 222 passed
-- Core pipeline (unchanged legacy): immutable captures, per-sport history ledgers (`history_<sport>.jsonl.gz` + manifest), depth-sweep census, `forebet.py` relay handling (Markdown reader mode → html relay → direct), timing classes (`PRE_EVENT`/`LIVE_ONLY`/`RESULT_ONLY`/`UNKNOWN`), sport-specific settlement contracts
-- Feature contracts in `feature_contracts.py` (currently aspirational, not training inputs, MODEL_TRAINING_ALLOWED=False)
-- Legacy Ma Golide Robber reproducer in `magolide.py` (odds-first cascade, now marked legacy, superseded by new price-free path, preserved for forensic comparability)
+- Milestone 1 (branch): `docs/MILESTONE1_AUDIT.md` read-only audit (10 gaps, staged plan), approved with 8 refinements
+- Milestone 2 (branch): `src/slumdog/underdog.py` new price-free module — pure Forebet identity, label with hardening, contracts, 40 tests in `tests/test_price_free.py`, full suite 232 passed
+- Milestone 2E (branch, commit fee5d78): label contract hardening — identity-bound public API, SPORTS registry draw capability, exact reason preservation, 10 new hardening tests, 40 total price-free tests
+- Milestone 3 (branch, current): `docs/FEATURE_TIMING_CONTRACT.md` doc-only audit — period_values 10-point investigation (DOM selector .predQ .fj_column, listing parser parsers.py:170-173, contract facets["period_values"], feature builders basketball.py:287 etc, sports used basketball/american_football/hockey/rugby/handball/volleyball/esports, ambiguous predicted vs completed, populated for upcoming unknown, settlement flow into period_scores_1/2 not same key, tests synthetic not proof, final timing UNKNOWN PROHIBITED), full feature inventory with columns Feature|Family|Sport|Source|Raw|Timing|Evidence|Missing|Indicator|Odds-dependent|Legacy|New-path|Action, missingness audit GENUINE_ZERO/UNKNOWN_ENCODED_AS_ZERO/SAFE_MATHEMATICAL_DEFAULT/UNRESOLVED
+- Core pipeline (unchanged legacy): immutable captures, per-sport history ledgers, depth-sweep census, `forebet.py` relay handling, timing classes, sport-specific settlement contracts
+- Feature contracts in `feature_contracts.py` (aspirational, not training inputs, MODEL_TRAINING_ALLOWED=False)
+- Legacy Ma Golide Robber reproducer in `magolide.py` (odds-first cascade, legacy, superseded by new price-free path, preserved for forensic comparability)
 
 ## Active Blockers
 
-**Milestone 0 governance: COMPLETE. Milestone 1 audit: COMPLETE.** Missing prices are NOT blockers — odds are optional context only (see invariants). Price coverage is reference evidence only, not readiness gate.
+**Milestone 0 governance: COMPLETE. Milestone 1 audit: COMPLETE. Milestone 2 COMPLETE (including 2E).** Missing prices are NOT blockers — odds are optional context only. Price coverage is reference evidence only, not readiness gate.
 
-Real blockers (per user correction, updated for Milestone 2 progress):
+Real blockers (updated for Milestone 3):
 
-1. **Underdog machinery still odds-first in legacy path** — `contracts.py`/`magolide.py`/`feature_contracts.py` and all sport detectors encode odds-first cascade; new price-free path `underdog.py` implemented but legacy not yet replaced (preserved per migration strategy). Needs integration in later stage after tests.
-2. **Underdog-win label contract foundation done, integration pending** — pure label `label_underdog_outcome()` implemented with explicit exclusion reasons (VOID, EQUAL_PROBABILITY, MISSING, INVALID_WINNER, SOURCE_CONFLICT, UNEXPECTED_DRAW_FOR_TWO_WAY), draw-capable draw=0, two-way draw excluded, void excluded. Needs integration into training orchestration and settlement verification in later milestone (currently training.py still uses legacy odds-first candidate).
-3. **Draw settlement behavior verified in pure function, needs pipeline integration** — pure label counts draw as failed for draw-capable, excluded for two-way; pipeline settlement must enforce same.
-4. **Feature timing and leakage controls need auditing (priority blocker)** — `period_values` timing=UNKNOWN, prohibited as feature until proven pre-event; football detail fields (shots, passes, possession, attacks, next-fixture difficulty) need timing evidence from retained bytes or live Jina probe; odds must not be features (still present in legacy feature vectors, not yet removed per Milestone 2 scope).
-5. **Model validation and daily shortlist behavior not yet approved** — walk-forward exists, but ROI gate still in legacy validation, required daily metrics (top_1_daily_hit_rate, top_3_daily_any_hit_rate, days_with_at_least_one_selected_winner, selected_candidates_per_day, no_pick_day_rate, candidate_precision) not yet implemented; shortlist cap 1–3, explicit NO_STRONG_UNDERDOG daily status, assessment vs selection separation defined in new contracts but not yet integrated into pipeline.
-6. **Training remains frozen** — `MODEL_TRAINING_ALLOWED=False`, explicit user unlock required after dataset/target/timing/validation contract approved. No feature-vector, threshold, ranking, model approval, or daily production changes in Milestone 2.
+1. **Underdog machinery still odds-first in legacy path** — `contracts.py`/`magolide.py`/`feature_contracts.py` and all sport detectors encode odds-first cascade; new price-free path `underdog.py` implemented with hardening but legacy not yet replaced (preserved per migration strategy). Needs integration after Milestone 3 approval.
+2. **Label contract hardened and complete, integration pending** — public `label_underdog_outcome(sport, identity, ...)` derives draw capability from SPORTS registry, preserves exact identity reasons, unknown sport explicit UNKNOWN_SPORT, draw-capable draw=0, two-way draw excluded. Needs integration into training orchestration and settlement verification in later milestone (training.py still uses legacy odds-first candidate — intentionally not integrated per compatibility boundary).
+3. **Feature timing and leakage controls — Milestone 3 audit CURRENT** — `period_values` timing=UNKNOWN, prohibited as feature until proven pre-event (10-point investigation in FEATURE_TIMING_CONTRACT.md); football detail fields (shots, passes, possession, attacks, next-fixture difficulty) need timing evidence from retained bytes or live Jina probe; odds must not be features (still present in legacy feature vectors, not yet removed per Milestone 2 scope — now explicitly prohibited in FEATURE_TIMING_CONTRACT.md). No code change during Milestone 3 audit.
+4. **Model validation and daily shortlist behavior not yet approved** — walk-forward exists, but ROI gate still in legacy validation, required daily metrics not yet implemented; shortlist cap 1–3, explicit NO_STRONG_UNDERDOG daily status, assessment vs selection separation defined in new contracts but not yet integrated.
+5. **Training remains frozen** — `MODEL_TRAINING_ALLOWED=False`, explicit user unlock required after dataset/target/timing/validation contract approved. No feature-vector, threshold, ranking, model approval, or daily production changes until Milestone 3 approved.
+6. **Nested mutability and status semantics contract notes for later** — frozen dataclass with mutable dicts optional_price_context/rejection_counts/source_receipt not deeply immutable, must be defensively copied/immutable/frozen by ledger before immutable receipts (Milestone 6), record only; STRONG_UNDERDOG must not imply approved probability until scoring/thresholds approved, tests may construct status for serialization, operational code must not emit, reserved fields remain None.
 
 Data limitations below are parked observations, not candidate-readiness gates.
 
@@ -74,6 +83,7 @@ Data limitations below are parked observations, not candidate-readiness gates.
 - 14-day preliminary experiment discarded (generic vector, insufficient sport-specific representation).
 - No retraining allowed until each sport has: listing/detail facet contract, historical depth receipt, timing classification, settlement coverage, price-availability profile, AND user approves dataset/target/timing/validation contract.
 - When unlocked, first implement transparent baselines (Forebet underdog prob, gap, recent-form differential, Ma Golide heuristic, simple interpretable model) with walk-forward validation, never random splits.
+- Milestone 3 is read-only analysis — no code change, no training.
 
 ## Current Data Limitations (Reference Observations, Not Readiness Gates)
 
@@ -89,22 +99,23 @@ Data limitations below are parked observations, not candidate-readiness gates.
 
 **Milestone 0: COMPLETE (approved with 5 documentation corrections, no deletions authorized).**
 
-**Milestone 1: COMPLETE (approved as evidence record `docs/MILESTONE1_AUDIT.md`, with 8 refinements: NO_STRONG_UNDERDOG daily vs candidate, preserve legacy CandidateState, separate assessment from selection, odds outside core, no ranking by model prob before approval, leakage as priority blocker, missing values remain unknown, daily success metrics).**
+**Milestone 1: COMPLETE (approved as evidence record `docs/MILESTONE1_AUDIT.md`, with 8 refinements).**
 
-Milestone 1 completed:
-- Audited candidate generation, fav/underdog assignment, features, labels, training, calibration, ranking, reporting, scheduling, settlement, model cards, shadow outputs
-- Produced 10 gaps with Finding/Evidence/Current/Required/Smallest change/Tests/Risk and staged plan
-- Central problem: system can operate without odds but identity, scoring, feature vectors, thresholds, research approval still materially odds-first
+**Milestone 2: COMPLETE (including 2E hardening, approved).** Deliverables: `src/slumdog/underdog.py` with identity-bound label, SPORTS registry draw capability, exact reason preservation, 40 tests, 232 total passed, training frozen, compatibility boundary explicit (no integration into legacy training.py yet).
 
-**Milestone 2 (current, approved next work only):** Implement price-free identity, label, and contract foundation — do NOT proceed into feature-vector changes, training, ranking thresholds, or daily production yet.
+**Milestone 3 CURRENT (approved next work, read-only, no code change):** Feature timing and leakage audit — inventory every potential feature, classify PRE_EVENT/RESULT_ONLY/UNKNOWN with proof, odds excluded, missingness policy, produce `docs/FEATURE_TIMING_CONTRACT.md`.
 
-Milestone 2A–2D implemented in `src/slumdog/underdog.py`:
-- 2A: Pure Forebet identity `identify_forebet_underdog(prob1, prob2, draw_prob)` — validates present/finite/[0,1], higher= favorite, lower=underdog, draw does not determine identity, equal → no underdog with EQUAL_PROBABILITY reason, missing/invalid → MISSING_PROBABILITY etc., no fallback to odds/pick/form, no gap threshold
-- 2B: Historical label `label_underdog_outcome()` — draw-capable: underdog win 1, fav win 0, draw 0, void excluded; two-way: underdog win 1, fav win 0, unexpected draw excluded, void excluded; also excludes no eligible identity, invalid winner, source conflict, missing probs, explicit exclusion reason
-- 2C: New price-free contracts `StrongUnderdogAssessment` (event_id, sport, date, participants, fav/underdog index/name/prob, draw prob, gap, status, supporting/contradicting/missing evidence, source_url, raw_sha256, captured_at, assessment_version, reserved optional slumdog_underdog_probability/probability_lift/baseline_strength_score must remain None until approved, isolated optional_price_context block may be absent, no other field depends on it) and `DailyUnderdogShortlist` (target_date, generated_at, status CANDIDATES_FOUND/NO_STRONG_UNDERDOG/SOURCE_FAILURE, assessments_considered, strong_candidates, watchlist_candidates, rejection_counts, assessment_version, source_receipt, no-pick example status=NO_STRONG_UNDERDOG with empty tuple, no fake candidate, no draw selection)
-- 2D: Explicit tests — identity (10 cases: p1 fav, p2 fav, equal, missing, non-finite, out-of-range, draw larger not selected, odds disagree no effect, pick disagrees no effect, form disagrees no effect), labels (11 cases: draw-capable underdog/fav win, draw=0, two-way underdog/fav win, two-way draw excluded, void excluded, equal prob excluded, missing prob excluded, invalid winner excluded, source conflict excluded), contracts (6 cases: round-trip, no price field required, missing optional evidence accepted, no-pick serializes zero candidates, cannot contain fake draw, provenance optional only where legacy lacks, reserved fields None, optional price context isolated, no fake candidate for no-pick status)
+Milestone 3 deliverable `docs/FEATURE_TIMING_CONTRACT.md` must have columns: Feature|Feature family|Sport|Source file/function|Raw source field|Timing|Evidence|Missing representation|Missing indicator|Odds-dependent|Legacy use|New-path eligibility|Action; Timing PRE_EVENT/RESULT_ONLY/UNKNOWN; New-path ALLOWED/PROHIBITED/PARKED; Rules RESULT_ONLY→prohibited, UNKNOWN→prohibited until verified, odds-dependent→prohibited, missing odds irrelevant, existing use does not prove eligibility, suggestive name does not prove timing, evidence must cite code or retained bytes.
 
-Next after Milestone 2 approval: Milestone 3 — define feature and timing contract (inventory every potential feature, classify PRE_EVENT/RESULT_ONLY/UNKNOWN, odds excluded, missingness policy, feature table).
+Priority investigation period_values 10 points: DOM selector/JSON field, listing/detail parser storing it, event contract field, feature-builder consuming, sports used, whether predicted/completed/schedule/ambiguous, populated for upcoming events, settlement output flow into same facet key, tests covering, final timing; until resolved period_values=UNKNOWN new path PROHIBITED.
+
+Required families audit list includes Forebet probs, draw prob, gap/ratio, entropy/dominance, recent form, home/away, win rates, table position, H2H, goals/points scored/conceded, shots, shots on target, blocked/off-target, possession, passes accuracy, attacks, dangerous attacks, event-time, schedule difficulty, weather, venue, stable IDs, cup flags, trend text, double chance, goalscorer predictions, sport-specific physical/stat facets, every price/odds/overround/fair prob/value-edge field, every final/period/penalty/extra-time/disposition/settlement field.
+
+Missingness audit for every feature None/NaN/0/empty string/absent key/sentinel text and zero fallback classification GENUINE_ZERO/UNKNOWN_ENCODED_AS_ZERO/SAFE_MATHEMATICAL_DEFAULT/UNRESOLVED.
+
+No code change during Milestone 3 audit. Documentation lifecycle: MILESTONE1_AUDIT.md → REFERENCE, FEATURE_TIMING_CONTRACT.md → CURRENT, STATE.md concise truth, HANDOFF records functions/tests/blocker, README reflects transition.
+
+Next after Milestone 3 approval: Milestone 4 — implement price-free feature vector based on approved FEATURE_TIMING_CONTRACT.md ALLOWED only, with missingness indicators, no odds, no RESULT_ONLY, no UNKNOWN.
 
 ## Parked Work
 
@@ -125,40 +136,37 @@ Next after Milestone 2 approval: Milestone 3 — define feature and timing contr
 - Scorer market subtype unknown; display order preserved but not ranking; empty rows emit nothing; sample fill-rate unknown.
 - Football 963-date backfill gap quantification + replay feasibility from retained captures.
 - HT/FT as single combined price, not 9-cell matrix — verified distinctness but need DOM selector proof.
+- period_values timing UNKNOWN — needs live Jina probe for upcoming basketball date, check .predQ presence and sum vs predicted_score, per FEATURE_TIMING_CONTRACT.md 10-point investigation.
 
 ## Links to Deeper Documents
 
 - `AGENTS.md` — permanent mission + operating constitution
 - `README.md` — product overview (price-free mission, operational commands)
-- `HANDOFF.md` — session continuation record (Milestone 0 corrections + Milestone 1 audit)
-- `docs/STATE.md` — this file, canonical current truth (Milestone 1 audit phase)
-- `docs/README.md` — doc index with purpose/status/last-verified, price coverage reference-only clarification
-- `docs/MILESTONE1_AUDIT.md` — **NEW** price-free machinery audit: 10 gaps (odds-first identity, threshold, price features, zero-fill, equal prob, shortlist policy, ROI gate, incomplete receipt, evidence, timing), staged implementation plan
-- `docs/FOREBET_DEPTH_AUDIT.md` — training freeze receipt, facet inventory, historical depth contract, price coverage snapshots (reference only), verified no-odds gaps, duplicate audits
-- `docs/FOREBET_ARCHIVE_DEPTH.json` — annual archive probe matrix (conservative backfill starts)
+- `HANDOFF.md` — session continuation record
+- `docs/STATE.md` — this file, canonical current truth
+- `docs/README.md` — doc index with purpose/status/last-verified
+- `docs/MILESTONE1_AUDIT.md` — price-free machinery audit: 10 gaps, staged plan, now REFERENCE (gaps resolved for identity/label/contracts, timing audit now CURRENT)
+- `docs/FEATURE_TIMING_CONTRACT.md` — **NEW CURRENT** — feature timing and leakage audit with period_values 10-point investigation, full feature inventory, missingness audit, new-path eligibility
+- `docs/FOREBET_DEPTH_AUDIT.md` — training freeze receipt, facet inventory, historical depth contract, price coverage snapshots (reference only)
+- `docs/FOREBET_ARCHIVE_DEPTH.json` — annual archive probe matrix
 - `docs/FOREBET_DETAIL_COVERAGE.json` — 3-page-per-sport detail factor sample
-- `docs/FOREBET_PRICE_COVERAGE.json` — representative price snapshot per sport (reference evidence only, not readiness gate)
-- `docs/FOREBET_FACET_ANALYSIS_PLAN.md` — timing classes + analysis order (10-step, ROI not primary)
-- `docs/MA_GOLIDE_ROBBER_FORENSIC.md` — legacy Robber forensic spec (HISTORICAL, not current contract)
+- `docs/FOREBET_PRICE_COVERAGE.json` — representative price snapshot per sport (reference only)
+- `docs/FOREBET_FACET_ANALYSIS_PLAN.md` — timing classes + analysis order
+- `docs/MA_GOLIDE_ROBBER_FORENSIC.md` — legacy Robber forensic spec (HISTORICAL)
 
-## Verification Receipt (Milestone 0 complete, corrections applied, Milestone 1 audit complete, Milestone 2 implemented)
+## Verification Receipt (Milestone 0-3)
 
-- `git mv STATE.md docs/STATE.md` executed, verified `test ! -e STATE.md && test -e docs/STATE.md`
-- `grep -Rni --exclude-dir=.git --exclude='*.pyc' 'STATE\.md' .` shows only `docs/STATE.md` refs (plus historical mention of move in docs/README.md — acceptable, no active root link)
-- `AGENTS.md` created with invariants + read order
-- `docs/STATE.md` rewritten from diary to current-truth, phase advanced to Milestone 1 audit then Milestone 2, Milestone 0 marked COMPLETE, missing prices clarified as NOT blockers, price coverage reference-only
-- `README.md` rewritten to price-free mission, operational commands preserved, Status updated to Milestone 2
-- `docs/README.md` index created, price coverage clarified as reference only not gate, MILESTONE1_AUDIT.md classified as CURRENT during migration REFERENCE after gaps resolved
-- `docs/MA_GOLIDE_ROBBER_FORENSIC.md` banner added: HISTORICAL, not current contract; `FOREBET_DEPTH_AUDIT.md` and `FOREBET_FACET_ANALYSIS_PLAN.md` banners added
-- Milestone 1 audit: `docs/MILESTONE1_AUDIT.md` 885 lines + 8 refinements annotation, read-only, no code changes
-- Milestone 2: `src/slumdog/underdog.py` new module (pure identity, label, contracts), `tests/test_price_free.py` 30 tests, full suite 222 passed
-- Tests: `python3 -m pytest -q` 222 passed (192 legacy + 30 new), `python3 -m py_compile scripts/*.py src/slumdog/*.py tests/*.py` ok, `python3 -m pyflakes scripts src/slumdog tests` ok, `git diff --check` ok
-- Training remains frozen: `MODEL_TRAINING_ALLOWED=False`, no feature-vector/threshold/ranking/model approval/daily production changes in Milestone 2
+- `git mv STATE.md docs/STATE.md` executed, verified
+- Milestone 1 audit: `docs/MILESTONE1_AUDIT.md` 885 lines + corrections, read-only
+- Milestone 2: `src/slumdog/underdog.py` new module, `tests/test_price_free.py` 40 tests (10 hardening), full suite 232 passed
+- Milestone 2E: hardening verified — identity-bound public API, SPORTS registry draw capability, exact reason preservation, tests: label uses indices from identity, cannot reverse via public API, draw from SPORTS, football draw 0, basketball draw excluded, unknown sport explicit, equal/missing/non-finite/out-of-range survive
+- Milestone 3: `docs/FEATURE_TIMING_CONTRACT.md` created doc-only, period_values 10-point trace, feature inventory with required columns, missingness audit, no code change
+- Tests: `python3 -m pytest -q` 232 passed, `python3 -m pytest -q tests/test_price_free.py` 40 passed, `python3 -m py_compile src/slumdog/underdog.py` ok, `python3 -m pyflakes src/slumdog/underdog.py` ok, `git diff --check` ok
+- Training remains frozen: `MODEL_TRAINING_ALLOWED=False`
 
-## After Milestone 2 (Now)
+## After Milestone 3 (Now)
 
-- Milestone 0 approved, no deletions authorized, PR #6 open unmerged
-- Milestone 1 audit approved as evidence record with 8 refinements
-- Milestone 2 implemented: pure Forebet identity, label, price-free contracts, 30 tests, 222 total passed, training frozen, no feature-vector changes
-- Next: Awaiting user approval of Milestone 2 implementation (Finding addressed, Files changed, New contracts, Identity policy, Label policy, Legacy preserved, Tests added, Exact test count, Full verification, Remaining gaps) before proceeding to Milestone 3 feature timing contract
-- Do not proceed into feature-vector changes, training, ranking thresholds, or daily production until Milestone 2 approved
+- Milestone 0 COMPLETE, Milestone 1 COMPLETE (now REFERENCE), Milestone 2 COMPLETE (including 2E), Milestone 3 CURRENT (read-only audit)
+- PR #6 open unmerged, branch arena/01a033af-slumdog
+- Next: Awaiting user approval of FEATURE_TIMING_CONTRACT.md (period_values investigation, feature inventory, missingness audit, new-path eligibility) before proceeding to Milestone 4 feature vector implementation (ALLOWED only, no odds, no RESULT_ONLY, no UNKNOWN)
+- Do not proceed into feature-vector code changes, training, ranking thresholds, or daily production until Milestone 3 approved

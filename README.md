@@ -65,8 +65,8 @@ Football, Basketball, Tennis, Hockey, Baseball, American Football, Rugby, Handba
 
 ## Status
 
-- Phase: Milestone 1 — price-free underdog machinery audit (Milestone 0 COMPLETE, docs/STATE.md is canonical current truth).
-- Model training: FROZEN. See `docs/STATE.md` for blockers (missing prices NOT blockers), data limitations (reference observations), unresolved evidence.
+- Phase: Milestone 3 — feature timing and leakage audit (read-only, no code change). Milestone 0 COMPLETE, Milestone 1 COMPLETE now REFERENCE, Milestone 2 COMPLETE including 2E hardening (identity-bound label, SPORTS registry draw capability, exact reason preservation, 40 tests, 232 total). `docs/STATE.md` is canonical current truth, `docs/FEATURE_TIMING_CONTRACT.md` is CURRENT feature timing contract (period_values UNKNOWN PROHIBITED until verified, full inventory with required columns, missingness audit).
+- Model training: FROZEN. See `docs/STATE.md` for blockers (missing prices NOT blockers), data limitations (reference observations), unresolved evidence. No feature-vector/threshold/ranking/model approval/daily production changes until Milestone 3 approved.
 - Slumdog emits shadow research only; no CERTIFIED output.
 
 ## Quick Start
