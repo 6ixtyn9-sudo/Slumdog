@@ -100,6 +100,59 @@ def _load_jsonl_gz_file_with_source(path: Path) -> tuple[list[RawWithSource], li
     return raws, file_errors
 
 
+def _extract_schema_exclusion_diagnostic(d: Any, rws: RawWithSource, reason: str, error_msg: str) -> dict[str, Any]:
+    diag: dict[str, Any] = {
+        "source_file": rws.source_file,
+        "source_location": rws.source_location,
+        "exclusion_reason": reason,
+        "error_msg": error_msg,
+    }
+    if not isinstance(d, dict):
+        diag["top_level_keys"] = []
+        diag["field_types"] = {}
+        diag["participant_like_fields"] = {}
+        diag["facets_type"] = "None"
+        diag["facets_keys"] = []
+        return diag
+
+    diag["top_level_keys"] = sorted(str(k) for k in d.keys())
+    diag["field_types"] = {str(k): type(v).__name__ for k, v in d.items()}
+
+    def _get_scalar(key: str, max_len: int = 100) -> Any:
+        val = d.get(key)
+        if val is None or isinstance(val, (int, float, bool)):
+            return val
+        if isinstance(val, str):
+            return val[:max_len] + ("..." if len(val) > max_len else "")
+        return f"<{type(val).__name__}>"
+
+    for k in ["event_id", "sport", "event_date", "participant_1", "participant_2", "source_url", "reconstruction", "schema_version"]:
+        diag[k] = _get_scalar(k)
+
+    participant_like = {}
+    target_subs = ["participant", "team", "home", "away", "host", "guest", "player", "fighter"]
+    for k, v in d.items():
+        k_str = str(k)
+        k_norm = k_str.lower()
+        if any(sub in k_norm for sub in target_subs):
+            if v is None or isinstance(v, (int, float, bool, str)):
+                participant_like[k_str] = _get_scalar(k_str)
+
+    diag["participant_like_fields"] = dict(sorted(participant_like.items()))
+
+    facets = d.get("facets")
+    if isinstance(facets, dict):
+        diag["facets_type"] = "dict"
+        diag["facets_keys"] = sorted(str(k) for k in facets.keys())
+    elif facets is not None:
+        diag["facets_type"] = type(facets).__name__
+        diag["facets_keys"] = []
+    else:
+        diag["facets_type"] = "None"
+        diag["facets_keys"] = []
+
+    return diag
+
 def audit_dataset(
     root: Path,
     receipt_path: Path,
@@ -312,7 +365,7 @@ def audit_dataset(
             schema_excluded_rows += 1
             schema_reasons["SCHEMA_NOT_A_DICT"] += 1
             if schema_exclusion_path:
-                schema_excluded_entries.append({"reason": "SCHEMA_NOT_A_DICT", "source_file": rws.source_file, "source_location": rws.source_location, "raw_dict": d})
+                schema_excluded_entries.append(_extract_schema_exclusion_diagnostic(d, rws, "SCHEMA_NOT_A_DICT", "Not a dict"))
             continue
         try:
             ev = _validate_settled_dict(d)
@@ -323,17 +376,17 @@ def audit_dataset(
             reason = msg.split(":")[0] if ":" in msg else msg
             schema_reasons[reason] += 1
             if schema_exclusion_path:
-                schema_excluded_entries.append({"reason": reason, "error_msg": msg, "source_file": rws.source_file, "source_location": rws.source_location, "raw_dict": d})
+                schema_excluded_entries.append(_extract_schema_exclusion_diagnostic(d, rws, reason, msg))
         except Exception as e:
             schema_excluded_rows += 1
             reason = f"SCHEMA_UNEXPECTED_{type(e).__name__}"
             schema_reasons[reason] += 1
             if schema_exclusion_path:
-                schema_excluded_entries.append({"reason": reason, "error_msg": str(e), "source_file": rws.source_file, "source_location": rws.source_location, "raw_dict": d})
+                schema_excluded_entries.append(_extract_schema_exclusion_diagnostic(d, rws, reason, str(e)))
 
     if schema_exclusion_path:
         schema_exclusion_path.parent.mkdir(parents=True, exist_ok=True)
-        # Avoid serializing extremely large reports, but this is diagnostic
+        schema_excluded_entries.sort(key=lambda x: (x.get("source_file", ""), x.get("source_location", "")))
         schema_exclusion_path.write_text(json.dumps(schema_excluded_entries, indent=2, sort_keys=True))
 
     unknown_schema = schema_reasons.get("UNKNOWN_SCHEMA_VERSION", 0)
