@@ -665,3 +665,146 @@ User approval of this audit and staged plan before any code changes. Training re
 
 ---
 **Verification:** Read-only audit, no code changes, `grep` and file reads only, no network fetches, no training runs.
+
+## Approved Plan Corrections (2026-08-24) — User Refinements (No Evidence Rewritten)
+
+User approved this audit as Milestone 1 evidence record, subject to design refinements. No documentation deleted. Training remains frozen. Original evidence above preserved.
+
+### 1. NO_STRONG_UNDERDOG is daily result, not candidate state
+
+Proposed enum mixing candidate-level and day-level was:
+
+```
+STRONG_UNDERDOG, WATCHLIST, INSUFFICIENT_EVIDENCE, REJECTED_SOURCE_CONFLICT, NO_STRONG_UNDERDOG
+```
+
+Correction: Two separate concepts:
+
+**Event-level assessment status:**
+
+```
+STRONG_UNDERDOG
+WATCHLIST
+INSUFFICIENT_EVIDENCE
+REJECTED_SOURCE_CONFLICT
+INELIGIBLE
+```
+
+**Daily shortlist status:**
+
+```
+CANDIDATES_FOUND
+NO_STRONG_UNDERDOG
+SOURCE_FAILURE
+```
+
+Daily report with zero candidates must explicitly contain:
+
+```json
+{
+  "status": "NO_STRONG_UNDERDOG",
+  "candidates": []
+}
+```
+
+Do not create fake candidate to carry no-pick status. Implemented in `underdog.py` as `UnderdogAssessmentStatus` and `DailyShortlistStatus`.
+
+### 2. Do not destructively repurpose legacy CandidateState yet
+
+Existing `CandidateState` (SHADOW_UNPRICED/PRICED/CERTIFIED/REJECTED) appears across tests, reports, ledgers, serialized artifacts.
+
+For first migration:
+
+- Introduce clearly named price-free assessment contract (`StrongUnderdogAssessment`, `DailyUnderdogShortlist`)
+- Preserve legacy classes while new path tested
+- Mark old contract as legacy in code comments/docs (see `underdog.py` header)
+- Do not mass-rename or silently reinterpret serialized states
+- Remove legacy only in later explicitly approved cleanup after equivalence/migration tests
+
+Suggested names used: `UnderdogAssessmentStatus`, `StrongUnderdogAssessment`, `DailyUnderdogShortlist`, `DailyShortlistStatus` — avoid ambiguous reuse of `RobberCandidate`.
+
+### 3. Separate assessment from selection
+
+Every eligible event may receive an assessment, but only small subset becomes daily selections.
+
+**Assessment contains:** favorite/underdog identity, Forebet probabilities, evidence completeness, strength/prob estimate when available, supporting/contradicting/missing evidence, event-level status.
+
+**Daily shortlist contains:** generation date/time, model/heuristic version, source receipt, ordered selected assessments, explicit daily status, number considered, number rejected, rejection summary.
+
+This separation prevents confusing "evaluated event" with "recommended underdog" — implemented in new contracts.
+
+### 4. Odds must be outside core assessment
+
+Do not include price-derived fields in: favorite/underdog identity, eligibility, strength score, model features, confidence, shortlist ranking, missing-evidence score.
+
+If optional odds displayed, place in isolated block:
+
+```json
+"optional_price_context": {
+  "participant_1": null,
+  "participant_2": null,
+  "captured_at": null
+}
+```
+
+Block may be entirely absent. No other field may depend on it. Implemented in `StrongUnderdogAssessment.optional_price_context` with tests `test_optional_price_context_isolated`.
+
+### 5. Do not rank by model probability before model approved
+
+Stage 6 originally said "rank by prob + lift + evidence" but training remains frozen, no approved Slumdog upset probability yet.
+
+Before model approval, system may produce: contract fixtures, historical labels, transparent baseline assessments, shadow output marked as baseline/research, no operational probability claim.
+
+Do not expose heuristic score as `slumdog_underdog_probability` unless genuinely calibrated probability from approved model. Use neutral `baseline_strength_score` for deterministic research baselines — implemented as reserved optional fields that remain None until legitimately produced, with test `test_assessment_reserved_fields_remain_none_until_approved`.
+
+### 6. Treat suspected leakage as priority blocker
+
+`period_values` finding must be resolved before any feature migration or training. Audit must trace where `period_values` enters event, whether predicted or completed scoring, where basketball consumes it, whether available before kickoff, whether settlement-derived period data can flow back.
+
+Until proven pre-event:
+
+```
+period_values timing = UNKNOWN
+eligibility as model feature = PROHIBITED
+```
+
+Likewise football detail fields on upcoming detail page may be pre-event historical aggregates, but each extractor still needs timing evidence recorded. This remains parked blocker per `docs/STATE.md`.
+
+### 7. Missing values must remain unknown
+
+Do not immediately replace every zero fallback without checking semantics. Classify each zero as: genuine zero, legacy unknown encoded as zero, mathematically safe default, leakage-prevention fallback.
+
+For optional evidence, preferred representation: missing value (None/NaN in training matrix), explicit missingness indicator, imputation inside training pipeline. Do not change missingness globally in one patch — will be staged per feature family in Milestone 3/4.
+
+### 8. Daily success needs several metrics
+
+User objective: find at least one winning underdog on as many days as possible. Track:
+
+```
+top_1_daily_hit_rate
+top_3_daily_any_hit_rate
+days_with_at_least_one_selected_winner
+selected_candidates_per_day
+no_pick_day_rate
+candidate_precision
+```
+
+Must be reported together. `top_3_daily_any_hit_rate` alone can be inflated by selecting more candidates, so every result must include number selected. Draw remains failed UNDERDOG_WIN selection.
+
+### Classification
+
+Per user: `MILESTONE1_AUDIT.md` should be classified as:
+
+```
+CURRENT during migration
+REFERENCE after its approved gaps are resolved
+```
+
+Avoid letting 885-line audit become permanent current-state truth. `docs/STATE.md` remains concise authority — updated in `docs/README.md` inventory accordingly.
+
+### Approved Next Work: Milestone 2 Only
+
+Implement price-free identity, label, and contract foundation only (Milestone 2A–2D). Do not proceed into feature-vector changes, training, ranking thresholds, or daily production yet. Training remains frozen. Implemented in `src/slumdog/underdog.py` with 30 tests in `tests/test_price_free.py`, full suite 222 passed.
+
+---
+**Verification of corrections:** No evidence rewritten above; this section added as annotation. New contracts preserve legacy, no destructive repurposing, no fake candidate for no-pick, price context isolated, reserved fields remain None, leakage treated as blocker.
