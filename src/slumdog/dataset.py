@@ -306,12 +306,21 @@ class PriceFreeDatasetReceipt:
     label_contract_version: str
     input_digest: str
     per_sport: dict[str, dict[str, int]] = field(default_factory=dict)
+    # Conflict census fields (Milestone 4F)
+    conflicting_composite_keys: int = 0
+    conflicting_rows: int = 0
+    conflicts_by_sport: dict[str, int] = field(default_factory=dict)
+    conflicts_by_field: dict[str, int] = field(default_factory=dict)
+    conflicts_with_valid_raw_sha256: int = 0
+    conflicts_without_valid_raw_sha256: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["per_sport"] = {k: payload["per_sport"][k] for k in sorted(payload["per_sport"])}
         for sport in payload["per_sport"]:
             payload["per_sport"][sport] = {kk: payload["per_sport"][sport][kk] for kk in sorted(payload["per_sport"][sport])}
+        payload["conflicts_by_sport"] = {k: payload["conflicts_by_sport"][k] for k in sorted(payload["conflicts_by_sport"])}
+        payload["conflicts_by_field"] = {k: payload["conflicts_by_field"][k] for k in sorted(payload["conflicts_by_field"])}
         return payload
 
     @classmethod
@@ -320,6 +329,400 @@ class PriceFreeDatasetReceipt:
         allowed = set(cls.__dataclass_fields__.keys())
         filtered = {k: v for k, v in data.items() if k in allowed}
         return cls(**filtered)
+
+
+# ---------------------------------------------------------------------------
+# Conflict census support (Milestone 4F)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ValidEventWithSource:
+    """Valid SettledEvent plus audit-only source metadata (not in features or example contract)."""
+
+    event: SettledEvent
+    source_file: str
+    source_location: str  # e.g., line:62 or index:5
+
+
+@dataclass
+class ConflictGroup:
+    """One conflicting composite key group — compact, no full event serialization."""
+
+    composite_key: tuple[str, str, str]  # (sport, event_id, event_date)
+    sport: str
+    conflicting_fields: list[str]
+    classification: str  # DOMAIN_CONFLICT, OUTCOME_CONFLICT, PROBABILITY_CONFLICT, DISPOSITION_CONFLICT, PROVENANCE_CONFLICT, MULTIPLE
+    raw_sha256_values: list[str]
+    source_url_values: list[str]
+    source_entries: list[dict[str, str]]  # each: source_file, source_location, raw_sha256, source_url
+
+
+def _compare_events_for_conflict(a: SettledEvent, b: SettledEvent) -> tuple[set[str], set[str]]:
+    """Compare two events with same composite key, return (conflicting_fields, categories).
+
+    Categories: DOMAIN, OUTCOME, PROBABILITY, DISPOSITION, PROVENANCE
+    Provenance conflict only when both non-empty and different (deterministic merge policy).
+    """
+    conflicting: set[str] = set()
+    categories: set[str] = set()
+
+    # DOMAIN: participant_1, participant_2, league
+    if a.participant_1 != b.participant_1:
+        conflicting.add("participant_1")
+        categories.add("DOMAIN")
+    if a.participant_2 != b.participant_2:
+        conflicting.add("participant_2")
+        categories.add("DOMAIN")
+    if a.league != b.league:
+        conflicting.add("league")
+        categories.add("DOMAIN")
+
+    # OUTCOME: winner_index, score_1, score_2, period_scores_1, period_scores_2
+    if a.winner_index != b.winner_index:
+        conflicting.add("winner_index")
+        categories.add("OUTCOME")
+    if a.score_1 != b.score_1:
+        conflicting.add("score_1")
+        categories.add("OUTCOME")
+    if a.score_2 != b.score_2:
+        conflicting.add("score_2")
+        categories.add("OUTCOME")
+    if a.period_scores_1 != b.period_scores_1:
+        conflicting.add("period_scores_1")
+        categories.add("OUTCOME")
+    if a.period_scores_2 != b.period_scores_2:
+        conflicting.add("period_scores_2")
+        categories.add("OUTCOME")
+
+    # PROBABILITY: probability_1, probability_2, draw_probability
+    if a.probability_1 != b.probability_1:
+        conflicting.add("probability_1")
+        categories.add("PROBABILITY")
+    if a.probability_2 != b.probability_2:
+        conflicting.add("probability_2")
+        categories.add("PROBABILITY")
+    if a.draw_probability != b.draw_probability:
+        conflicting.add("draw_probability")
+        categories.add("PROBABILITY")
+
+    # DISPOSITION
+    if a.disposition != b.disposition:
+        conflicting.add("disposition")
+        categories.add("DISPOSITION")
+
+    # PROVENANCE: raw_sha256, source_url — only conflict when both non-empty and different
+    a_raw, a_url = _extract_provenance(a)
+    b_raw, b_url = _extract_provenance(b)
+    if a_raw and b_raw and a_raw != b_raw:
+        conflicting.add("raw_sha256")
+        categories.add("PROVENANCE")
+    if a_url and b_url and a_url != b_url:
+        conflicting.add("source_url")
+        categories.add("PROVENANCE")
+
+    return conflicting, categories
+
+
+def _classify_conflict(categories: set[str]) -> str:
+    if not categories:
+        return "NO_CONFLICT"
+    if len(categories) > 1:
+        return "MULTIPLE"
+    cat = next(iter(categories))
+    return {
+        "DOMAIN": "DOMAIN_CONFLICT",
+        "OUTCOME": "OUTCOME_CONFLICT",
+        "PROBABILITY": "PROBABILITY_CONFLICT",
+        "DISPOSITION": "DISPOSITION_CONFLICT",
+        "PROVENANCE": "PROVENANCE_CONFLICT",
+    }.get(cat, "MULTIPLE")
+
+
+def build_conflict_census(
+    valid_with_source: list[ValidEventWithSource],
+    *,
+    feature_contract_version: str = FEATURE_CONTRACT_VERSION,
+    label_contract_version: str = LABEL_CONTRACT_VERSION,
+) -> tuple[list[ConflictGroup], PriceFreeDatasetReceipt, dict[str, Any]]:
+    """Read-only conflict census — collects all ledger conflicts without failing loudly.
+
+    Returns (conflict_groups, receipt, debug_info)
+    - Does not emit examples
+    - Receipt accounts for all readable rows
+    - Deterministic under input reordering (sorted by composite key and source location)
+    - Conflict report entries contain only compact identifying fields, no full event serialization
+    """
+    # Group by composite key
+    groups: dict[tuple[str, str, str], list[ValidEventWithSource]] = defaultdict(list)
+    for v in valid_with_source:
+        key = (v.event.sport, v.event.event_id, v.event.event_date)
+        groups[key].append(v)
+
+    # Sort each group's entries deterministically by source_file and location to ensure deterministic output
+    for key in groups:
+        groups[key] = sorted(groups[key], key=lambda x: (x.source_file, x.source_location, x.event.event_id))
+
+    exact_duplicates_collapsed = 0
+    conflicting_composite_keys = 0
+    conflicting_rows = 0
+    conflicts_by_sport: Counter = Counter()
+    conflicts_by_field: Counter = Counter()
+    conflicts_with_valid = 0
+    conflicts_without_valid = 0
+
+    conflict_groups: list[ConflictGroup] = []
+
+    # For receipt accounting: canonical rows are those non-conflicting after deterministic merge
+    canonical_events: list[SettledEvent] = []
+
+    # Sort keys deterministically for receipt stability
+    sorted_keys = sorted(groups.keys(), key=lambda k: (k[2], k[0], k[1]))  # event_date, sport, event_id
+
+    for key in sorted_keys:
+        entries = groups[key]
+        if len(entries) == 1:
+            # Single entry — canonical
+            canonical_events.append(entries[0].event)
+            continue
+
+        # Multiple entries with same composite key — need to check conflicts
+        # First, collect all conflicting fields across all pairs
+        all_conflicting_fields: set[str] = set()
+        all_categories: set[str] = set()
+        has_conflict = False
+
+        # Track canonical for this key using deterministic provenance merge policy
+        # Start with first entry, then iterate
+        canonical_entry = entries[0]
+        canonical_raw, canonical_url = _extract_provenance(canonical_entry.event)
+        canonical_has = _has_provenance(canonical_raw, canonical_url)
+
+        # For exact duplicate counting within this group
+        group_exact_collapsed = 0
+
+        # Compare each other entry against canonical (and against each other for field collection)
+        for other in entries[1:]:
+            # Compare for conflict classification across all pairs (not just vs canonical, but all pairs)
+            # For simplicity, compare other vs canonical and also pairwise for field collection
+            conflicting_fields, categories = _compare_events_for_conflict(canonical_entry.event, other.event)
+
+            # If no conflicting fields (identical or missing vs present provenance), it's exact duplicate / deterministic merge
+            if not conflicting_fields:
+                # Deterministic merge: present wins
+                other_raw, other_url = _extract_provenance(other.event)
+                other_has = _has_provenance(other_raw, other_url)
+                if not canonical_has and other_has:
+                    canonical_entry = other
+                    canonical_raw, canonical_url = other_raw, other_url
+                    canonical_has = other_has
+                group_exact_collapsed += 1
+                continue
+            else:
+                # Has conflict
+                has_conflict = True
+                all_conflicting_fields.update(conflicting_fields)
+                all_categories.update(categories)
+
+        # Also need to check pairwise among non-canonical entries for additional conflicting fields
+        # (e.g., entry 2 vs entry 3 might have additional differing fields not vs canonical)
+        for i in range(len(entries)):
+            for j in range(i + 1, len(entries)):
+                cf, cats = _compare_events_for_conflict(entries[i].event, entries[j].event)
+                if cf:
+                    all_conflicting_fields.update(cf)
+                    all_categories.update(cats)
+
+        if has_conflict:
+            conflicting_composite_keys += 1
+            conflicting_rows += len(entries)
+            sport = key[0]
+            conflicts_by_sport[sport] += 1
+            for f in all_conflicting_fields:
+                conflicts_by_field[f] += 1
+
+            # Check provenance validity for this conflict
+            has_valid_sha = any(_is_valid_sha256(_extract_provenance(e.event)[0]) for e in entries if _extract_provenance(e.event)[0])
+            if has_valid_sha:
+                conflicts_with_valid += 1
+            else:
+                conflicts_without_valid += 1
+
+            classification = _classify_conflict(all_categories)
+
+            # Collect raw_sha256 and source_url values (deduplicated, sorted for determinism)
+            raw_vals = sorted(set(_extract_provenance(e.event)[0] for e in entries if _extract_provenance(e.event)[0]))
+            url_vals = sorted(set(_extract_provenance(e.event)[1] for e in entries if _extract_provenance(e.event)[1]))
+
+            source_entries = []
+            for e in sorted(entries, key=lambda x: (x.source_file, x.source_location)):
+                raw, url = _extract_provenance(e.event)
+                source_entries.append({
+                    "source_file": e.source_file,
+                    "source_location": e.source_location,
+                    "raw_sha256": raw,
+                    "source_url": url,
+                })
+
+            conflict_groups.append(ConflictGroup(
+                composite_key=key,
+                sport=sport,
+                conflicting_fields=sorted(all_conflicting_fields),
+                classification=classification,
+                raw_sha256_values=raw_vals,
+                source_url_values=url_vals,
+                source_entries=source_entries,
+            ))
+        else:
+            # No conflict — deterministic merge resulted in one canonical
+            exact_duplicates_collapsed += group_exact_collapsed
+            canonical_events.append(canonical_entry.event)
+
+    # Sort conflict groups deterministically
+    conflict_groups = sorted(conflict_groups, key=lambda g: (g.composite_key[2], g.composite_key[0], g.composite_key[1]))
+
+    # Build receipt accounting for all readable rows
+    # valid_loaded_rows = total valid events
+    valid_loaded_rows = len(valid_with_source)
+    # canonical_input_rows = number of non-conflicting canonical events
+    canonical_input_rows = len(canonical_events)
+
+    # For eligible examples, we could build examples from canonical_events only if no conflicts? 
+    # But in census mode, examples not emitted, so eligible 0? However receipt should still account for readable rows.
+    # We'll compute eligible from canonical_events using same builder logic but without failing on conflicts (since conflicts already removed)
+    # For simplicity, compute eligible via building examples from canonical_events (non-conflicting only)
+    # This gives us date ranges, positive rate, etc for non-conflicting data
+    if canonical_events:
+        try:
+            examples_temp, receipt_temp = build_price_free_examples(canonical_events)
+            eligible_examples = receipt_temp.eligible_examples
+            builder_excluded_rows = receipt_temp.builder_excluded_rows
+            positive = receipt_temp.positive_underdog_wins
+            negative_fav = receipt_temp.negative_favorite_wins
+            negative_draw = receipt_temp.negative_draws
+            excluded_void = receipt_temp.excluded_void
+            excluded_source_conflict = receipt_temp.excluded_source_conflict
+            excluded_equal = receipt_temp.excluded_equal_probability
+            excluded_missing = receipt_temp.excluded_missing_probability
+            excluded_non_finite = receipt_temp.excluded_non_finite_probability
+            excluded_out_of_range = receipt_temp.excluded_out_of_range_probability
+            excluded_unknown_sport = receipt_temp.excluded_unknown_sport
+            excluded_unexpected_draw = receipt_temp.excluded_unexpected_two_way_draw
+            excluded_invalid_winner = receipt_temp.excluded_invalid_winner
+            excluded_other = receipt_temp.excluded_other
+            provenance_present = receipt_temp.provenance_present
+            provenance_missing = receipt_temp.provenance_missing
+            provenance_invalid = receipt_temp.provenance_invalid
+            positive_rate = receipt_temp.positive_rate
+            canonical_date_min = receipt_temp.canonical_date_min
+            canonical_date_max = receipt_temp.canonical_date_max
+            eligible_date_min = receipt_temp.eligible_date_min
+            eligible_date_max = receipt_temp.eligible_date_max
+            per_sport = receipt_temp.per_sport
+            input_digest = receipt_temp.input_digest
+        except Exception:
+            # If canonical events still have issues (should not), fallback to zeros
+            eligible_examples = 0
+            builder_excluded_rows = canonical_input_rows
+            positive = 0
+            negative_fav = 0
+            negative_draw = 0
+            excluded_void = 0
+            excluded_source_conflict = 0
+            excluded_equal = 0
+            excluded_missing = 0
+            excluded_non_finite = 0
+            excluded_out_of_range = 0
+            excluded_unknown_sport = 0
+            excluded_unexpected_draw = 0
+            excluded_invalid_winner = 0
+            excluded_other = 0
+            provenance_present = 0
+            provenance_missing = 0
+            provenance_invalid = 0
+            positive_rate = None
+            canonical_date_min = min((r.event_date for r in canonical_events), default=None)
+            canonical_date_max = max((r.event_date for r in canonical_events), default=None)
+            eligible_date_min = None
+            eligible_date_max = None
+            per_sport = {}
+            input_digest = _compute_input_digest(canonical_events)
+    else:
+        eligible_examples = 0
+        builder_excluded_rows = 0
+        positive = 0
+        negative_fav = 0
+        negative_draw = 0
+        excluded_void = 0
+        excluded_source_conflict = 0
+        excluded_equal = 0
+        excluded_missing = 0
+        excluded_non_finite = 0
+        excluded_out_of_range = 0
+        excluded_unknown_sport = 0
+        excluded_unexpected_draw = 0
+        excluded_invalid_winner = 0
+        excluded_other = 0
+        provenance_present = 0
+        provenance_missing = 0
+        provenance_invalid = 0
+        positive_rate = None
+        canonical_date_min = None
+        canonical_date_max = None
+        eligible_date_min = None
+        eligible_date_max = None
+        per_sport = {}
+        input_digest = "no-canonical"
+
+    receipt = PriceFreeDatasetReceipt(
+        raw_input_rows=0,  # will be filled by caller from schema result
+        schema_excluded_rows=0,
+        valid_loaded_rows=valid_loaded_rows,
+        exact_duplicates_collapsed=exact_duplicates_collapsed,
+        canonical_input_rows=canonical_input_rows,
+        eligible_examples=eligible_examples,
+        builder_excluded_rows=builder_excluded_rows,
+        input_rows=canonical_input_rows,
+        positive_underdog_wins=positive,
+        negative_favorite_wins=negative_fav,
+        negative_draws=negative_draw,
+        excluded_void=excluded_void,
+        excluded_source_conflict=excluded_source_conflict,
+        excluded_equal_probability=excluded_equal,
+        excluded_missing_probability=excluded_missing,
+        excluded_non_finite_probability=excluded_non_finite,
+        excluded_out_of_range_probability=excluded_out_of_range,
+        excluded_unknown_sport=excluded_unknown_sport,
+        excluded_unexpected_two_way_draw=excluded_unexpected_draw,
+        excluded_invalid_winner=excluded_invalid_winner,
+        excluded_other=excluded_other,
+        provenance_present=provenance_present,
+        provenance_missing=provenance_missing,
+        provenance_invalid=provenance_invalid,
+        positive_rate=positive_rate,
+        canonical_date_min=canonical_date_min,
+        canonical_date_max=canonical_date_max,
+        eligible_date_min=eligible_date_min,
+        eligible_date_max=eligible_date_max,
+        date_min=eligible_date_min,
+        date_max=eligible_date_max,
+        feature_contract_version=feature_contract_version,
+        label_contract_version=label_contract_version,
+        input_digest=input_digest,
+        per_sport=per_sport,
+        conflicting_composite_keys=conflicting_composite_keys,
+        conflicting_rows=conflicting_rows,
+        conflicts_by_sport=dict(conflicts_by_sport),
+        conflicts_by_field=dict(conflicts_by_field),
+        conflicts_with_valid_raw_sha256=conflicts_with_valid,
+        conflicts_without_valid_raw_sha256=conflicts_without_valid,
+    )
+
+    debug_info = {
+        "total_groups": len(groups),
+        "conflicting_keys": conflicting_composite_keys,
+    }
+
+    return conflict_groups, receipt, debug_info
 
 
 def _prior_scoring_stats(
@@ -657,9 +1060,9 @@ def build_price_free_examples(
             continue
 
         disp = (row.disposition or "SETTLED").strip().upper()
-        # Only VOID and NO_CONTEST are treated as void at builder level
+        # VOID and NO_CONTEST (compatibility alias) are treated as void at builder level
         # Unknown dispositions already schema-excluded, so here only check void
-        if disp in VOID_DISPOSITIONS:
+        if disp in VOID_DISPOSITIONS or disp in COMPATIBILITY_VOID_ALIASES:
             exclusion_counter["excluded_void"] += 1
             per_sport_counter[sport]["excluded_void"] += 1
             continue
