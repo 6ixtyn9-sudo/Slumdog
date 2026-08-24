@@ -540,12 +540,11 @@ def _football_lg_form(text: str) -> dict[str, float]:
 
 
 def _football_tab_markets(text: str) -> dict[str, float | str]:
-    """Top-of-page prediction tabs: corners/cards/double-chance/scorers.
+    """Text-only top-of-page corners and cards prediction tabs.
 
-    These markets have NO distinct JSON endpoint (tp=corners/doublechance/
-    goalscorer echo 1X2); the detail page is their only source. Extraction is
-    deliberately narrow so a layout change leaves values missing rather than
-    wrong.
+    Corners/cards have no distinct JSON endpoint (their ``tp`` routes echo
+    1X2). Double-chance and goalscorer data is intentionally extracted by the
+    DOM-scoped helper below: flattened page text can mix their values.
     """
     out: dict[str, float | str] = {}
     # Corners tab (detail page only; JSON tp=corners echoes 1X2). The flattened
@@ -587,11 +586,78 @@ def _football_tab_markets(text: str) -> dict[str, float | str]:
         out["cards_pred_low"] = float(cards.group(3))
         out["cards_pred_high"] = float(cards.group(4))
         out["cards_avg_line"] = float(cards.group(5))
-    # Double chance: "71% ... 1X/12/X2 ... predicted score".
-    dc = re.search(r"(\d+(?:\.\d+)?)%\s*(1X|12|X2)\b", text, re.I)
-    if dc:
-        out["doublechance_prob"] = float(dc.group(1))
-        out["doublechance_pick"] = dc.group(2).upper()
+    return out
+
+
+def _american_price(text: str) -> float | None:
+    """A displayed signed American coefficient, or missing for a dash/other text."""
+    token = _clean(text)
+    if re.fullmatch(r"[+-]\d+", token):
+        return float(token)
+    return None
+
+
+def _football_dom_tab_markets(soup: BeautifulSoup) -> dict[str, float | str]:
+    """Extract DC/scorer values from their verified, fixture-row DOM roots.
+
+    This deliberately does not use flattened page text: scorer percentages and
+    names otherwise sit beside the double-chance tab and can be misidentified.
+    A detail page is expected to expose one row per market for its fixture;
+    multiple rows are ambiguous for the scalar facet contract and are omitted.
+    """
+    out: dict[str, float | str] = {}
+
+    dc_rows = soup.select("#dbc_table .rcnt")
+    if len(dc_rows) == 1:
+        row = dc_rows[0]
+        prob_node = row.select_one(".fprc .fpr")
+        prob = _clean(prob_node.get_text(" ", strip=True)) if prob_node else ""
+        match = re.fullmatch(r"(\d+(?:\.\d+)?)%", prob)
+        if match:
+            out["doublechance_prob"] = float(match.group(1))
+        pick_node = row.select_one(".predict .forepr")
+        raw_pick = _clean(pick_node.get_text(" ", strip=True)) if pick_node else ""
+        if raw_pick:
+            out["doublechance_pick_raw"] = raw_pick
+            if raw_pick.upper() in {"1X", "12", "X2"}:
+                out["doublechance_pick"] = raw_pick.upper()
+        price_node = row.select_one(".prmod .lscrsp")
+        if price_node is not None:
+            price = _american_price(price_node.get_text(" ", strip=True))
+            if price is not None:
+                out["doublechance_pick_price_am"] = price
+
+    scorer_rows = soup.select("#gscr_table .rcnt")
+    if len(scorer_rows) == 1:
+        row = scorer_rows[0]
+        probabilities = [
+            _clean(node.get_text(" ", strip=True))
+            for node in row.select(".fprc > .playerPred")
+        ]
+        names = [
+            _clean(node.get_text(" ", strip=True))
+            for node in row.select(".predict .forepr .playerPred")
+        ]
+        if probabilities and len(probabilities) == len(names) <= 3:
+            parsed_probs: list[float] = []
+            for token in probabilities:
+                match = re.fullmatch(r"(\d+(?:\.\d+)?)%", token)
+                if not match:
+                    parsed_probs = []
+                    break
+                parsed_probs.append(float(match.group(1)))
+            if len(parsed_probs) == len(names):
+                for index, (name, probability) in enumerate(zip(names, parsed_probs), 1):
+                    out[f"goalscorer_{index}_name"] = name
+                    out[f"goalscorer_{index}_prob"] = probability
+                prices = [
+                    _american_price(node.get_text(" ", strip=True))
+                    for node in row.select(".prmod .lscrsp")
+                ]
+                if len(prices) == len(names):
+                    for index, price in enumerate(prices, 1):
+                        if price is not None:
+                            out[f"goalscorer_{index}_price_am"] = price
     return out
 
 
@@ -666,6 +732,9 @@ def parse_detail(
         # Numeric football detail stats (shots/passes/possession/attacks/etc.)
         # are pre-event by construction for an upcoming-match detail page.
         specific.update(_football_detail_stats(text))
+        # DC/scorer tabs require their retained DOM structure; do not flatten
+        # them into the text-only market extractors above.
+        specific.update(_football_dom_tab_markets(soup))
     elif sport in {"basketball", "american_football"}:
         specific["quarter_data_present"] = all(f"q{i}" in lower for i in range(1, 5))
     elif sport == "tennis":

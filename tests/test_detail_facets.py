@@ -136,7 +136,8 @@ def test_football_numeric_detail_stats_from_observed_page():
     {"lg_-1":[1,3,2,6],"lg_-1_6":[1,3,2,6],"lg_1":[1,3,2,6],"lg_1_6":[1,3,2,6]}
     {"lg_-1":[3,2,1,6],"lg_-1_6":[3,2,1,6],"lg_1":[3,2,1,6],"lg_1_6":[3,2,1,6]}
     46 54 Over 5-6 5 - 6 9.57 Corners 44 56 Over 1-4 1 - 4 5.04 Cards
-    71% 12 2-0
+    <div id="dbc_table"><div class="rcnt"><div class="fprc"><span class="fpr">71%</span></div>
+    <div class="predict"><span class="forepr">12</span></div><div class="prmod"><span class="lscrsp">-435</span></div></div></div>
     </body></html>"""
     facets = parse_detail(body, "football", "Brentford", "Tottenham")
     s = facets.sport_specific
@@ -160,7 +161,9 @@ def test_football_numeric_detail_stats_from_observed_page():
     assert s["corners_avg_line"] == 9.57
     assert s["cards_pred_low"] == 1
     assert s["doublechance_prob"] == 71
+    assert s["doublechance_pick_raw"] == "12"
     assert s["doublechance_pick"] == "12"
+    assert s["doublechance_pick_price_am"] == -435
     # Numeric values surface with football prefix via numeric()
     numeric = facets.numeric()
     assert numeric["football_p1_shots_total"] == 68
