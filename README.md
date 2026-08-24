@@ -65,8 +65,8 @@ Football, Basketball, Tennis, Hockey, Baseball, American Football, Rugby, Handba
 
 ## Status
 
-- Phase: Milestone 3 — feature timing and leakage audit (read-only, no code change). Milestone 0 COMPLETE, Milestone 1 COMPLETE now REFERENCE, Milestone 2 COMPLETE including 2E hardening (identity-bound label, SPORTS registry draw capability, exact reason preservation, 40 tests, 232 total). `docs/STATE.md` is canonical current truth, `docs/FEATURE_TIMING_CONTRACT.md` is CURRENT feature timing contract (period_values UNKNOWN PROHIBITED until verified, full inventory with required columns, missingness audit).
-- Model training: FROZEN. See `docs/STATE.md` for blockers (missing prices NOT blockers), data limitations (reference observations), unresolved evidence. No feature-vector/threshold/ranking/model approval/daily production changes until Milestone 3 approved.
+- Phase: Milestone 4 — price-free historical example builder (research dataset foundation, no model training). Milestone 0 COMPLETE, Milestone 1 COMPLETE reference audit, Milestone 2 COMPLETE including 2E hardening (identity-bound label, SPORTS registry draw capability, exact reason preservation, 40 tests), Milestone 3 COMPLETE feature timing contract (period_values UNKNOWN PROHIBITED, does not block future progress, stays outside new path). `docs/STATE.md` is canonical current truth, `docs/PRICE_FREE_DATASET_CONTRACT.md` is CURRENT dataset contract (price-free examples, minimal safe feature set ALLOWED only, missingness policy, timing guarantees, receipt accounting), `docs/FEATURE_TIMING_CONTRACT.md` remains CURRENT governing ALLOWED.
+- Model training: FROZEN. See `docs/STATE.md` for blockers (missing prices NOT blockers), data limitations (reference observations), unresolved evidence. No model training, ranking thresholds, or daily production changes until Milestone 4 approved. Dataset builder produces tested research foundation only.
 - Slumdog emits shadow research only; no CERTIFIED output.
 
 ## Quick Start
