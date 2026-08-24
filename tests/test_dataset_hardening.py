@@ -332,14 +332,40 @@ def test_changed_winner_disposition_same_composite_key_is_conflict():
 
 
 def test_changed_provenance_same_content_collapses_per_integrity_policy():
-    # Same content but different source_url/raw_sha256 should collapse per existing integrity policy
+    # Updated policy (final integrity): identical provenance collapses, missing vs present preserves present,
+    # different non-empty hashes or source URLs fail loudly (deterministic)
+    # Identical provenance should collapse
     d1 = make_settled_dict(event_id="football:1", event_date="2026-01-01", source_url="https://a.com", facets={"raw_sha256": "a"*64})
-    d2 = make_settled_dict(event_id="football:1", event_date="2026-01-01", source_url="https://b.com", facets={"raw_sha256": "b"*64})
+    d2 = make_settled_dict(event_id="football:1", event_date="2026-01-01", source_url="https://a.com", facets={"raw_sha256": "a"*64})
 
     examples, receipt, _ = build_dataset_with_raw_accounting([d1, d2])
-    # Should collapse because content fields match, provenance differs — per integrity policy
     assert receipt.exact_duplicates_collapsed == 1
     assert receipt.canonical_input_rows == 1
+
+    # Missing vs present provenance deterministically preserves present
+    d_missing = make_settled_dict(event_id="football:2", event_date="2026-01-01", source_url="", facets={})
+    d_present = make_settled_dict(event_id="football:2", event_date="2026-01-01", source_url="https://a.com", facets={"raw_sha256": "a"*64})
+
+    examples2, receipt2, _ = build_dataset_with_raw_accounting([d_missing, d_present])
+    assert receipt2.canonical_input_rows == 1
+    assert receipt2.provenance_present == 1  # present preserved
+    # Reverse order should also preserve present and be stable
+    examples2_rev, receipt2_rev, _ = build_dataset_with_raw_accounting([d_present, d_missing])
+    assert receipt2_rev.canonical_input_rows == 1
+    assert receipt2_rev.provenance_present == 1
+    assert examples2[0].raw_sha256 == examples2_rev[0].raw_sha256 == "a"*64
+
+    # Different non-empty hashes should fail loudly
+    d_hash_a = make_settled_dict(event_id="football:3", event_date="2026-01-01", source_url="https://a.com", facets={"raw_sha256": "a"*64})
+    d_hash_b = make_settled_dict(event_id="football:3", event_date="2026-01-01", source_url="https://a.com", facets={"raw_sha256": "b"*64})
+    with pytest.raises(ValueError, match="conflicting provenance raw_sha256"):
+        build_dataset_with_raw_accounting([d_hash_a, d_hash_b])
+
+    # Different non-empty source URLs should fail loudly
+    d_url_a = make_settled_dict(event_id="football:4", event_date="2026-01-01", source_url="https://a.com", facets={"raw_sha256": "a"*64})
+    d_url_b = make_settled_dict(event_id="football:4", event_date="2026-01-01", source_url="https://b.com", facets={"raw_sha256": "a"*64})
+    with pytest.raises(ValueError, match="conflicting provenance source_url"):
+        build_dataset_with_raw_accounting([d_url_a, d_url_b])
 
 
 # ---------------------------------------------------------------------------

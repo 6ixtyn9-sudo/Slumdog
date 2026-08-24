@@ -1,4 +1,4 @@
-"""Milestone 4 — leak-safe, price-free historical example builder with 4E hardening.
+"""Milestone 4 — leak-safe, price-free historical example builder with 4E + final integrity hardening.
 
 Core principle:
 settled event
@@ -18,13 +18,17 @@ price availability, legacy Robber score, ROI gate.
 
 Training remains frozen — this module produces research dataset foundation only.
 
-Hardening (Milestone 4E):
-- No fabricated defaults: missing winner → excluded_invalid_winner, never participant 1
+Hardening (Milestone 4E + final integrity):
+- No fabricated defaults: missing winner → schema exclusion, never participant 1
 - No silent swallowing: malformed rows counted, corrupt files fail loudly
 - Raw vs canonical accounting with explicit invariants
 - Strengthened input digest hashing all fields affecting identity/label/history/eligibility/dedup/provenance, excluding odds deliberately
 - Duplicate identity validated: composite key (sport, event_id, event_date) matching settlement.py, same event_id in different sports does not collapse, conflicting content fails loudly
 - Provenance validation: raw_sha256 must be 64 hex chars to count as present, malformed counted separately
+- Disposition vocabulary: explicit supported set derived from settlement.py (SETTLED, SETTLED_CUP, SETTLED_DRAW, VOID) plus NO_CONTEST as void alias; unknown dispositions schema-excluded
+- Winner_index: must be int 0/1/2, bool and float and string coercions rejected
+- Deterministic provenance merge: identical provenance collapses, missing vs present preserves present deterministically, different non-empty hashes or source URLs fail loudly, independent of input order
+- Source-conflict limitation documented: SettledEvent contract does not represent source conflict, so not in digest; builder assumes no conflict
 """
 
 from __future__ import annotations
@@ -96,6 +100,15 @@ PROHIBITED_KEYS = {
     "result_text",
 }
 
+# Canonical disposition vocabulary derived from repository settlement.py
+# settlement.py produces: SETTLED, SETTLED_CUP, SETTLED_DRAW, VOID
+# training.py comment mentions no-contest, abandoned, cancelled, no-result as void
+# history.py filters VOID and SETTLED_DRAW specially
+# Task example mentions SETTLED, VOID, NO_CONTEST — include NO_CONTEST as void alias
+SETTLED_DISPOSITIONS = {"SETTLED", "SETTLED_CUP", "SETTLED_DRAW"}
+VOID_DISPOSITIONS = {"VOID", "NO_CONTEST"}
+SUPPORTED_DISPOSITIONS = SETTLED_DISPOSITIONS | VOID_DISPOSITIONS
+
 _SHA256_RE = re.compile(r"^[a-fA-F0-9]{64}$")
 
 
@@ -107,6 +120,21 @@ def _is_valid_sha256(s: str) -> bool:
     return bool(_SHA256_RE.match(s.strip())) if isinstance(s, str) else False
 
 
+def _extract_provenance(row: SettledEvent) -> tuple[str, str]:
+    """Extract (raw_sha256, source_url) with stripping, empty if missing."""
+    raw_sha = ""
+    if isinstance(row.facets, dict):
+        candidate = row.facets.get("raw_sha256")
+        if isinstance(candidate, str):
+            raw_sha = candidate.strip()
+    source_url = row.source_url.strip() if isinstance(row.source_url, str) else ""
+    return raw_sha, source_url
+
+
+def _has_provenance(raw_sha: str, source_url: str) -> bool:
+    return bool(raw_sha or source_url)
+
+
 def _canonical_event_repr(row: SettledEvent) -> dict[str, Any]:
     """Canonical versioned representation of all fields affecting dataset, excluding odds deliberately.
 
@@ -115,13 +143,18 @@ def _canonical_event_repr(row: SettledEvent) -> dict[str, Any]:
       probability_1, probability_2, draw_probability, score_1, score_2 (used by prior-history),
       league (competition key used by history if needed), source_url, raw_sha256 (from facets if present)
     Excluded: odds_1, odds_2 (price independence, documented)
+
+    Note on source-conflict:
+    SettledEvent contract from supported ledgers (data/interim/settled_history.json,
+    data/reports/history_*.jsonl.gz) does NOT represent source conflict. Source conflict
+    is a label-time flag in underdog.py label_underdog_outcome(source_conflict=True),
+    not a field in SettledEvent. Therefore not included in digest. Builder assumes
+    no source conflict (source_conflict=False). Receipt excluded_source_conflict remains
+    0 for current schemas. If future ledger adds source_conflict field, it must be
+    included in duplicate comparison, canonical digest, builder eligibility, and receipt.
+    This limitation is documented and not claimed as audited.
     """
-    # Extract raw_sha256 from facets if present (history_*.jsonl.gz stores it there)
-    raw_sha = ""
-    if isinstance(row.facets, dict):
-        candidate = row.facets.get("raw_sha256")
-        if isinstance(candidate, str):
-            raw_sha = candidate
+    raw_sha, source_url = _extract_provenance(row)
 
     return {
         "event_id": row.event_id,
@@ -137,7 +170,7 @@ def _canonical_event_repr(row: SettledEvent) -> dict[str, Any]:
         "score_1": row.score_1,
         "score_2": row.score_2,
         "league": row.league,
-        "source_url": row.source_url,
+        "source_url": source_url,
         "raw_sha256": raw_sha,
         "version": "canonical-v1",  # versioned representation
     }
@@ -147,6 +180,7 @@ def _compute_input_digest(rows: list[SettledEvent]) -> str:
     """Strengthened digest: hash canonical representation of all fields affecting dataset, stable under reordering.
 
     Odds deliberately excluded (documented) since they do not affect new dataset.
+    Source conflict not included because SettledEvent does not represent it (documented limitation).
     """
     # Sort rows deterministically before hashing to ensure stable under reordering
     sorted_rows = sorted(rows, key=lambda r: (r.event_date, r.sport, r.event_id))
@@ -319,7 +353,7 @@ def _prior_scoring_stats(
 
 
 # ---------------------------------------------------------------------------
-# Schema adapter — no unsafe defaults, explicit counting
+# Schema adapter — no unsafe defaults, explicit counting, disposition vocabulary
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -332,11 +366,15 @@ class SchemaLoadResult:
 
 
 def _validate_settled_dict(d: dict[str, Any]) -> SettledEvent:
-    """Validate a raw dict as SettledEvent — no fabricated defaults.
+    """Validate a raw dict as SettledEvent — no fabricated defaults, strict disposition and winner checks.
 
-    Required behavior (Milestone 4E):
-    - Missing winner → explicit excluded_invalid_winner (raise with reason INVALID_WINNER)
-    - Missing/unknown disposition → explicit exclusion (raise DISPOSITION_MISSING/UNKNOWN)
+    Required behavior (Milestone 4E + final integrity):
+    - Missing winner → SCHEMA_MISSING_WINNER_INDEX, never defaults to 1
+    - winner_index must be int 0/1/2, bool rejected (True==1 in Python but type bool not allowed), float/string rejected
+    - Missing disposition → SCHEMA_MISSING_DISPOSITION
+    - Empty disposition → SCHEMA_MISSING_DISPOSITION
+    - Unknown disposition (PENDING, LIVE, ABANDONED, CANCELLED, POSTPONED, arbitrary) → SCHEMA_UNKNOWN_DISPOSITION unless in SUPPORTED_DISPOSITIONS
+    - Supported: SETTLED, SETTLED_CUP, SETTLED_DRAW (eligible), VOID, NO_CONTEST (loaded then excluded by label contract)
     - Missing date, sport, participants → explicit schema exclusion
     - Missing probabilities allowed as None at schema level (builder will exclude as missing_probability)
     - Never infer outcome from score unless canonical loader already does so (we don't)
@@ -346,9 +384,7 @@ def _validate_settled_dict(d: dict[str, Any]) -> SettledEvent:
 
     # Check for unknown schema version if present
     if "schema_version" in d:
-        # Only allow known versions or no version — reject unknown
         sv = d.get("schema_version")
-        # Documented schemas: no version field, or version "v1" — reject others
         if sv not in (None, "", "v1", "canonical-v1", "price-free-v1"):
             raise ValueError(f"UNKNOWN_SCHEMA_VERSION:{sv}")
 
@@ -369,9 +405,7 @@ def _validate_settled_dict(d: dict[str, Any]) -> SettledEvent:
         raise ValueError("SCHEMA_MISSING_EVENT_DATE")
     # Validate date ISO
     try:
-        # Allow YYYY-MM-DD
         datetime_date = event_date[:10]
-        # Simple ISO check
         parts = datetime_date.split("-")
         if len(parts) != 3:
             raise ValueError
@@ -384,18 +418,31 @@ def _validate_settled_dict(d: dict[str, Any]) -> SettledEvent:
     if not p2 or not isinstance(p2, str):
         raise ValueError("SCHEMA_MISSING_PARTICIPANT_2")
 
+    # Winner_index strict checks: must be int 0/1/2, bool rejected, float/string rejected
     if winner is None:
         raise ValueError("SCHEMA_MISSING_WINNER_INDEX")
+    # Reject bool explicitly (bool is subclass of int in Python)
+    if isinstance(winner, bool):
+        raise ValueError(f"SCHEMA_INVALID_WINNER_INDEX_BOOL:{winner}")
+    # Must be int type, not float, not str, not coercible
+    if type(winner) is not int:
+        raise ValueError(f"SCHEMA_INVALID_WINNER_INDEX_TYPE:{type(winner).__name__}:{winner}")
     if winner not in (0, 1, 2):
         raise ValueError(f"SCHEMA_INVALID_WINNER_INDEX:{winner}")
 
-    if disposition is None or not isinstance(disposition, str) or not disposition.strip():
+    # Disposition strict checks
+    if disposition is None:
         raise ValueError("SCHEMA_MISSING_DISPOSITION")
-    # Unknown disposition → explicit exclusion later, but allow at schema level if non-empty
-    # We will treat unknown disposition as builder exclusion, not schema exclusion, unless empty
+    if not isinstance(disposition, str):
+        raise ValueError(f"SCHEMA_INVALID_DISPOSITION_TYPE:{type(disposition).__name__}")
+    if not disposition.strip():
+        raise ValueError("SCHEMA_MISSING_DISPOSITION")
+    # Normalize to upper for vocabulary check, but preserve original for storage
+    disp_upper = disposition.strip().upper()
+    if disp_upper not in SUPPORTED_DISPOSITIONS:
+        raise ValueError(f"SCHEMA_UNKNOWN_DISPOSITION:{disposition}")
 
-    # Probabilities — allow None at schema level, but key must exist? We require key present to avoid silent loss
-    # If key absent, count as schema missing probability
+    # Probabilities — allow None at schema level, but key must exist
     if "probability_1" not in d:
         raise ValueError("SCHEMA_MISSING_PROBABILITY_1")
     if "probability_2" not in d:
@@ -475,7 +522,6 @@ def load_settled_events_from_dicts(raw_dicts: list[dict[str, Any]]) -> SchemaLoa
         except ValueError as ve:
             schema_excluded += 1
             msg = str(ve)
-            # Extract reason prefix
             reason = msg.split(":")[0] if ":" in msg else msg
             reasons[reason] += 1
         except Exception as e:
@@ -511,9 +557,10 @@ def build_price_free_examples(
     - Unknown sport excluded
     - Deterministic ordering, duplicate handling, conflicting keys fail loudly
     - Composite key (sport, event_id, event_date) matching settlement.py — same event_id in different sports does not collapse
+    - Deterministic provenance merge: identical provenance collapses, missing vs present preserves present deterministically, different non-empty hashes or source URLs fail loudly
     """
 
-    # Deduplicate and detect conflicting composite keys
+    # Deduplicate and detect conflicting composite keys with deterministic provenance merge
     # Composite key: (sport, event_id, event_date) — matches settlement.py seen key
     dedup: dict[tuple[str, str, str], SettledEvent] = {}
     exact_duplicates_collapsed = 0
@@ -522,11 +569,11 @@ def build_price_free_examples(
         key = (row.sport, row.event_id, row.event_date)
         if key in dedup:
             existing = dedup[key]
-            # Exact duplicate check: all fields affecting dataset must match, excluding provenance and odds deliberately
+            # Domain fields equality check: all fields affecting dataset except provenance and odds
             # Fields: event_id, sport, event_date, participant_1, participant_2, winner_index, disposition,
             # probability_1, probability_2, draw_probability, score_1, score_2, league
-            # If these match, collapse even if source_url/raw_sha256 differ (per existing integrity policy)
-            if (
+            # If these differ, conflict fail loudly
+            if not (
                 existing.winner_index == row.winner_index
                 and existing.probability_1 == row.probability_1
                 and existing.probability_2 == row.probability_2
@@ -541,17 +588,43 @@ def build_price_free_examples(
                 and existing.sport == row.sport
                 and existing.event_date == row.event_date
             ):
-                exact_duplicates_collapsed += 1
-                continue
-            else:
                 raise ValueError(f"conflicting composite key {key}: {existing} vs {row}")
+
+            # Same domain fields — now handle provenance deterministically
+            existing_raw, existing_url = _extract_provenance(existing)
+            new_raw, new_url = _extract_provenance(row)
+
+            # Check for conflicting non-empty provenance
+            # Different valid hashes fail loudly (simple safe version: different non-empty hashes fail)
+            if existing_raw and new_raw and existing_raw != new_raw:
+                raise ValueError(
+                    f"conflicting provenance raw_sha256 for composite key {key}: {existing_raw} vs {new_raw}"
+                )
+            # Different non-empty source URLs fail loudly
+            if existing_url and new_url and existing_url != new_url:
+                raise ValueError(
+                    f"conflicting provenance source_url for composite key {key}: {existing_url} vs {new_url}"
+                )
+
+            # Deterministic merge: preserve present provenance over missing
+            # If existing missing and new has provenance, replace existing with new
+            # If existing has provenance and new missing, keep existing
+            # If both same or both missing, keep existing
+            existing_has = _has_provenance(existing_raw, existing_url)
+            new_has = _has_provenance(new_raw, new_url)
+
+            if not existing_has and new_has:
+                # Replace with new row that has provenance (deterministic: present wins regardless of input order)
+                dedup[key] = row
+            # else keep existing (deterministic)
+
+            exact_duplicates_collapsed += 1
+            continue
         dedup[key] = row
 
     sorted_rows = sorted(dedup.values(), key=lambda r: (r.event_date, r.sport, r.event_id))
 
     # Raw vs canonical accounting for this builder stage
-    # Here valid_loaded_rows = len(settled_events) (input to builder)
-    # canonical_input_rows = len(sorted_rows) after dedup
     valid_loaded_rows = len(settled_events)
     canonical_input_rows = len(sorted_rows)
 
@@ -578,8 +651,10 @@ def build_price_free_examples(
             per_sport_counter[sport]["excluded_unknown_sport"] += 1
             continue
 
-        disp = (row.disposition or "SETTLED").upper()
-        if "VOID" in disp or disp in {"CANCELLED", "CANCELED", "ABANDONED", "NO_CONTEST", "POSTPONED"}:
+        disp = (row.disposition or "SETTLED").strip().upper()
+        # Only VOID and NO_CONTEST are treated as void at builder level
+        # Unknown dispositions already schema-excluded, so here only check void
+        if disp in VOID_DISPOSITIONS:
             exclusion_counter["excluded_void"] += 1
             per_sport_counter[sport]["excluded_void"] += 1
             continue
@@ -650,19 +725,13 @@ def build_price_free_examples(
                 negative_fav += 1
 
         # Provenance validation — raw_sha256 must be 64 hex chars to count as present
-        raw_sha = ""
-        if isinstance(row.facets, dict):
-            cand = row.facets.get("raw_sha256")
-            if isinstance(cand, str):
-                raw_sha = cand
+        raw_sha, _ = _extract_provenance(row)
         if raw_sha:
             if _is_valid_sha256(raw_sha):
                 provenance_present += 1
             else:
                 provenance_invalid += 1
         else:
-            # Also check source_url presence? For provenance_present we require valid sha256
-            # But legacy compatibility: if raw_sha missing but source_url present, count as missing not invalid
             provenance_missing += 1
 
         per_sport_counter[sport]["eligible_examples"] += 1
@@ -762,6 +831,8 @@ def build_price_free_examples(
         for gkey in ("underdog_prior_games", "favorite_prior_games", "h2h_prior_games"):
             missingness[gkey] = 0
 
+        raw_sha_for_example, source_url_for_example = _extract_provenance(row)
+
         example = PriceFreeUnderdogExample(
             event_id=row.event_id,
             sport=sport,
@@ -775,12 +846,12 @@ def build_price_free_examples(
             label=label,
             features={k: features[k] for k in sorted(features)},
             missingness={k: missingness[k] for k in sorted(missingness)},
-            source_url=row.source_url,
-            raw_sha256=raw_sha,
+            source_url=source_url_for_example,
+            raw_sha256=raw_sha_for_example,
             feature_contract_version=feature_contract_version,
             label_contract_version=label_contract_version,
             exclusion_reason=None,
-            legacy_provenance_missing=not bool(raw_sha),
+            legacy_provenance_missing=not bool(raw_sha_for_example),
         )
 
         for prohibited in PROHIBITED_KEYS:
@@ -794,18 +865,14 @@ def build_price_free_examples(
     eligible_examples = len(examples)
     builder_excluded_rows = canonical_input_rows - eligible_examples
 
-    # For backward compat, input_rows = canonical_input_rows
     input_rows = canonical_input_rows
 
     positive_rate = (positive / eligible_examples) if eligible_examples else None
     eligible_date_min = min((e.event_date for e in examples), default=None)
     eligible_date_max = max((e.event_date for e in examples), default=None)
 
-    # Raw accounting for this builder alone (no schema stage) — set raw=valid=canonical for now
-    # When used via adapter, raw accounting will be combined
     raw_input_rows = valid_loaded_rows
     schema_excluded_rows = 0
-    # Note: exact_duplicates_collapsed already counted
 
     receipt = PriceFreeDatasetReceipt(
         raw_input_rows=raw_input_rows,
@@ -872,10 +939,6 @@ def build_dataset_with_raw_accounting(
         feature_contract_version=feature_contract_version,
         label_contract_version=label_contract_version,
     )
-
-    # Combine accounting — builder receipt already has valid_loaded, canonical, exact_duplicates, etc.
-    # But raw_input_rows in builder receipt is valid_loaded_rows, not true raw
-    # So we construct final receipt with true raw counts
 
     final_receipt = PriceFreeDatasetReceipt(
         raw_input_rows=schema_result.raw_input_rows,

@@ -188,16 +188,54 @@ def audit_dataset(
             print(f"ERROR: receipt_path must be under /tmp for safety, got {receipt_path}", file=sys.stderr)
             return 1
         receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        # Full receipt structure with zeros for consistent reporting
         receipt_path.write_text(json.dumps({
             "status": "NO_SUPPORTED_INPUT_FILES",
             "files_found": 0,
+            "files_empty": 0,
+            "files_unreadable": 0,
             "raw_input_rows": 0,
             "schema_excluded_rows": 0,
             "valid_loaded_rows": 0,
             "exact_duplicates_collapsed": 0,
             "canonical_input_rows": 0,
             "eligible_examples": 0,
+            "builder_excluded_rows": 0,
+            "input_rows": 0,
+            "positive_underdog_wins": 0,
+            "negative_favorite_wins": 0,
+            "negative_draws": 0,
+            "excluded_void": 0,
+            "excluded_source_conflict": 0,
+            "excluded_equal_probability": 0,
+            "excluded_missing_probability": 0,
+            "excluded_non_finite_probability": 0,
+            "excluded_out_of_range_probability": 0,
+            "excluded_unknown_sport": 0,
+            "excluded_unexpected_two_way_draw": 0,
+            "excluded_invalid_winner": 0,
+            "excluded_other": 0,
+            "provenance_present": 0,
+            "provenance_missing": 0,
+            "provenance_invalid": 0,
+            "positive_rate": None,
+            "canonical_date_min": None,
+            "canonical_date_max": None,
+            "eligible_date_min": None,
+            "eligible_date_max": None,
+            "date_min": None,
+            "date_max": None,
+            "feature_contract_version": "price-free-v1-minimal-2026-08-24",
+            "label_contract_version": "price-free-v1",
+            "input_digest": "no-input",
+            "per_sport": {},
+            "file_errors": [],
+            "schema_exclusion_reasons": {},
         }, indent=2, sort_keys=True))
+        # Also write empty sample
+        if str(sample_path).startswith("/tmp"):
+            sample_path.parent.mkdir(parents=True, exist_ok=True)
+            sample_path.write_text(json.dumps([], indent=2, sort_keys=True))
         return 0
 
     # Now schema validation with explicit counting
@@ -216,8 +254,8 @@ def audit_dataset(
     try:
         examples, receipt, _ = build_dataset_with_raw_accounting(candidates_raw)
     except ValueError as ve:
-        # Conflicting duplicates must fail loudly
-        if "conflicting composite key" in str(ve):
+        # Conflicting duplicates (including provenance conflicts) must fail loudly
+        if "conflicting" in str(ve):
             print(f"ERROR: conflicting duplicates: {ve}", file=sys.stderr)
             return 1
         else:
