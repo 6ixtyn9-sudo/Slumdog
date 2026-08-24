@@ -106,11 +106,13 @@ def audit_dataset(
     sample_path: Path,
     sample_size: int = 5,
     conflict_report_path: Path | None = None,
+    schema_exclusion_report_path: Path | None = None,
 ) -> int:
     root = Path(root)
     receipt_path = Path(receipt_path)
     sample_path = Path(sample_path)
     conflict_path = Path(conflict_report_path) if conflict_report_path is not None else None
+    schema_exclusion_path = Path(schema_exclusion_report_path) if schema_exclusion_report_path is not None else None
 
     # Safety checks for /tmp
     if not str(receipt_path).startswith("/tmp"):
@@ -121,6 +123,9 @@ def audit_dataset(
         return 1
     if conflict_path is not None and not str(conflict_path).startswith("/tmp"):
         print(f"ERROR: conflict_report_path must be under /tmp for safety, got {conflict_path}", file=sys.stderr)
+        return 1
+    if schema_exclusion_path is not None and not str(schema_exclusion_path).startswith("/tmp"):
+        print(f"ERROR: schema_exclusion_report_path must be under /tmp for safety, got {schema_exclusion_path}", file=sys.stderr)
         return 1
 
     # Discover supported ledger files
@@ -299,12 +304,15 @@ def audit_dataset(
     valid_with_source: list[ValidEventWithSource] = []
     schema_excluded_rows = 0
     schema_reasons: Counter = Counter()
+    schema_excluded_entries: list[dict] = []
 
     for rws in candidates_with_source:
         d = rws.raw_dict
         if not isinstance(d, dict):
             schema_excluded_rows += 1
             schema_reasons["SCHEMA_NOT_A_DICT"] += 1
+            if schema_exclusion_path:
+                schema_excluded_entries.append({"reason": "SCHEMA_NOT_A_DICT", "source_file": rws.source_file, "source_location": rws.source_location, "raw_dict": d})
             continue
         try:
             ev = _validate_settled_dict(d)
@@ -314,9 +322,19 @@ def audit_dataset(
             msg = str(ve)
             reason = msg.split(":")[0] if ":" in msg else msg
             schema_reasons[reason] += 1
+            if schema_exclusion_path:
+                schema_excluded_entries.append({"reason": reason, "error_msg": msg, "source_file": rws.source_file, "source_location": rws.source_location, "raw_dict": d})
         except Exception as e:
             schema_excluded_rows += 1
-            schema_reasons[f"SCHEMA_UNEXPECTED_{type(e).__name__}"] += 1
+            reason = f"SCHEMA_UNEXPECTED_{type(e).__name__}"
+            schema_reasons[reason] += 1
+            if schema_exclusion_path:
+                schema_excluded_entries.append({"reason": reason, "error_msg": str(e), "source_file": rws.source_file, "source_location": rws.source_location, "raw_dict": d})
+
+    if schema_exclusion_path:
+        schema_exclusion_path.parent.mkdir(parents=True, exist_ok=True)
+        # Avoid serializing extremely large reports, but this is diagnostic
+        schema_exclusion_path.write_text(json.dumps(schema_excluded_entries, indent=2, sort_keys=True))
 
     unknown_schema = schema_reasons.get("UNKNOWN_SCHEMA_VERSION", 0)
     if unknown_schema > 0:
@@ -527,6 +545,8 @@ def audit_dataset(
     print(f"Wrote receipt to {receipt_path}")
     print(f"Wrote sample ({len(sample_examples)} examples) to {sample_path}")
 
+    if schema_exclusion_path:
+        print(f"Wrote schema exclusion report ({schema_excluded_rows} entries) to {schema_exclusion_path}")
     if all_file_errors:
         print("File errors / malformed rows (visible, not silent):", file=sys.stderr)
         for fe in all_file_errors[:20]:
@@ -562,9 +582,17 @@ def main():
     parser.add_argument("--sample", default="/tmp/slumdog_price_free/examples_sample.json", help="sample output path (must be under /tmp)")
     parser.add_argument("--sample-size", type=int, default=5, help="number of examples in sample")
     parser.add_argument("--conflict-report", default=None, help="conflict report output path (must be under /tmp) — enables census mode")
+    parser.add_argument("--schema-exclusion-report", default=None, help="schema exclusion report path (must be under /tmp)")
     args = parser.parse_args()
 
-    code = audit_dataset(Path(args.root), Path(args.receipt), Path(args.sample), args.sample_size, Path(args.conflict_report) if args.conflict_report else None)
+    code = audit_dataset(
+        Path(args.root),
+        Path(args.receipt),
+        Path(args.sample),
+        args.sample_size,
+        Path(args.conflict_report) if args.conflict_report else None,
+        Path(args.schema_exclusion_report) if args.schema_exclusion_report else None,
+    )
     sys.exit(code)
 
 

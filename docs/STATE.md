@@ -4,7 +4,7 @@
 **Branch:** `arena/01a034f6-slumdog` (delivery), `main` is only permanent branch
 **Doc canonical path:** `docs/STATE.md`
 **PR:** #7 OPEN — 337 tests passed
-**HEAD:** a86252f
+**HEAD:** 6b24e7b
 
 ## Permanent Product Mission
 
@@ -104,7 +104,7 @@ Next: historical conflict provenance/reconstruction investigation
 
 **Milestone 5: historical integrity investigation**
 
-- *Action:* Added `scripts/investigate_m5.py` and `docs/MILESTONE5_INVESTIGATION.md` to run the historical audit without side effects.
+- *Action:* Extended `dataset_audit.py` with `--schema-exclusion-report` and added `docs/HISTORICAL_INTEGRITY_AUDIT.md` to safely document exclusions and provenance limits.
 - Investigate why hockey:278977 has two settled scores in same file
 - Establish provenance for historical ledgers (currently 0 present)
 - Do not query Forebet until provenance established

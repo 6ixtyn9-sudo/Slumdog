@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-08-24 (UTC) — Milestones 0–4F COMPLETE, real-data census executed, PR #6 MERGE READY
 **Branch:** `arena/01a034f6-slumdog`
-**HEAD SHA:** a86252f Milestone 5 Investigation Script added
+**HEAD SHA:** 6b24e7b Milestone 5 Investigation Script added
 **Phase:** Milestones 0–4F COMPLETE, price-free foundation MERGE READY, historical dataset generation FAIL-CLOSED, real-data readiness BLOCKED by historical conflicts, training FROZEN, production NOT AUTHORIZED
 **Mission:** Slumdog identifies a small daily shortlist of participants that Forebet considers underdogs but whose available pre-event evidence indicates a credible outright-win upset.
 **PR:** #6 https://github.com/6ixtyn9-sudo/Slumdog/pull/6 — OPEN, MERGE READY after documentation commit
@@ -166,7 +166,7 @@ Temporary artifacts (not committed):
 
 **Milestone 5: historical integrity investigation**
 
-- *Action:* Added `scripts/investigate_m5.py` and `docs/MILESTONE5_INVESTIGATION.md` to safely inspect exclusions and provenance without modifying ledgers or querying the network.
+- *Action:* Extended `dataset_audit.py` with `--schema-exclusion-report` and added `docs/HISTORICAL_INTEGRITY_AUDIT.md` to safely document exclusions and provenance limits.
 - Investigate historical reconstruction conflicts (hockey 278977)
 - Provenance/reconstruction investigation: why same composite key has two settled scores in same file, no raw_sha256/captured_at
 - Establish provenance for historical ledgers (currently 0 present for 654,029 eligible)
@@ -180,7 +180,7 @@ Temporary artifacts (not committed):
 - **Branch:** `arena/01a034f6-slumdog`
 - **Base:** `main` @ `c48d5dc`
 - **PR:** #7 https://github.com/6ixtyn9-sudo/Slumdog/pull/7 — OPEN
-- **Final head:** a86252f
+- **Final head:** 6b24e7b
 - **Merge approves only:** governance documentation; price-free identity and label contracts; safe historical example contracts; strict adapters and receipts; conflict detection and census tooling; tests
 - **Merge does NOT approve:** excluding the hockey conflict; training a model; ranking candidates; thresholds; production integration; daily selections; legacy Robber removal
 
