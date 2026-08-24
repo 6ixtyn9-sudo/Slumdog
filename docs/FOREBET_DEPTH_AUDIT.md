@@ -297,8 +297,10 @@ unique event IDs. Two settled, priced events (`mma:2638` and `mma:2721`) were
 byte-identical duplicate writes from the 2026-06-15 listing. Deduplication gives
 600 settled, 157 void, and 153 priced events; 11 events are both void and
 priced. Thus the earlier `159 void == 159 priced` observation is neither
-reproduced nor a structural settlement bug. Pre-event prices on a subsequently
-void event are retained for audit.
+reproduced nor a structural settlement bug. Eleven rows are both void and
+priced, but their seven sampled raw captures are absent locally. Manifest
+receipts retain hashes only, so whether these were prices posted before a later
+scratch/no-contest is plausible but cannot be verified from surviving bytes.
 
 All 759 legacy rows lack both `raw_sha256` and `captured_at`; they predate raw
 provenance retention. Current backfill writes `facets.raw_sha256` for new rows.

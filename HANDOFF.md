@@ -123,3 +123,13 @@ The backfill write path now validates a complete day before output: exact
 same-key payloads collapse, while conflicting payloads raise with identifying
 fields before any day rows are appended. `append_settled_from_capture` remains
 out of scope because it writes a separate interim artifact.
+
+## MMA void-and-priced raw verification (2026-08-24)
+
+The 11 rows that are both `VOID` and priced span seven dates from 2026-04-19
+through 2026-07-25. Each date has a manifest receipt with source URL, byte count,
+and source SHA-256, but no corresponding local file under `data/raw/mma/<date>`.
+The derived ledger proves the rows contain both fields; it does not prove the
+history of when prices were posted relative to a scratch/no-contest. Treat the
+pre-scratch explanation as plausible but unverified. Do not refetch and present
+new bytes as the historical capture.
