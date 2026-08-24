@@ -195,7 +195,14 @@ def identify_forebet_underdog(
 
 @dataclass(frozen=True)
 class UnderdogLabelResult:
-    """Pure label for underdog-win target, separate from training orchestration."""
+    """Pure label for underdog-win target, separate from training orchestration.
+
+    Milestone 2E hardening:
+    - Preserves identity exclusion reason (EQUAL_PROBABILITY, MISSING_PROBABILITY,
+      NON_FINITE, OUT_OF_RANGE, etc.) not collapsed into generic NO_ELIGIBLE_IDENTITY
+      unless original reason also retained separately.
+    - Derives draw capability from sport registry, not caller override.
+    """
 
     label: int | None  # 1 underdog win, 0 favorite win or draw (draw-capable), None excluded
     eligible: bool
@@ -206,6 +213,10 @@ class UnderdogLabelResult:
     winner_index: int | None = None
     favorite_index: int | None = None
     underdog_index: int | None = None
+    # Milestone 2E: preserve original identity ineligibility reason separately
+    identity_ineligibility_reason: str | None = None
+    sport: str | None = None
+    draw_possible: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -215,40 +226,22 @@ def _is_valid_winner_index(value: Any) -> bool:
     return value in (0, 1, 2)
 
 
-def label_underdog_outcome(
+def _label_from_indices(
     *,
     sport: str,
     favorite_index: int | None,
     underdog_index: int | None,
     winner_index: int | None,
     disposition: str = "SETTLED",
-    draw_possible: bool | None = None,
+    draw_possible: bool,
     source_conflict: bool = False,
+    identity_ineligibility_reason: str | None = None,
     has_eligible_identity: bool | None = None,
 ) -> UnderdogLabelResult:
-    """Pure label function for underdog-win target (Milestone 2B).
+    """Private low-level helper accepting raw indices — for internal focused use.
 
-    Required outcomes:
-
-    Draw-capable sports:
-      underdog wins -> 1
-      favorite wins -> 0
-      draw -> 0
-      void/cancelled -> excluded
-
-    Two-way sports:
-      underdog wins -> 1
-      favorite wins -> 0
-      unexpected draw -> excluded as invalid/unsettleable
-      void/no-contest -> excluded
-
-    Also excluded:
-      - no eligible underdog identity
-      - invalid winner index
-      - source conflict
-      - missing pre-event probabilities (via has_eligible_identity)
-
-    Returns explicit exclusion reason, not only None.
+    Production callers and tests should use identity-bound public function
+    `label_underdog_outcome(sport, identity, ...)`.
     """
 
     # Source conflict — highest priority exclusion
@@ -263,6 +256,9 @@ def label_underdog_outcome(
             winner_index=winner_index if _is_valid_winner_index(winner_index) else None,
             favorite_index=favorite_index,
             underdog_index=underdog_index,
+            identity_ineligibility_reason=identity_ineligibility_reason,
+            sport=sport,
+            draw_possible=draw_possible,
         )
 
     # Void / cancelled / no-contest
@@ -276,47 +272,38 @@ def label_underdog_outcome(
             winner_index=winner_index if _is_valid_winner_index(winner_index) else None,
             favorite_index=favorite_index,
             underdog_index=underdog_index,
+            identity_ineligibility_reason=identity_ineligibility_reason,
+            sport=sport,
+            draw_possible=draw_possible,
         )
 
-    # Determine draw_possible from sport registry if not explicitly passed
-    if draw_possible is None:
-        try:
-            from .sports import SPORTS
-
-            spec = SPORTS.get(sport)
-            draw_possible = bool(spec.draw_possible) if spec else False
-        except Exception:
-            draw_possible = False
-
-    # No eligible identity
-    if has_eligible_identity is False:
+    # No eligible identity — preserve exact identity reason if available
+    if has_eligible_identity is False or favorite_index is None or underdog_index is None:
+        # Preserve original identity reason if provided, else generic
+        reason = identity_ineligibility_reason or "NO_ELIGIBLE_IDENTITY"
         return UnderdogLabelResult(
             label=None,
             eligible=False,
-            exclusion_reason="NO_ELIGIBLE_IDENTITY",
+            exclusion_reason=reason,
             winner_index=winner_index if _is_valid_winner_index(winner_index) else None,
             favorite_index=favorite_index,
             underdog_index=underdog_index,
-        )
-
-    if favorite_index is None or underdog_index is None:
-        return UnderdogLabelResult(
-            label=None,
-            eligible=False,
-            exclusion_reason="NO_ELIGIBLE_IDENTITY",
-            winner_index=winner_index if _is_valid_winner_index(winner_index) else None,
-            favorite_index=favorite_index,
-            underdog_index=underdog_index,
+            identity_ineligibility_reason=identity_ineligibility_reason,
+            sport=sport,
+            draw_possible=draw_possible,
         )
 
     if favorite_index == underdog_index:
         return UnderdogLabelResult(
             label=None,
             eligible=False,
-            exclusion_reason="EQUAL_PROBABILITY",
+            exclusion_reason=identity_ineligibility_reason or "EQUAL_PROBABILITY",
             winner_index=winner_index if _is_valid_winner_index(winner_index) else None,
             favorite_index=favorite_index,
             underdog_index=underdog_index,
+            identity_ineligibility_reason=identity_ineligibility_reason,
+            sport=sport,
+            draw_possible=draw_possible,
         )
 
     # Invalid winner index
@@ -328,9 +315,12 @@ def label_underdog_outcome(
             winner_index=None,
             favorite_index=favorite_index,
             underdog_index=underdog_index,
+            identity_ineligibility_reason=identity_ineligibility_reason,
+            sport=sport,
+            draw_possible=draw_possible,
         )
 
-    # Draw handling
+    # Draw handling — derived from sport registry, caller cannot override
     if winner_index == 0:
         if draw_possible:
             # Draw-capable: draw = 0 (failed underdog win)
@@ -343,6 +333,9 @@ def label_underdog_outcome(
                 winner_index=0,
                 favorite_index=favorite_index,
                 underdog_index=underdog_index,
+                identity_ineligibility_reason=None,
+                sport=sport,
+                draw_possible=draw_possible,
             )
         else:
             # Two-way: unexpected draw excluded as invalid/unsettleable
@@ -355,6 +348,9 @@ def label_underdog_outcome(
                 winner_index=0,
                 favorite_index=favorite_index,
                 underdog_index=underdog_index,
+                identity_ineligibility_reason=identity_ineligibility_reason,
+                sport=sport,
+                draw_possible=draw_possible,
             )
 
     # Favorite / underdog win
@@ -368,6 +364,9 @@ def label_underdog_outcome(
             winner_index=winner_index,
             favorite_index=favorite_index,
             underdog_index=underdog_index,
+            identity_ineligibility_reason=None,
+            sport=sport,
+            draw_possible=draw_possible,
         )
     elif winner_index == favorite_index:
         return UnderdogLabelResult(
@@ -379,6 +378,9 @@ def label_underdog_outcome(
             winner_index=winner_index,
             favorite_index=favorite_index,
             underdog_index=underdog_index,
+            identity_ineligibility_reason=None,
+            sport=sport,
+            draw_possible=draw_possible,
         )
     else:
         # Winner is neither favorite nor underdog (should not happen if identity valid)
@@ -391,7 +393,103 @@ def label_underdog_outcome(
             winner_index=winner_index,
             favorite_index=favorite_index,
             underdog_index=underdog_index,
+            identity_ineligibility_reason=identity_ineligibility_reason,
+            sport=sport,
+            draw_possible=draw_possible,
         )
+
+
+def label_underdog_outcome(
+    sport: str,
+    identity: ForebetUnderdogIdentity,
+    winner_index: int | None,
+    disposition: str = "SETTLED",
+    source_conflict: bool = False,
+) -> UnderdogLabelResult:
+    """Public label function — accepts verified identity object directly (Milestone 2E).
+
+    Hardening (Milestone 2E):
+    - Accepts ForebetUnderdogIdentity directly, derives favorite_index,
+      underdog_index, eligible, ineligibility_reason from identity.
+      Caller cannot reverse favorite/underdog or claim eligible when not.
+    - Derives draw capability from sport registry SPORTS[sport].draw_possible,
+      not caller-provided draw_possible. Caller cannot override sport semantics.
+    - Unknown sport → explicit exclusion (UNKNOWN_SPORT) per existing contract style.
+    - Preserves identity exclusion reason (EQUAL_PROBABILITY, MISSING_PROBABILITY,
+      NON_FINITE, OUT_OF_RANGE, etc.) not collapsed into generic NO_ELIGIBLE_IDENTITY
+      unless original reason also retained separately in identity_ineligibility_reason.
+
+    Required outcomes:
+      Draw-capable: underdog win 1, fav win 0, draw 0, void excluded
+      Two-way: underdog win 1, fav win 0, unexpected draw excluded, void excluded
+    """
+
+    # Derive draw capability from sport registry — caller cannot override
+    try:
+        from .sports import SPORTS
+
+        spec = SPORTS.get(sport)
+        if spec is None:
+            # Unknown sport → explicit exclusion/error per existing contract style
+            return UnderdogLabelResult(
+                label=None,
+                eligible=False,
+                exclusion_reason="UNKNOWN_SPORT",
+                is_draw=False,
+                is_void=False,
+                winner_index=winner_index if _is_valid_winner_index(winner_index) else None,
+                favorite_index=identity.favorite_index,
+                underdog_index=identity.underdog_index,
+                identity_ineligibility_reason=identity.ineligibility_reason,
+                sport=sport,
+                draw_possible=None,
+            )
+        draw_possible = bool(spec.draw_possible)
+    except Exception:
+        # If registry import fails, treat as unknown sport for safety
+        return UnderdogLabelResult(
+            label=None,
+            eligible=False,
+            exclusion_reason="UNKNOWN_SPORT",
+            is_draw=False,
+            is_void=False,
+            winner_index=winner_index if _is_valid_winner_index(winner_index) else None,
+            favorite_index=identity.favorite_index,
+            underdog_index=identity.underdog_index,
+            identity_ineligibility_reason=identity.ineligibility_reason,
+            sport=sport,
+            draw_possible=None,
+        )
+
+    # Preserve identity exclusion reason — if not eligible, keep exact reason
+    if not identity.eligible:
+        return UnderdogLabelResult(
+            label=None,
+            eligible=False,
+            exclusion_reason=identity.ineligibility_reason or "NO_ELIGIBLE_IDENTITY",
+            is_draw=False,
+            is_void=False,
+            is_source_conflict=source_conflict,
+            winner_index=winner_index if _is_valid_winner_index(winner_index) else None,
+            favorite_index=identity.favorite_index,
+            underdog_index=identity.underdog_index,
+            identity_ineligibility_reason=identity.ineligibility_reason,
+            sport=sport,
+            draw_possible=draw_possible,
+        )
+
+    # Use private helper with derived values — ensures label uses indices from identity
+    return _label_from_indices(
+        sport=sport,
+        favorite_index=identity.favorite_index,
+        underdog_index=identity.underdog_index,
+        winner_index=winner_index,
+        disposition=disposition,
+        draw_possible=draw_possible,
+        source_conflict=source_conflict,
+        identity_ineligibility_reason=identity.ineligibility_reason,
+        has_eligible_identity=identity.eligible,
+    )
 
 
 # ---------------------------------------------------------------------------
