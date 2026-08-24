@@ -25,10 +25,10 @@ Hardening (Milestone 4E + final integrity):
 - Strengthened input digest hashing all fields affecting identity/label/history/eligibility/dedup/provenance, excluding odds deliberately
 - Duplicate identity validated: composite key (sport, event_id, event_date) matching settlement.py, same event_id in different sports does not collapse, conflicting content fails loudly
 - Provenance validation: raw_sha256 must be 64 hex chars to count as present, malformed counted separately
-- Disposition vocabulary: explicit supported set derived from settlement.py (SETTLED, SETTLED_CUP, SETTLED_DRAW, VOID) plus NO_CONTEST as void alias; unknown dispositions schema-excluded
+- Disposition vocabulary: settlement.py produces SETTLED, SETTLED_CUP, SETTLED_DRAW, VOID (verified via source inspection); NO_CONTEST is explicitly supported compatibility alias (not produced by settlement.py); unknown dispositions schema-excluded
 - Winner_index: must be int 0/1/2, bool and float and string coercions rejected
 - Deterministic provenance merge: identical provenance collapses, missing vs present preserves present deterministically, different non-empty hashes or source URLs fail loudly, independent of input order
-- Source-conflict limitation documented: SettledEvent contract does not represent source conflict, so not in digest; builder assumes no conflict
+- Source-conflict limitation documented: SettledEvent contract does not represent source conflict, so not in digest; builder assumes no conflict; receipt excluded_source_conflict=0 only alongside explicit visibility limitation
 """
 
 from __future__ import annotations
@@ -100,14 +100,19 @@ PROHIBITED_KEYS = {
     "result_text",
 }
 
-# Canonical disposition vocabulary derived from repository settlement.py
-# settlement.py produces: SETTLED, SETTLED_CUP, SETTLED_DRAW, VOID
-# training.py comment mentions no-contest, abandoned, cancelled, no-result as void
-# history.py filters VOID and SETTLED_DRAW specially
-# Task example mentions SETTLED, VOID, NO_CONTEST — include NO_CONTEST as void alias
-SETTLED_DISPOSITIONS = {"SETTLED", "SETTLED_CUP", "SETTLED_DRAW"}
-VOID_DISPOSITIONS = {"VOID", "NO_CONTEST"}
-SUPPORTED_DISPOSITIONS = SETTLED_DISPOSITIONS | VOID_DISPOSITIONS
+# Canonical disposition vocabulary:
+# - settlement.py produces: SETTLED, SETTLED_CUP, SETTLED_DRAW, VOID (verified via source inspection)
+#   - FT, AOT, AP, FINAL → SETTLED
+#   - extra_time/penalty present → SETTLED_CUP
+#   - cricket draw comment → SETTLED_DRAW
+#   - no result/abandon/cancel → VOID
+# - NO_CONTEST is explicitly supported compatibility alias for VOID (not produced by settlement.py, but supported for compatibility)
+# - training.py comment mentions no-contest, abandoned, cancelled, no-result as void
+# - history.py filters VOID and SETTLED_DRAW specially
+SETTLED_DISPOSITIONS = {"SETTLED", "SETTLED_CUP", "SETTLED_DRAW"}  # produced by settlement.py
+VOID_DISPOSITIONS = {"VOID"}  # produced by settlement.py
+COMPATIBILITY_VOID_ALIASES = {"NO_CONTEST"}  # explicitly supported compatibility alias, not produced by settlement.py
+SUPPORTED_DISPOSITIONS = SETTLED_DISPOSITIONS | VOID_DISPOSITIONS | COMPATIBILITY_VOID_ALIASES
 
 _SHA256_RE = re.compile(r"^[a-fA-F0-9]{64}$")
 
