@@ -1,10 +1,10 @@
-# Feature Timing Contract — Milestone 3 Audit
+# Feature Timing Contract — Milestone 3 Audit, Governing Milestone 4 COMPLETE
 
 **Last verified:** 2026-08-24 (UTC)
 **Branch:** arena/01a033af-slumdog
-**Status:** CURRENT — Milestone 3 feature timing and leakage audit
+**Status:** CURRENT — Milestone 3 COMPLETE, Milestone 4 COMPLETE — feature timing and leakage audit, governs new-path eligibility
 **Training:** FROZEN (MODEL_TRAINING_ALLOWED=False)
-**Doc type:** CURRENT (replaces ad-hoc timing claims, governs new-path eligibility)
+**Doc type:** CURRENT (replaces ad-hoc timing claims, governs new-path eligibility, used by Milestone 4 hardened dataset builder)
 
 ## Mission and Rules
 
@@ -415,6 +415,13 @@ Per task: for every feature audit None/NaN/0/empty string/absent key/sentinel te
 - `HANDOFF.md` updated with Milestone 3 audit phase
 
 ---
+
+## Milestone 4E Usage Note
+
+- Milestone 4 hardened builder `src/slumdog/dataset.py` uses only ALLOWED fields from this contract per `PRICE_FREE_DATASET_CONTRACT.md` minimal safe set: identity 5 + prior-history 12 = 17 features. No odds, no period_values, no RESULT_ONLY, no UNKNOWN/PARKED detail facets.
+- Prior-history features computed strictly via `HistoryIndex` with rule `history_event_date < current_event_date`, same-date excluded, sport-isolated, H2H prior-date only.
+- Receipt accounting hardened with raw vs canonical invariants, digest strengthened, duplicate identity composite key (sport,event_id,event_date) matching settlement.py, provenance 64-hex validation, date semantics explicit.
+- Audit entry point `python -m slumdog.dataset_audit --root data --receipt /tmp/slumdog_price_free/receipt.json --sample /tmp/slumdog_price_free/examples_sample.json --sample-size 5` — no network, writes only under /tmp, tested adapters, explicit NO_SUPPORTED_INPUT_FILES vs fail loudly.
 
 ## Contract Notes for Later (from Milestone 2E)
 

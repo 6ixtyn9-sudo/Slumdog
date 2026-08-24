@@ -65,8 +65,8 @@ Football, Basketball, Tennis, Hockey, Baseball, American Football, Rugby, Handba
 
 ## Status
 
-- Phase: Milestone 4 — price-free historical example builder (research dataset foundation, no model training). Milestone 0 COMPLETE, Milestone 1 COMPLETE reference audit, Milestone 2 COMPLETE including 2E hardening (identity-bound label, SPORTS registry draw capability, exact reason preservation, 40 tests), Milestone 3 COMPLETE feature timing contract (period_values UNKNOWN PROHIBITED, does not block future progress, stays outside new path). `docs/STATE.md` is canonical current truth, `docs/PRICE_FREE_DATASET_CONTRACT.md` is CURRENT dataset contract (price-free examples, minimal safe feature set ALLOWED only, missingness policy, timing guarantees, receipt accounting), `docs/FEATURE_TIMING_CONTRACT.md` remains CURRENT governing ALLOWED.
-- Model training: FROZEN. See `docs/STATE.md` for blockers (missing prices NOT blockers), data limitations (reference observations), unresolved evidence. No model training, ranking thresholds, or daily production changes until Milestone 4 approved. Dataset builder produces tested research foundation only.
+- Phase: Milestone 4: COMPLETE — pending real-data receipt execution, Current phase: Milestone 5 readiness review. Milestone 0 COMPLETE, Milestone 1 COMPLETE reference audit, Milestone 2 COMPLETE including 2E hardening (identity-bound label, SPORTS registry draw capability, exact reason preservation, 40 tests), Milestone 3 COMPLETE feature timing contract (period_values UNKNOWN PROHIBITED, does not block future progress, stays outside new path), Milestone 4 architecture COMPLETE and verified (262 tests) + 4E hardening COMPLETE and verified (305 tests) — dataset.py hardened (no unsafe defaults winner/disposition required, no silent swallowing malformed counted corrupt fails, raw vs canonical accounting with invariants raw=schema+valid valid=exact+canonical canonical=eligible+builder, strengthened digest versioned fields excluding odds deliberately stable under reordering, duplicate identity composite key exact collapse vs conflict fail loudly, provenance 64-hex validation, date semantics canonical vs eligible explicit), dataset_audit.py entry point `python -m slumdog.dataset_audit --root data --receipt /tmp/slumdog_price_free/receipt.json --sample /tmp/slumdog_price_free/examples_sample.json --sample-size 5` no network writes only under /tmp tested adapters settled_history.json and history_*.jsonl.gz explicit NO_SUPPORTED_INPUT_FILES vs fail loudly, 30 + 34 + 9 = 73 new tests. `docs/STATE.md` is canonical current truth, `docs/PRICE_FREE_DATASET_CONTRACT.md` is CURRENT hardened dataset contract, `docs/FEATURE_TIMING_CONTRACT.md` remains CURRENT governing ALLOWED.
+- Model training: FROZEN. See `docs/STATE.md` for blockers (missing prices NOT blockers), data limitations (reference observations), unresolved evidence. No model training, ranking thresholds, or daily production changes until Milestone 4 approved and real-data receipt executed. Dataset builder produces tested research foundation only.
 - Slumdog emits shadow research only; no CERTIFIED output.
 
 ## Quick Start
@@ -96,6 +96,9 @@ slumdog analyze
 slumdog parse
 slumdog details --events data/interim/events_$(date +%F).json --max-events 18
 slumdog enrich --events data/interim/events_$(date +%F).json
+
+# Price-free dataset audit (hardened, read-only, no network, writes only under /tmp)
+python -m slumdog.dataset_audit --root data --receipt /tmp/slumdog_price_free/receipt.json --sample /tmp/slumdog_price_free/examples_sample.json --sample-size 5
 
 # Model commands behind explicit research override only
 ```

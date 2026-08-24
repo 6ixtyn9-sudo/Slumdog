@@ -1,28 +1,37 @@
-"""Milestone 4 — leak-safe, price-free historical example builder.
+"""Milestone 4 — leak-safe, price-free historical example builder with 4E hardening.
 
 Core principle:
 settled event
     ↓
 Forebet participant probabilities
     ↓
-price-free favorite/underdog identity
+price-free favorite/underdog identity (identify_forebet_underdog)
     ↓
-prior-only pre-event evidence
+prior-only pre-event evidence (HistoryIndex, date < current)
     ↓
-price-free feature snapshot
+price-free feature snapshot (ALLOWED only)
     ↓
-UNDERDOG_WIN label
+UNDERDOG_WIN label (label_underdog_outcome, SPORTS registry)
 
 Never flows through legacy odds-first candidate, displayed odds, market implied probability,
 price availability, legacy Robber score, ROI gate.
 
 Training remains frozen — this module produces research dataset foundation only.
+
+Hardening (Milestone 4E):
+- No fabricated defaults: missing winner → excluded_invalid_winner, never participant 1
+- No silent swallowing: malformed rows counted, corrupt files fail loudly
+- Raw vs canonical accounting with explicit invariants
+- Strengthened input digest hashing all fields affecting identity/label/history/eligibility/dedup/provenance, excluding odds deliberately
+- Duplicate identity validated: composite key (sport, event_id, event_date) matching settlement.py, same event_id in different sports does not collapse, conflicting content fails loudly
+- Provenance validation: raw_sha256 must be 64 hex chars to count as present, malformed counted separately
 """
 
 from __future__ import annotations
 
 import hashlib
-import math
+import json
+import re
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -35,7 +44,6 @@ from .underdog import identify_forebet_underdog, label_underdog_outcome
 FEATURE_CONTRACT_VERSION = "price-free-v1-minimal-2026-08-24"
 LABEL_CONTRACT_VERSION = "price-free-v1"
 
-# Allowed identity features (per FEATURE_TIMING_CONTRACT.md ALLOWED)
 REQUIRED_IDENTITY_FEATURES = (
     "forebet_favorite_probability",
     "forebet_underdog_probability",
@@ -44,8 +52,6 @@ REQUIRED_IDENTITY_FEATURES = (
     "forebet_draw_probability_missing",
 )
 
-# Allowed prior-history features — subset reliably supported by HistoryIndex
-# We implement those that can be computed strictly from earlier event dates.
 ALLOWED_PRIOR_FEATURES = (
     "underdog_prior_games",
     "favorite_prior_games",
@@ -55,7 +61,6 @@ ALLOWED_PRIOR_FEATURES = (
     "h2h_prior_games",
     "h2h_underdog_win_rate",
     "h2h_draw_rate",
-    # Extended but still prior-only, computed from prior_rows where scores available:
     "underdog_prior_draw_rate",
     "favorite_prior_draw_rate",
     "prior_scoring_rate_gap",
@@ -64,7 +69,6 @@ ALLOWED_PRIOR_FEATURES = (
 
 ALLOWED_FEATURES = REQUIRED_IDENTITY_FEATURES + ALLOWED_PRIOR_FEATURES
 
-# Prohibited keys — must never appear in serialized example output
 PROHIBITED_KEYS = {
     "odds_1",
     "odds_2",
@@ -92,17 +96,67 @@ PROHIBITED_KEYS = {
     "result_text",
 }
 
+_SHA256_RE = re.compile(r"^[a-fA-F0-9]{64}$")
+
 
 def _key(name: str) -> str:
     return "".join(ch for ch in str(name or "").casefold() if ch.isalnum())
 
 
-def _is_finite(v: Any) -> bool:
-    try:
-        f = float(v)
-        return math.isfinite(f)
-    except Exception:
-        return False
+def _is_valid_sha256(s: str) -> bool:
+    return bool(_SHA256_RE.match(s.strip())) if isinstance(s, str) else False
+
+
+def _canonical_event_repr(row: SettledEvent) -> dict[str, Any]:
+    """Canonical versioned representation of all fields affecting dataset, excluding odds deliberately.
+
+    Included fields (affect identity, labeling, historical features, eligibility, dedup, provenance):
+    - event_id, sport, event_date, participant_1, participant_2, winner_index, disposition,
+      probability_1, probability_2, draw_probability, score_1, score_2 (used by prior-history),
+      league (competition key used by history if needed), source_url, raw_sha256 (from facets if present)
+    Excluded: odds_1, odds_2 (price independence, documented)
+    """
+    # Extract raw_sha256 from facets if present (history_*.jsonl.gz stores it there)
+    raw_sha = ""
+    if isinstance(row.facets, dict):
+        candidate = row.facets.get("raw_sha256")
+        if isinstance(candidate, str):
+            raw_sha = candidate
+
+    return {
+        "event_id": row.event_id,
+        "sport": row.sport,
+        "event_date": row.event_date,
+        "participant_1": row.participant_1,
+        "participant_2": row.participant_2,
+        "winner_index": row.winner_index,
+        "disposition": row.disposition,
+        "probability_1": row.probability_1,
+        "probability_2": row.probability_2,
+        "draw_probability": row.draw_probability,
+        "score_1": row.score_1,
+        "score_2": row.score_2,
+        "league": row.league,
+        "source_url": row.source_url,
+        "raw_sha256": raw_sha,
+        "version": "canonical-v1",  # versioned representation
+    }
+
+
+def _compute_input_digest(rows: list[SettledEvent]) -> str:
+    """Strengthened digest: hash canonical representation of all fields affecting dataset, stable under reordering.
+
+    Odds deliberately excluded (documented) since they do not affect new dataset.
+    """
+    # Sort rows deterministically before hashing to ensure stable under reordering
+    sorted_rows = sorted(rows, key=lambda r: (r.event_date, r.sport, r.event_id))
+    blobs = []
+    for r in sorted_rows:
+        canon = _canonical_event_repr(r)
+        # json dumps sorted keys for stability
+        blobs.append(json.dumps(canon, sort_keys=True, separators=(",", ":")))
+    combined = "\n".join(blobs)
+    return hashlib.sha256(combined.encode()).hexdigest()[:16]
 
 
 @dataclass(frozen=True)
@@ -118,14 +172,13 @@ class PriceFreeUnderdogExample:
     underdog_probability: float
     draw_probability: float | None
     probability_gap: float
-    label: int  # 0 favorite win or draw (draw-capable), 1 underdog win
+    label: int
     features: dict[str, float | None]
-    missingness: dict[str, int]  # 1 missing, 0 present
+    missingness: dict[str, int]
     source_url: str = ""
     raw_sha256: str = ""
     feature_contract_version: str = FEATURE_CONTRACT_VERSION
     label_contract_version: str = LABEL_CONTRACT_VERSION
-    # Optional audit metadata
     exclusion_reason: str | None = None
     legacy_provenance_missing: bool | None = None
 
@@ -150,18 +203,14 @@ class PriceFreeUnderdogExample:
             raise ValueError("draw_probability outside [0,1]")
         if self.probability_gap < 0:
             raise ValueError("probability_gap must be >=0")
-        # Ensure no prohibited keys in features
         for k in self.features:
             if k in PROHIBITED_KEYS:
                 raise ValueError(f"prohibited feature key in example: {k}")
-        # Ensure draw never selected as underdog
         if self.underdog_index == 0:
             raise ValueError("underdog_index must never be 0 (draw)")
 
     def to_dict(self) -> dict[str, Any]:
-        # Deterministic feature ordering
         payload = asdict(self)
-        # Sort features and missingness keys for deterministic output
         payload["features"] = {k: self.features[k] for k in sorted(self.features)}
         payload["missingness"] = {k: self.missingness[k] for k in sorted(self.missingness)}
         return payload
@@ -169,7 +218,6 @@ class PriceFreeUnderdogExample:
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> PriceFreeUnderdogExample:
         data = dict(payload)
-        # Only keep known fields
         allowed = set(cls.__dataclass_fields__.keys())
         filtered = {k: v for k, v in data.items() if k in allowed}
         return cls(**filtered)
@@ -177,10 +225,19 @@ class PriceFreeUnderdogExample:
 
 @dataclass(frozen=True)
 class PriceFreeDatasetReceipt:
-    """Deterministic audit receipt for price-free dataset build."""
+    """Deterministic audit receipt with raw vs canonical accounting (Milestone 4E hardening)."""
 
-    input_rows: int
+    # Raw vs canonical accounting
+    raw_input_rows: int
+    schema_excluded_rows: int
+    valid_loaded_rows: int
+    exact_duplicates_collapsed: int
+    canonical_input_rows: int
     eligible_examples: int
+    builder_excluded_rows: int
+
+    # Legacy required counts (global) — builder exclusions
+    input_rows: int  # alias for canonical_input_rows for backward compat, but explicit
     positive_underdog_wins: int
     negative_favorite_wins: int
     negative_draws: int
@@ -196,7 +253,14 @@ class PriceFreeDatasetReceipt:
     excluded_other: int
     provenance_present: int
     provenance_missing: int
+    provenance_invalid: int
     positive_rate: float | None
+    # Date semantics explicit
+    canonical_date_min: str | None
+    canonical_date_max: str | None
+    eligible_date_min: str | None
+    eligible_date_max: str | None
+    # Backward compat date_min/max alias eligible dates
     date_min: str | None
     date_max: str | None
     feature_contract_version: str
@@ -206,7 +270,6 @@ class PriceFreeDatasetReceipt:
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
-        # Stable ordering for per_sport
         payload["per_sport"] = {k: payload["per_sport"][k] for k in sorted(payload["per_sport"])}
         for sport in payload["per_sport"]:
             payload["per_sport"][sport] = {kk: payload["per_sport"][sport][kk] for kk in sorted(payload["per_sport"][sport])}
@@ -220,22 +283,13 @@ class PriceFreeDatasetReceipt:
         return cls(**filtered)
 
 
-def _compute_input_digest(rows: list[SettledEvent]) -> str:
-    # Deterministic digest: sorted event_id|sport|event_date|winner
-    sorted_keys = sorted((r.sport, r.event_id, r.event_date, r.winner_index) for r in rows)
-    blob = "\n".join(f"{s}|{eid}|{d}|{w}" for s, eid, d, w in sorted_keys)
-    return hashlib.sha256(blob.encode()).hexdigest()[:16]
-
-
 def _prior_scoring_stats(
     sport: str,
     participant_name: str,
     event_date: str,
     history: HistoryIndex,
 ) -> tuple[float | None, float | None, int, int]:
-    """Return (avg_scored, avg_conceded, games_with_scores, total_prior_games) for participant before event_date."""
     key = _key(participant_name)
-    # Get prior rows for this participant
     rows = history._earlier(history.by_participant.get((sport, key), []), event_date)
     total = len(rows)
     scored_sum = 0.0
@@ -244,15 +298,12 @@ def _prior_scoring_stats(
     conceded_count = 0
     draw_count = 0
     for r in rows:
-        # Determine if participant is p1 or p2
         is_p1 = _key(r.participant_1) == key
         is_p2 = _key(r.participant_2) == key
         if not (is_p1 or is_p2):
             continue
-        # Draw counting
         if r.winner_index == 0:
             draw_count += 1
-        # Scoring — only if scores present
         if r.score_1 is not None and r.score_2 is not None:
             if is_p1:
                 scored_sum += float(r.score_1)
@@ -267,13 +318,189 @@ def _prior_scoring_stats(
     return avg_scored, avg_conceded, draw_count, total
 
 
+# ---------------------------------------------------------------------------
+# Schema adapter — no unsafe defaults, explicit counting
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SchemaLoadResult:
+    valid_events: list[SettledEvent]
+    raw_input_rows: int
+    schema_excluded_rows: int
+    schema_exclusion_reasons: Counter
+    file_errors: list[str]
+
+
+def _validate_settled_dict(d: dict[str, Any]) -> SettledEvent:
+    """Validate a raw dict as SettledEvent — no fabricated defaults.
+
+    Required behavior (Milestone 4E):
+    - Missing winner → explicit excluded_invalid_winner (raise with reason INVALID_WINNER)
+    - Missing/unknown disposition → explicit exclusion (raise DISPOSITION_MISSING/UNKNOWN)
+    - Missing date, sport, participants → explicit schema exclusion
+    - Missing probabilities allowed as None at schema level (builder will exclude as missing_probability)
+    - Never infer outcome from score unless canonical loader already does so (we don't)
+    - Never invent source hashes
+    - Only documented schema fields accepted, unknown schema version rejected if present
+    """
+
+    # Check for unknown schema version if present
+    if "schema_version" in d:
+        # Only allow known versions or no version — reject unknown
+        sv = d.get("schema_version")
+        # Documented schemas: no version field, or version "v1" — reject others
+        if sv not in (None, "", "v1", "canonical-v1", "price-free-v1"):
+            raise ValueError(f"UNKNOWN_SCHEMA_VERSION:{sv}")
+
+    # Required fields — no defaults
+    event_id = d.get("event_id")
+    sport = d.get("sport")
+    event_date = d.get("event_date")
+    p1 = d.get("participant_1")
+    p2 = d.get("participant_2")
+    winner = d.get("winner_index")
+    disposition = d.get("disposition")
+
+    if not event_id or not isinstance(event_id, str):
+        raise ValueError("SCHEMA_MISSING_EVENT_ID")
+    if not sport or not isinstance(sport, str):
+        raise ValueError("SCHEMA_MISSING_SPORT")
+    if not event_date or not isinstance(event_date, str):
+        raise ValueError("SCHEMA_MISSING_EVENT_DATE")
+    # Validate date ISO
+    try:
+        # Allow YYYY-MM-DD
+        datetime_date = event_date[:10]
+        # Simple ISO check
+        parts = datetime_date.split("-")
+        if len(parts) != 3:
+            raise ValueError
+        int(parts[0]), int(parts[1]), int(parts[2])
+    except Exception:
+        raise ValueError(f"SCHEMA_INVALID_EVENT_DATE:{event_date}")
+
+    if not p1 or not isinstance(p1, str):
+        raise ValueError("SCHEMA_MISSING_PARTICIPANT_1")
+    if not p2 or not isinstance(p2, str):
+        raise ValueError("SCHEMA_MISSING_PARTICIPANT_2")
+
+    if winner is None:
+        raise ValueError("SCHEMA_MISSING_WINNER_INDEX")
+    if winner not in (0, 1, 2):
+        raise ValueError(f"SCHEMA_INVALID_WINNER_INDEX:{winner}")
+
+    if disposition is None or not isinstance(disposition, str) or not disposition.strip():
+        raise ValueError("SCHEMA_MISSING_DISPOSITION")
+    # Unknown disposition → explicit exclusion later, but allow at schema level if non-empty
+    # We will treat unknown disposition as builder exclusion, not schema exclusion, unless empty
+
+    # Probabilities — allow None at schema level, but key must exist? We require key present to avoid silent loss
+    # If key absent, count as schema missing probability
+    if "probability_1" not in d:
+        raise ValueError("SCHEMA_MISSING_PROBABILITY_1")
+    if "probability_2" not in d:
+        raise ValueError("SCHEMA_MISSING_PROBABILITY_2")
+
+    prob1 = d.get("probability_1")
+    prob2 = d.get("probability_2")
+    draw_prob = d.get("draw_probability")
+
+    # Scores — allow None
+    score1 = d.get("score_1")
+    score2 = d.get("score_2")
+
+    # League — optional
+    league = d.get("league", "")
+
+    # Source URL — optional
+    source_url = d.get("source_url", "")
+
+    # Facets — optional dict, may contain raw_sha256
+    facets = d.get("facets", {})
+    if not isinstance(facets, dict):
+        facets = {}
+
+    # Odds — allowed in raw but must not affect new dataset (documented exclusion)
+    odds1 = d.get("odds_1")
+    odds2 = d.get("odds_2")
+
+    # Build SettledEvent — this will validate some fields further
+    try:
+        return SettledEvent(
+            event_id=event_id,
+            sport=sport,
+            event_date=event_date,
+            participant_1=p1,
+            participant_2=p2,
+            winner_index=winner,
+            score_1=score1,
+            score_2=score2,
+            probability_1=prob1,
+            probability_2=prob2,
+            draw_probability=draw_prob,
+            forebet_pick=d.get("forebet_pick"),
+            odds_1=odds1,
+            odds_2=odds2,
+            league=league,
+            period_scores_1=tuple(d.get("period_scores_1", ())),
+            period_scores_2=tuple(d.get("period_scores_2", ())),
+            source_url=source_url,
+            disposition=disposition,
+            facets=facets,
+        )
+    except Exception as e:
+        raise ValueError(f"SCHEMA_VALIDATION_FAILED:{type(e).__name__}:{e}") from e
+
+
+def load_settled_events_from_dicts(raw_dicts: list[dict[str, Any]]) -> SchemaLoadResult:
+    """Load SettledEvents from raw dicts with explicit counting, no silent swallowing of malformed rows.
+
+    Returns valid events, counts, reasons, file_errors (empty for this in-memory loader).
+    Malformed rows counted by reason, not silently skipped.
+    """
+    valid: list[SettledEvent] = []
+    raw = len(raw_dicts)
+    schema_excluded = 0
+    reasons: Counter = Counter()
+    file_errors: list[str] = []
+
+    for idx, d in enumerate(raw_dicts):
+        if not isinstance(d, dict):
+            schema_excluded += 1
+            reasons["SCHEMA_NOT_A_DICT"] += 1
+            continue
+        try:
+            ev = _validate_settled_dict(d)
+            valid.append(ev)
+        except ValueError as ve:
+            schema_excluded += 1
+            msg = str(ve)
+            # Extract reason prefix
+            reason = msg.split(":")[0] if ":" in msg else msg
+            reasons[reason] += 1
+        except Exception as e:
+            schema_excluded += 1
+            reasons[f"SCHEMA_UNEXPECTED_{type(e).__name__}"] += 1
+
+    return SchemaLoadResult(
+        valid_events=valid,
+        raw_input_rows=raw,
+        schema_excluded_rows=schema_excluded,
+        schema_exclusion_reasons=reasons,
+        file_errors=file_errors,
+    )
+
+
 def build_price_free_examples(
     settled_events: list[SettledEvent],
     *,
     feature_contract_version: str = FEATURE_CONTRACT_VERSION,
     label_contract_version: str = LABEL_CONTRACT_VERSION,
 ) -> tuple[list[PriceFreeUnderdogExample], PriceFreeDatasetReceipt]:
-    """Build leak-safe price-free examples from settled events.
+    """Build leak-safe price-free examples from already validated settled events.
+
+    This function assumes input has passed schema validation (via _validate_settled_dict or direct SettledEvent construction).
+    For raw accounting with schema exclusions, use load_settled_events_from_dicts first, then this builder, then combine counts.
 
     Rules:
     - history_event_date < current_event_date (same-date excluded via HistoryIndex._earlier)
@@ -283,16 +510,22 @@ def build_price_free_examples(
     - Equal/missing/non-finite/out-of-range probabilities excluded
     - Unknown sport excluded
     - Deterministic ordering, duplicate handling, conflicting keys fail loudly
+    - Composite key (sport, event_id, event_date) matching settlement.py — same event_id in different sports does not collapse
     """
 
     # Deduplicate and detect conflicting composite keys
-    # Composite key: (sport, event_id, event_date)
+    # Composite key: (sport, event_id, event_date) — matches settlement.py seen key
     dedup: dict[tuple[str, str, str], SettledEvent] = {}
+    exact_duplicates_collapsed = 0
+
     for row in settled_events:
         key = (row.sport, row.event_id, row.event_date)
         if key in dedup:
             existing = dedup[key]
-            # Exact duplicate check: same winner, probabilities, scores, participants
+            # Exact duplicate check: all fields affecting dataset must match, excluding provenance and odds deliberately
+            # Fields: event_id, sport, event_date, participant_1, participant_2, winner_index, disposition,
+            # probability_1, probability_2, draw_probability, score_1, score_2, league
+            # If these match, collapse even if source_url/raw_sha256 differ (per existing integrity policy)
             if (
                 existing.winner_index == row.winner_index
                 and existing.probability_1 == row.probability_1
@@ -303,21 +536,29 @@ def build_price_free_examples(
                 and existing.score_1 == row.score_1
                 and existing.score_2 == row.score_2
                 and existing.disposition == row.disposition
+                and existing.league == row.league
+                and existing.event_id == row.event_id
+                and existing.sport == row.sport
+                and existing.event_date == row.event_date
             ):
-                # Exact duplicate — collapse per integrity contract
+                exact_duplicates_collapsed += 1
                 continue
             else:
                 raise ValueError(f"conflicting composite key {key}: {existing} vs {row}")
         dedup[key] = row
 
-    # Deterministic input ordering: by (event_date, sport, event_id)
     sorted_rows = sorted(dedup.values(), key=lambda r: (r.event_date, r.sport, r.event_id))
 
-    input_digest = _compute_input_digest(sorted_rows)
-    date_min = min((r.event_date for r in sorted_rows), default=None)
-    date_max = max((r.event_date for r in sorted_rows), default=None)
+    # Raw vs canonical accounting for this builder stage
+    # Here valid_loaded_rows = len(settled_events) (input to builder)
+    # canonical_input_rows = len(sorted_rows) after dedup
+    valid_loaded_rows = len(settled_events)
+    canonical_input_rows = len(sorted_rows)
 
-    # Build HistoryIndex from all sorted rows (prior-only via _earlier)
+    input_digest = _compute_input_digest(sorted_rows)
+    canonical_date_min = min((r.event_date for r in sorted_rows), default=None)
+    canonical_date_max = max((r.event_date for r in sorted_rows), default=None)
+
     history = HistoryIndex(sorted_rows)
 
     examples: list[PriceFreeUnderdogExample] = []
@@ -325,26 +566,24 @@ def build_price_free_examples(
     per_sport_counter: dict[str, Counter] = defaultdict(Counter)
     provenance_present = 0
     provenance_missing = 0
+    provenance_invalid = 0
     positive = 0
     negative_fav = 0
     negative_draw = 0
 
     for row in sorted_rows:
         sport = row.sport
-        # Unknown sport
         if sport not in SPORTS:
             exclusion_counter["excluded_unknown_sport"] += 1
             per_sport_counter[sport]["excluded_unknown_sport"] += 1
             continue
 
-        # Disposition void handling
         disp = (row.disposition or "SETTLED").upper()
         if "VOID" in disp or disp in {"CANCELLED", "CANCELED", "ABANDONED", "NO_CONTEST", "POSTPONED"}:
             exclusion_counter["excluded_void"] += 1
             per_sport_counter[sport]["excluded_void"] += 1
             continue
 
-        # Identity
         identity = identify_forebet_underdog(row.probability_1, row.probability_2, row.draw_probability)
         if not identity.eligible:
             reason = identity.ineligibility_reason or "NO_ELIGIBLE_IDENTITY"
@@ -365,7 +604,6 @@ def build_price_free_examples(
                 per_sport_counter[sport]["excluded_other"] += 1
             continue
 
-        # Label
         label_result = label_underdog_outcome(sport, identity, row.winner_index, disposition=disp, source_conflict=False)
         if not label_result.eligible:
             ex = label_result.exclusion_reason or "UNKNOWN"
@@ -401,24 +639,32 @@ def build_price_free_examples(
                 per_sport_counter[sport]["excluded_other"] += 1
             continue
 
-        # Eligible — build features
         assert label_result.label in (0, 1)
         label = label_result.label
-        # Count positives/negatives
         if label == 1:
             positive += 1
         else:
-            # label 0 could be favorite win or draw (draw-capable)
             if label_result.is_draw:
                 negative_draw += 1
             else:
                 negative_fav += 1
 
-        # Provenance
-        if row.source_url:
-            provenance_present += 1
+        # Provenance validation — raw_sha256 must be 64 hex chars to count as present
+        raw_sha = ""
+        if isinstance(row.facets, dict):
+            cand = row.facets.get("raw_sha256")
+            if isinstance(cand, str):
+                raw_sha = cand
+        if raw_sha:
+            if _is_valid_sha256(raw_sha):
+                provenance_present += 1
+            else:
+                provenance_invalid += 1
         else:
+            # Also check source_url presence? For provenance_present we require valid sha256
+            # But legacy compatibility: if raw_sha missing but source_url present, count as missing not invalid
             provenance_missing += 1
+
         per_sport_counter[sport]["eligible_examples"] += 1
         if label == 1:
             per_sport_counter[sport]["positive_underdog_wins"] += 1
@@ -428,15 +674,12 @@ def build_price_free_examples(
             else:
                 per_sport_counter[sport]["negative_favorite_wins"] += 1
 
-        # Prior history via HistoryIndex
         h2h, recent_1, recent_2 = history.context(sport, row.event_date, row.participant_1, row.participant_2)
 
-        # Determine underdog/favorite participants
         fav_idx = identity.favorite_index
         dog_idx = identity.underdog_index
         assert fav_idx in (1, 2) and dog_idx in (1, 2)
 
-        # Recent form mapping
         if dog_idx == 1:
             dog_recent = recent_1
             fav_recent = recent_2
@@ -453,13 +696,10 @@ def build_price_free_examples(
         else:
             recent_win_rate_gap = None
 
-        # H2H
         h2h_prior_games = h2h.total_games
         if h2h_prior_games > 0:
-            # Wins for underdog
             p1_wins = h2h.participant_1_wins
             p2_wins = h2h.participant_2_wins
-            # Map to underdog
             if dog_idx == 1:
                 dog_h2h_wins = p1_wins
             else:
@@ -470,7 +710,6 @@ def build_price_free_examples(
             h2h_underdog_win_rate = None
             h2h_draw_rate = None
 
-        # Extended prior stats from prior_rows
         dog_avg_scored, dog_avg_conceded, dog_draws, dog_total = _prior_scoring_stats(sport, row.participant_1 if dog_idx == 1 else row.participant_2, row.event_date, history)
         fav_avg_scored, fav_avg_conceded, fav_draws, fav_total = _prior_scoring_stats(sport, row.participant_1 if fav_idx == 1 else row.participant_2, row.event_date, history)
 
@@ -494,19 +733,18 @@ def build_price_free_examples(
         else:
             prior_conceding_rate_gap = None
 
-        # Build features dict — only allowed keys, preserve None for missing
         features: dict[str, float | None] = {
             "forebet_favorite_probability": identity.favorite_probability,
             "forebet_underdog_probability": identity.underdog_probability,
             "forebet_probability_gap": identity.probability_gap,
             "forebet_draw_probability": identity.draw_probability,
             "forebet_draw_probability_missing": 1.0 if identity.draw_probability is None else 0.0,
-            "underdog_prior_games": float(underdog_prior_games) if underdog_prior_games is not None else None,
-            "favorite_prior_games": float(favorite_prior_games) if favorite_prior_games is not None else None,
+            "underdog_prior_games": float(underdog_prior_games),
+            "favorite_prior_games": float(favorite_prior_games),
             "underdog_prior_win_rate": underdog_prior_win_rate,
             "favorite_prior_win_rate": favorite_prior_win_rate,
             "recent_win_rate_gap": recent_win_rate_gap,
-            "h2h_prior_games": float(h2h_prior_games) if h2h_prior_games is not None else None,
+            "h2h_prior_games": float(h2h_prior_games),
             "h2h_underdog_win_rate": h2h_underdog_win_rate,
             "h2h_draw_rate": h2h_draw_rate,
             "underdog_prior_draw_rate": underdog_prior_draw_rate,
@@ -515,21 +753,12 @@ def build_price_free_examples(
             "prior_conceding_rate_gap": prior_conceding_rate_gap,
         }
 
-        # Missingness dict — 1 if None, 0 if present
-        # For forebet_draw_probability_missing, its missingness is always 0 (it's an indicator itself)
         missingness: dict[str, int] = {}
         for k, v in features.items():
             if k == "forebet_draw_probability_missing":
                 missingness[k] = 0
             else:
                 missingness[k] = 1 if v is None else 0
-
-        # Special handling: underdog_prior_games and favorite_prior_games and h2h_prior_games are always present as 0 if no history
-        # Per missingness policy: genuine observed zero remains 0 with missing 0
-        # If HistoryIndex cannot distinguish no history from zero games, document limitation
-        # Here games=0 means no history, but we treat as genuine 0 with missing 0 for now, and note limitation in docs
-        # To follow policy: if games=0 and win_rate None, then win_rate missing 1, but games missing 0 (genuine zero prior games)
-        # So adjust: for games fields, missingness 0 even if 0
         for gkey in ("underdog_prior_games", "favorite_prior_games", "h2h_prior_games"):
             missingness[gkey] = 0
 
@@ -547,33 +776,46 @@ def build_price_free_examples(
             features={k: features[k] for k in sorted(features)},
             missingness={k: missingness[k] for k in sorted(missingness)},
             source_url=row.source_url,
-            raw_sha256="",  # SettledEvent does not carry raw_sha256, keep empty but present for contract
+            raw_sha256=raw_sha,
             feature_contract_version=feature_contract_version,
             label_contract_version=label_contract_version,
             exclusion_reason=None,
-            legacy_provenance_missing=row.source_url == "",
+            legacy_provenance_missing=not bool(raw_sha),
         )
 
-        # Ensure no prohibited keys
         for prohibited in PROHIBITED_KEYS:
             if prohibited in example.features:
                 raise ValueError(f"prohibited key in features: {prohibited}")
 
         examples.append(example)
 
-    # Deterministic output ordering
     examples = sorted(examples, key=lambda e: (e.event_date, e.sport, e.event_id))
 
-    # Receipt
-    input_rows = len(sorted_rows)
     eligible_examples = len(examples)
-    # Accounting invariant: input_rows == eligible + sum(exclusions) — verified by tests
+    builder_excluded_rows = canonical_input_rows - eligible_examples
+
+    # For backward compat, input_rows = canonical_input_rows
+    input_rows = canonical_input_rows
 
     positive_rate = (positive / eligible_examples) if eligible_examples else None
+    eligible_date_min = min((e.event_date for e in examples), default=None)
+    eligible_date_max = max((e.event_date for e in examples), default=None)
+
+    # Raw accounting for this builder alone (no schema stage) — set raw=valid=canonical for now
+    # When used via adapter, raw accounting will be combined
+    raw_input_rows = valid_loaded_rows
+    schema_excluded_rows = 0
+    # Note: exact_duplicates_collapsed already counted
 
     receipt = PriceFreeDatasetReceipt(
-        input_rows=input_rows,
+        raw_input_rows=raw_input_rows,
+        schema_excluded_rows=schema_excluded_rows,
+        valid_loaded_rows=valid_loaded_rows,
+        exact_duplicates_collapsed=exact_duplicates_collapsed,
+        canonical_input_rows=canonical_input_rows,
         eligible_examples=eligible_examples,
+        builder_excluded_rows=builder_excluded_rows,
+        input_rows=input_rows,
         positive_underdog_wins=positive,
         negative_favorite_wins=negative_fav,
         negative_draws=negative_draw,
@@ -589,9 +831,14 @@ def build_price_free_examples(
         excluded_other=exclusion_counter.get("excluded_other", 0),
         provenance_present=provenance_present,
         provenance_missing=provenance_missing,
+        provenance_invalid=provenance_invalid,
         positive_rate=positive_rate,
-        date_min=date_min,
-        date_max=date_max,
+        canonical_date_min=canonical_date_min,
+        canonical_date_max=canonical_date_max,
+        eligible_date_min=eligible_date_min,
+        eligible_date_max=eligible_date_max,
+        date_min=eligible_date_min,
+        date_max=eligible_date_max,
         feature_contract_version=feature_contract_version,
         label_contract_version=label_contract_version,
         input_digest=input_digest,
@@ -599,3 +846,73 @@ def build_price_free_examples(
     )
 
     return examples, receipt
+
+
+def build_dataset_with_raw_accounting(
+    raw_dicts: list[dict[str, Any]],
+    *,
+    feature_contract_version: str = FEATURE_CONTRACT_VERSION,
+    label_contract_version: str = LABEL_CONTRACT_VERSION,
+) -> tuple[list[PriceFreeUnderdogExample], PriceFreeDatasetReceipt, SchemaLoadResult]:
+    """Full pipeline with raw vs canonical accounting (Milestone 4E).
+
+    Steps:
+    1. Schema validation via load_settled_events_from_dicts — counts raw, schema_excluded, valid_loaded
+    2. Builder via build_price_free_examples — counts exact_duplicates_collapsed, canonical, eligible, builder_excluded
+    3. Combined receipt with invariants:
+       raw = schema_excluded + valid_loaded
+       valid = exact_duplicates_collapsed + canonical
+       canonical = eligible + builder_excluded
+    """
+    schema_result = load_settled_events_from_dicts(raw_dicts)
+
+    # Builder stage
+    examples, builder_receipt = build_price_free_examples(
+        schema_result.valid_events,
+        feature_contract_version=feature_contract_version,
+        label_contract_version=label_contract_version,
+    )
+
+    # Combine accounting — builder receipt already has valid_loaded, canonical, exact_duplicates, etc.
+    # But raw_input_rows in builder receipt is valid_loaded_rows, not true raw
+    # So we construct final receipt with true raw counts
+
+    final_receipt = PriceFreeDatasetReceipt(
+        raw_input_rows=schema_result.raw_input_rows,
+        schema_excluded_rows=schema_result.schema_excluded_rows,
+        valid_loaded_rows=schema_result.raw_input_rows - schema_result.schema_excluded_rows,
+        exact_duplicates_collapsed=builder_receipt.exact_duplicates_collapsed,
+        canonical_input_rows=builder_receipt.canonical_input_rows,
+        eligible_examples=builder_receipt.eligible_examples,
+        builder_excluded_rows=builder_receipt.builder_excluded_rows,
+        input_rows=builder_receipt.canonical_input_rows,
+        positive_underdog_wins=builder_receipt.positive_underdog_wins,
+        negative_favorite_wins=builder_receipt.negative_favorite_wins,
+        negative_draws=builder_receipt.negative_draws,
+        excluded_void=builder_receipt.excluded_void,
+        excluded_source_conflict=builder_receipt.excluded_source_conflict,
+        excluded_equal_probability=builder_receipt.excluded_equal_probability,
+        excluded_missing_probability=builder_receipt.excluded_missing_probability,
+        excluded_non_finite_probability=builder_receipt.excluded_non_finite_probability,
+        excluded_out_of_range_probability=builder_receipt.excluded_out_of_range_probability,
+        excluded_unknown_sport=builder_receipt.excluded_unknown_sport,
+        excluded_unexpected_two_way_draw=builder_receipt.excluded_unexpected_two_way_draw,
+        excluded_invalid_winner=builder_receipt.excluded_invalid_winner,
+        excluded_other=builder_receipt.excluded_other,
+        provenance_present=builder_receipt.provenance_present,
+        provenance_missing=builder_receipt.provenance_missing,
+        provenance_invalid=builder_receipt.provenance_invalid,
+        positive_rate=builder_receipt.positive_rate,
+        canonical_date_min=builder_receipt.canonical_date_min,
+        canonical_date_max=builder_receipt.canonical_date_max,
+        eligible_date_min=builder_receipt.eligible_date_min,
+        eligible_date_max=builder_receipt.eligible_date_max,
+        date_min=builder_receipt.date_min,
+        date_max=builder_receipt.date_max,
+        feature_contract_version=builder_receipt.feature_contract_version,
+        label_contract_version=builder_receipt.label_contract_version,
+        input_digest=builder_receipt.input_digest,
+        per_sport=builder_receipt.per_sport,
+    )
+
+    return examples, final_receipt, schema_result
