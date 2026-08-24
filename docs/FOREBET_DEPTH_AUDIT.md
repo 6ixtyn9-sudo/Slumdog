@@ -289,3 +289,19 @@ American-football upcoming rows expose `.haodd` with dashes. Four 2026
 preseason fixtures and 7,447 archived settled rows contained zero prices. This
 remains subject to a regular-season re-check on or after approximately
 2026-09-10; no final claim should be made until that probe is executed.
+
+### MMA legacy-ledger integrity
+
+The 2026-08-24 audit of `history_mma.jsonl.gz` found 759 stored rows and 757
+unique event IDs. Two settled, priced events (`mma:2638` and `mma:2721`) were
+byte-identical duplicate writes from the 2026-06-15 listing. Deduplication gives
+600 settled, 157 void, and 153 priced events; 11 events are both void and
+priced. Thus the earlier `159 void == 159 priced` observation is neither
+reproduced nor a structural settlement bug. Pre-event prices on a subsequently
+void event are retained for audit.
+
+All 759 legacy rows lack both `raw_sha256` and `captured_at`; they predate raw
+provenance retention. Current backfill writes `facets.raw_sha256` for new rows.
+Legacy provenance can only be restored by rebuilding from retained raw captures;
+hashes must never be fabricated. The existing derived ledger is not rewritten
+automatically.

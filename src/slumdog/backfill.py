@@ -156,6 +156,9 @@ def backfill_sport(
     safe_batch = max(1, min(int(batch_size), 6))
 
     raw_bytes_retained = 0
+    # Defensive run-local guard: a source page may repeat the same event row.
+    # Do not collapse observations across prior runs or dates here.
+    written_event_keys: set[tuple[str, str, str]] = set()
     if pending:
         with gzip.open(history_path, "at", encoding="utf-8") as output:
             for offset in range(0, len(pending), safe_batch):
@@ -167,7 +170,13 @@ def backfill_sport(
                             capture = futures[day].result()
                             body_path = root / capture.body_path
                             rows = _parse_settled_body(sport, body_path.read_bytes(), day)
+                            settled_rows_written = 0
                             for row in rows:
+                                event_key = (sport, str(row.event_id), str(row.event_date))
+                                if row.event_id and event_key in written_event_keys:
+                                    continue
+                                if row.event_id:
+                                    written_event_keys.add(event_key)
                                 payload = asdict(row)
                                 # Link every ledger row back to its exact raw
                                 # body so facet extraction is replayable.
@@ -175,6 +184,7 @@ def backfill_sport(
                                 if isinstance(payload.get("facets"), dict):
                                     payload["facets"]["raw_sha256"] = capture.sha256
                                 output.write(json.dumps(payload, sort_keys=True) + "\n")
+                                settled_rows_written += 1
                                 total_rows += 1
                                 priced_rows += row.odds_1 is not None and row.odds_2 is not None
                                 void_rows += row.disposition == "VOID"
@@ -185,7 +195,7 @@ def backfill_sport(
                             manifest.append({
                                 "date": day, "source_url": capture.source_url,
                                 "sha256": capture.sha256, "bytes": capture.bytes,
-                                "settled_rows": len(rows),
+                                "settled_rows": settled_rows_written,
                                 "raw_retained": keep_raw,
                             })
                             if not keep_raw:
