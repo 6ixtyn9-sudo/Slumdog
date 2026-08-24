@@ -6,9 +6,21 @@
 - **Target:** 6 schema exclusions due to missing `participant_1`.
 - **Method:** Collected via `--schema-exclusion-report` using tested adapters.
 - **Findings:**
-  - All 6 rows manifest a strict `SCHEMA_MISSING_PARTICIPANT_1` error because the primary `participant_1` key is null or empty.
-  - The rows are captured, but further evaluation is gated by Forebet identity matching.
-  - No legacy aliases (`team`, `home`, `player`, `fighter`) have been mapped dynamically to bypass the exclusion.
+  - All six schema-excluded rows are in: `data/reports/history_american_football.jsonl.gz`
+  - All use `reconstruction=HISTORICAL_PAGE`.
+  - All contain `participant_1` and `participant_2` as explicit empty strings.
+  - No alternative participant-like fields are present.
+  - All source URLs contain an empty team slug, `/-/`:
+    - line 1415: `american_football:15799` — 2024-08-31 — `/en/american-football/matches/ncaa/-/15799`
+    - line 1907: `american_football:16798` — 2024-09-21 — `/en/american-football/matches/ncaa/-/16798`
+    - line 2157: `american_football:16965` — 2024-09-28 — `/en/american-football/matches/ncaa/-/16965`
+    - line 3665: `american_football:18713` — 2024-11-09 — `/en/american-football/matches/ncaa/-/18713`
+    - line 4945: `american_football:20775` — 2025-09-20 — `/en/american-football/matches/ncaa/-/20775`
+    - line 5669: `american_football:21787` — 2025-10-11 — `/en/american-football/matches/ncaa/-/21787`
+  - **Classification:** `MALFORMED_HISTORICAL_RECONSTRUCTION_WITH_EMPTY_PARTICIPANTS`
+  - The receipt reason `SCHEMA_MISSING_PARTICIPANT_1` reflects first-failure validation. Both participants are empty in every affected row.
+- **Decision:** No names were inferred, no aliases accepted, no ledgers modified, and no network request made. The six rows remain excluded.
+- **System Behavior:** The schema report was emitted successfully while overall status remained `DATA_CONFLICTS`. Receipt and conflict report were emitted; examples/sample were not emitted.
 
 ## 2. Hockey Double-Write (hockey:278977)
 - **Known Conflict:** Netherlands W vs Denmark W, 2023-08-20.
