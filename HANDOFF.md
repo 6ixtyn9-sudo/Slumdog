@@ -1,8 +1,8 @@
 # Slumdog living handoff
 
 Last updated: 2026-08-24
-Branch: `arena/01a032d8-slumdog`
-Pull request: #4
+Branch: `arena/01a03377-slumdog`
+Pull request: none opened for this follow-up
 Phase: Forebet depth audit; model training remains frozen
 
 This file is a living continuation record. Update it as evidence is gathered and
@@ -162,3 +162,200 @@ identical pairs, `hockey:278977`'s conflicting results, absent raw bytes for the
 sampled suspicious dates, and the 11 MMA void/priced rows whose pre-scratch
 explanation is plausible but unverified. Never rewrite those ledgers or invent
 provenance without explicit authorization and source bytes.
+
+## Durable operating guide and evidence standard
+
+This section is a mandatory continuation contract. Treat it as an engineering
+deliverable, not an informal summary. It must be updated before a merge and
+must retain evidence needed to continue without reconstructing it from chat.
+
+### Repository and workspace workflow
+
+- `main` is the only permanent branch. Arena work is delivered from the
+  session-assigned `arena/...` branch; do not create another permanent branch,
+  rewrite `main`, force-push, or delete unmerged work.
+- Keep one coherent PR open for active-session work. Do not merge it without
+  explicit user authorization. Immediately before a user-authorized merge,
+  update this file, run/record verification, commit and push the final handoff,
+  and confirm PR mergeability.
+- Arena checkout: `/home/user/Slumdog`. User Codespace checkout:
+  `/workspaces/Slumdog`. They are separate filesystems. Uncommitted files,
+  ignored files, captures, and ledgers do not cross this boundary.
+- Tracked Git changes transfer only via commit/push/pull. Never assume a file
+  visible in Codespace is visible in Arena. Inspect retained Codespace data
+  before proposing a network refetch.
+- For small evidence, produce a compact structured report under `/tmp` and
+  paste/attach it. When exact bytes matter, transfer only relevant retained
+  files and record their SHA-256; a compact report is not equivalent to source
+  bytes. Never commit raw captures, ledgers, temporary archives, or secrets.
+- After an authorized merge, the user may safely run in Codespace:
+  ```bash
+  cd /workspaces/Slumdog
+  git status --short
+  git checkout main
+  git pull --ff-only origin main
+  git branch -d <merged-arena-branch>
+  git push origin --delete <merged-arena-branch>
+  git fetch --prune origin
+  git status
+  git branch -a
+  ```
+  Lowercase `git branch -d` is intentional: it refuses to delete unmerged work.
+
+### Evidence language
+
+Classify claims precisely:
+
+- **Verified from code:** name exact file/function/selector (and line context
+  when useful).
+- **Verified from retained bytes:** record source paths, available SHA-256,
+  selectors, and representative observed values.
+- **Verified from an executed live probe:** record date, URL, route, request
+  count, outcome, and rate-limit behavior.
+- **Derived from a ledger:** name ledger path, row counts, dedupe key, and
+  provenance limitations.
+- **Plausible but unverified:** explain why no source can prove it.
+- **Unresolved conflict:** retain competing facts; never silently choose one.
+
+Do not call chat memory, navigation labels, assumptions, or missing raw bytes
+"confirmed." Newly fetched bytes are never a replacement for a missing
+historical capture.
+
+### Change control, parser, and network rules
+
+- Discuss findings before coding unless the user explicitly authorizes a change.
+  No drive-by refactors or speculative abstractions.
+- Model training remains frozen until the user explicitly unlocks it. Forebet is
+  the sole external source. Preserve immutable captures, never fabricate
+  provenance, never automatically rewrite/compact legacy ledgers, and fail
+  loudly on conflicting source facts.
+- Missing stays missing; never zero-fill. Do not infer market semantics absent
+  from source labels. Prefer selector-scoped parsing where stable DOM exists.
+  Every parser change needs a minimal fixture-based regression test.
+- Prefer retained bytes before network access. Use existing collector/relay code,
+  never ad-hoc scraping; at most six workers, small batches, and 62-second
+  inter-batch pauses. One-off probes are sequential/minimal and must record URL,
+  date, route, and result. Do not run the NFL odds probe before approximately
+  2026-09-10.
+
+### Required handoff content and verification gates
+
+For every complete/open/parked/unresolved item, record: status; problem/root
+cause; exact files/functions; implemented behavior; test names; commands and
+results; evidence paths/values; unresolved edge cases; prohibited assumptions;
+and precise next action. DOM work additionally records root/row selectors,
+field selectors, observed values, dash/missing behavior, ambiguous tokens,
+count/order assumptions, and test fixture shapes.
+
+Before push, run and record:
+```bash
+python -m pytest -q
+python3 -m py_compile scripts/*.py src/slumdog/*.py
+pyflakes scripts/*.py src/slumdog/*.py tests
+git diff --check
+git status --short
+```
+If unavailable, record the exact failure and give the user the precise
+Codespace command. Before merge also record branch/HEAD, diffstat/files, test
+count, compile/lint/diff-check results, data-bearing Codespace audits, parked
+items, PR mergeability, and explicit user authorization.
+
+## DOM market field-map checkpoint (2026-08-24)
+
+Status: implemented on the active Arena branch; unmerged at this writing.
+Evidence: compact DOM report generated in the user Codespace from five retained
+`data/raw/details/football/*.html` captures and pasted into the session. It is
+verified retained-byte evidence, but those source bytes are not present in the
+Arena filesystem.
+
+### Verified selector map
+
+```
+#dbc_table .rcnt
+  probability: .fprc .fpr
+  raw pick: .predict .forepr
+  selected-pick coefficient: .prmod .lscrsp
+
+#gscr_table .rcnt
+  probabilities: .fprc > .playerPred
+  names: .predict .forepr .playerPred
+  coefficients: .prmod .lscrsp
+```
+
+A `.rcnt` is one fixture row in both tables. In the scorer table, one fixture
+row contains up to three probability/player descendants; it is not three scorer
+rows. Observed retained examples:
+
+```
+DC: 85% / 12 / -1111; 76% / 12 / -435; 77% / 12 / -;
+    70% / 21 / -556; 73% / 12 / -345
+Scorers: 19%,18%,18% <-> Tulio,Dulay,Tesar <-> -,-,-
+         46%,24%,24% <-> Ouattara,Labeau,Stewart <-> -,-,-
+         18%,12%,12% <-> Bačić,Krilanovich,Pudić <-> -,-,-
+```
+
+`21` remains raw and unnormalized. The DC coefficient prices one selected pick,
+not a matrix. Scorer market subtype is unknown; display order is preserved but
+not asserted to be a ranking. Empty scorer rows emit nothing. Sample population
+fill-rate remains unknown.
+
+Implementation: `src/slumdog/detail_facets.py` adds a small soup-based helper
+called from the football branch of `parse_detail()`. It scopes DC/scorer parsing
+to the roots above; `_football_detail_stats(text)` retains text-only
+corners/cards extraction and no longer uses a global double-chance regex.
+Typed DC fields are `doublechance_prob`, `doublechance_pick_raw`,
+`doublechance_pick` (only `1X`, `12`, `X2`), and
+`doublechance_pick_price_am` (signed token only). Typed scorer fields pair
+probabilities/names only when nonempty, equal count, valid percentages, and at
+most three; prices are optional signed tokens. No model feature or market
+semantic is added.
+
+Regression fixtures: `tests/test_football_dom_markets.py` covers standard DC,
+raw `21`/dash behavior, aligned scorers, empty rows, mismatch suppression, and
+out-of-root lookalikes. `tests/test_detail_facets.py` now proves the established
+text extractor still coexists with DOM-scoped DC extraction.
+
+## Current-session verification (unmerged DOM market implementation)
+
+- `python3 -m py_compile scripts/*.py src/slumdog/*.py tests/*.py`: passed.
+- `git diff --check`: passed.
+- `python -m pytest -q`: not run; Arena Python lacks `pytest` (`No module named pytest`).
+- `pyflakes scripts/*.py src/slumdog/*.py tests`: not run; `pyflakes` executable is absent.
+- A direct parser smoke test also could not import `slumdog.detail_facets` because Arena Python lacks `bs4` (`No module named 'bs4'`). This is an environment dependency failure, not a parser result.
+
+Run in the dependency-equipped Codespace before merge:
+```bash
+cd /workspaces/Slumdog
+python -m pytest -q
+python3 -m py_compile scripts/*.py src/slumdog/*.py tests/*.py
+pyflakes scripts/*.py src/slumdog/*.py tests
+git diff --check
+```
+
+
+## After merge: next session starts here
+
+Read `HANDOFF.md` first, then `docs/FOREBET_DEPTH_AUDIT.md`, then the DOM helper
+in `src/slumdog/detail_facets.py` and `tests/test_football_dom_markets.py`.
+Model training remains frozen.
+
+1. If the DOM-market implementation is still unmerged, run the mandatory gates
+   in an environment with project/dev dependencies, review the resulting diff,
+   update this handoff with exact results, and await explicit merge approval.
+2. Quantify the 963-date football backfill gap and retained-capture replay
+   feasibility before fetching anything.
+3. Audit sparse hockey/rugby/volleyball/handball/baseball pricing from retained
+   bytes; then audit dropped football getrs.php keys and esoccer separately.
+
+Safe read-only commands include `git status --short`, `git diff --check`, the
+compile/lint/test gates above, and local retained-data inventory. Do not run the
+American-football odds probe before approximately 2026-09-10. Do not fetch to
+replace missing historical bytes. Arena currently lacks the five retained
+football detail captures; the compact Codespace DOM report is recorded above,
+but exact-byte review requires the user to transfer relevant bytes.
+
+Do not "fix" unresolved legacy evidence without new source bytes: four
+cross-date normalized-identical pairs, hockey `278977` conflicting results,
+absent sampled raw bytes, and 11 MMA void/priced rows with only a plausible
+pre-scratch explanation. Preserve raw DC token `21`, scorer-market semantic
+uncertainty, and unknown scorer sample fill rate.
