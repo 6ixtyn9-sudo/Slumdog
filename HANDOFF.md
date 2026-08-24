@@ -1,368 +1,192 @@
-# Slumdog living handoff
+# Slumdog Living Handoff
 
-Last updated: 2026-08-24
-Branch: `arena/01a03377-slumdog`
-Pull request: #5 (open; do not merge without explicit user authorization)
-Phase: Forebet depth audit; model training remains frozen
+**Last updated:** 2026-08-24 (UTC) — Milestones 0–4F COMPLETE, real-data census executed, PR #6 MERGE READY
+**Branch:** `arena/01a033af-slumdog`
+**HEAD SHA:** 4b1546f Milestone 4F: conflict census mode for genuine ledger conflicts
+**Phase:** Milestones 0–4F COMPLETE, price-free foundation MERGE READY, historical dataset generation FAIL-CLOSED, real-data readiness BLOCKED by historical conflicts, training FROZEN, production NOT AUTHORIZED
+**Mission:** Slumdog identifies a small daily shortlist of participants that Forebet considers underdogs but whose available pre-event evidence indicates a credible outright-win upset.
+**PR:** #6 https://github.com/6ixtyn9-sudo/Slumdog/pull/6 — OPEN, MERGE READY after documentation commit
+**Training:** FROZEN (`feature_contracts.py: MODEL_TRAINING_ALLOWED=False`)
+**Tests:** 337 passed (verified 2026-08-24)
 
-This file is a living continuation record. Update it as evidence is gathered and
-again immediately before the final merge.
+## Product Invariants (from AGENTS.md)
 
-## Constraints
+- UNDERDOG_WIN outright only, never selects draws, draw=failed in draw-capable
+- Odds optional metadata only — not required, not feature, not gate, missing must not lower confidence
+- Never force pick; NO_STRONG_UNDERDOG is daily result not candidate state; never promise profit/guaranteed wins
+- Training frozen until user approves dataset/target/timing/validation
+- Main only permanent branch; Arena delivery only; never force-push main
+- Assessment vs selection separated, odds outside core assessment, no ranking by model prob before approval
 
-- Keep PR #4 open until the user explicitly authorizes the single final merge.
-- Discuss findings before code changes unless the user already authorized them.
-- Forebet is the sole external source. Preserve immutable raw captures and never
-  fabricate provenance.
-- Be gentle with Forebet: at most 6 workers, small batches, and 62-second pauses
-  for collection. Read-only local audits do not use the network.
-- Do not modify or unlock model training.
-- Avoid drive-by refactors and speculative abstractions.
-- Verify factual claims from code, retained bytes, or an executed probe. Mark
-  anything else unverified.
+## Milestone 0 — COMPLETE
 
-## Work currently in PR #4
+User approved 2026-08-24: move STATE.md to docs/STATE.md, add AGENTS.md, canonical read order, classifying docs, retaining forensic as historical, main only permanent branch, locking price-free UNDERDOG_WIN mission, leaving training frozen. No deletions authorized.
 
-### Football truncated relay responses
+## Milestone 1 Audit — COMPLETE (Now REFERENCE)
 
-`src/slumdog/forebet.py` now fully parses raw or HTML-wrapped football JSON
-before accepting a capture. A truncated HTTP-200 response raises `ValueError`
-and the football path retries up to three times. Regression tests are in
-`tests/test_forebet.py`.
+**Deliverable:** `docs/MILESTONE1_AUDIT.md` (885 lines + corrections) — read-only audit, no code changes. Now REFERENCE after gaps resolved for identity/label/timing.
 
-### H2H fabrication
+Central problem exposed: system can operate without odds but underdog identity, scoring, feature vectors, thresholds, research approval still materially odds-first. 10 gaps documented, 8 refinements approved.
 
-`src/slumdog/detail_facets.py` restricts score-pair fallback extraction to an
-explicit H2H container. Regression tests cover standings-only markup and a real
-`.h2h` table. `scripts/audit_detail_h2h.py` was run against the user's retained
-captures on 2026-08-24 and reported `suspicious pages: 0`.
+## Milestone 2 — COMPLETE (Including 2E Hardening)
 
-### MMA duplicate settlement rows
+**Files:**
+- `src/slumdog/underdog.py` (~718 lines, commit fee5d78) — pure Forebet identity `identify_forebet_underdog()`, historical label with hardening: `UnderdogLabelResult` adds identity_ineligibility_reason/sport/draw_possible, private `_label_from_indices` raw helper, public `label_underdog_outcome(sport, identity: ForebetUnderdogIdentity, winner_index, disposition, source_conflict)` derives fav/dog/eligible/reason from identity, derives draw_possible from SPORTS[sport].draw_possible, unknown sport→UNKNOWN_SPORT exclusion, preserves exact EQUAL_PROBABILITY/MISSING_PROBABILITY/NON_FINITE/OUT_OF_RANGE reasons, caller cannot reverse fav/dog or override sport semantics
+- `tests/test_price_free.py` (40 tests after 2E) — identity 10, labels via identity 11, hardening 10, contracts 9
+- Full suite 232 passed after 2E, training frozen, compatibility boundary explicit
 
-The user's `data/reports/history_mma.jsonl.gz` contained 759 rows and 757 unique
-event IDs. `mma:2638` and `mma:2721` were byte-identical duplicate settled,
-priced rows from 2026-06-15. There were no conflicting duplicate dispositions.
-Deduplicated figures are 600 settled, 157 void, 153 priced, with 11 rows both
-void and priced. The earlier 159/159 equality is not reproduced and was not a
-structural equality.
+## Milestone 3 — COMPLETE (Feature Timing Contract)
 
-`parse_mma_settled` now deduplicates valid within-page event IDs. `backfill_sport`
-also has a run-local `(sport, event_id, event_date)` write guard. Existing
-ledgers are not automatically rewritten. `scripts/audit_mma_void_priced.py`
-reports stored and unique cross-tabs, duplicate classifications, and provenance
-coverage. A regression test is in `tests/test_special_settlement.py`.
+**Deliverable:** `docs/FEATURE_TIMING_CONTRACT.md` (CURRENT as governing ALLOWED, Milestone 3 COMPLETE) — doc-only audit, no code change, training FROZEN. period_values 10-point investigation UNKNOWN PROHIBITED, full inventory, missingness audit.
 
-### Legacy MMA provenance
+## Milestone 4 — COMPLETE (Architecture + 4E Hardening + 4F Conflict Census)
 
-All 759 inspected legacy MMA rows lacked `raw_sha256` and `captured_at`. Current
-backfill writes `facets.raw_sha256` for new rows. Whether retained MMA raw pages
-are sufficient to rebuild the legacy ledger has not yet been established. Do
-not invent hashes or rebuild without user approval.
+**Core principle:** Evaluate every eligible settled event, not only legacy Robber candidates. Flow: settled event → Forebet participant probabilities → price-free favorite/underdog identity → prior-only pre-event evidence → price-free feature snapshot → UNDERDOG_WIN label. Never through legacy odds-first candidate, displayed odds, market implied probability, price availability, legacy Robber score, ROI gate.
 
-### No-odds documentation and probes
+### Files Changed (4F)
 
-`docs/FOREBET_DEPTH_AUDIT.md` records verified cricket and American-football
-coverage findings. `scripts/probe_american_football_odds.py` is parked until on
-or after approximately 2026-09-10 and must not be run early.
+- **Hardened module:** `src/slumdog/dataset.py` (~1400 lines, 4F)
+  - `FEATURE_CONTRACT_VERSION = "price-free-v1-minimal-2026-08-24"`, `LABEL_CONTRACT_VERSION = "price-free-v1"`
+  - `ALLOWED_FEATURES` = identity 5 + prior 12 = 17 minimal safe set
+  - `PROHIBITED_KEYS` = odds_1, odds_2, price, overround, fair_market_probability, value_edge, ROI, legacy_robber_score, period_values, score_1/2, etc.
+  - `PriceFreeUnderdogExample` frozen, `PriceFreeDatasetReceipt` with raw vs canonical + conflict census fields: conflicting_composite_keys, conflicting_rows, conflicts_by_sport, conflicts_by_field, conflicts_with_valid_raw_sha256, conflicts_without_valid_raw_sha256
+  - `_validate_settled_dict` strict: winner_index int 0/1/2 bool rejected, disposition vocabulary SUPPORTED_DISPOSITIONS = {SETTLED, SETTLED_CUP, SETTLED_DRAW, VOID, NO_CONTEST} from settlement.py, unknown dispositions schema-excluded
+  - Deterministic provenance merge: identical collapses, missing vs present preserves present, different non-empty hashes/URLs fail loudly, stable under reversed order
+  - `_canonical_event_repr` versioned, odds excluded deliberately, source-conflict limitation documented (SettledEvent does not represent source conflict, not in digest)
+  - `build_price_free_examples` composite key (sport,event_id,event_date), exact duplicate collapse vs conflict fail loudly
+  - **NEW:** `ValidEventWithSource` (event + audit-only source_file, source_location), `ConflictGroup`, `_compare_events_for_conflict`, `_classify_conflict`, `build_conflict_census` — deterministic grouping, classification DOMAIN/OUTCOME/PROBABILITY/DISPOSITION/PROVENANCE/MULTIPLE, continues after first conflict, compact report no full serialization
 
-## Verification completed
+- **Audit module:** `src/slumdog/dataset_audit.py` (4F)
+  - Entry points: normal `python -m slumdog.dataset_audit --root data --receipt /tmp/.../receipt.json --sample /tmp/.../examples_sample.json --sample-size 5` and census `... --conflict-report /tmp/.../conflicts.json`
+  - Source-tracked loaders: `line:N` for jsonl.gz, `index:N` for json
+  - Census mode: status DATA_CONFLICTS, exit 1, receipt emitted with conflict totals, conflict report compact under /tmp, examples NOT emitted
+  - Normal mode still fails loudly on conflicting duplicates
+  - Safe diagnostic: inspects `data/reports/history_hockey.json` container type, top-level keys (dict with daily_receipts, dates_completed, etc, size 426204)
+  - Writes only under /tmp, no network, no ledger modification
 
-- 184 tests passed on both the Arena checkout and the user's data-bearing
-  Codespace.
-- `python3 -m py_compile scripts/*.py src/slumdog/*.py` passed.
-- `git diff --check` passed.
-- PR #4 was open and mergeable with no configured GitHub status checks.
+- **Tests:**
+  - `tests/test_price_free_dataset.py` (30)
+  - `tests/test_dataset_hardening.py` (34)
+  - `tests/test_dataset_audit.py` (9)
+  - `tests/test_dataset_final_integrity.py` (18)
+  - `tests/test_dataset_conflict_census.py` (14) — census continues after first conflict, multiple conflicts grouped by sport, OUTCOME_CONFLICT for score differences, PROBABILITY/DOMAIN/DISPOSITION/MULTIPLE, source location preserved, no full serialization, normal mode still fails, census emits no examples, deterministic under reordering, JSON only under /tmp, provenance counts
+  - Full suite **337 passed**
 
-## Remaining investigations
+## REAL-DATA CENSUS — Codespace retained ledgers (2026-08-24)
 
-These are evidence-gathering tasks. Discuss findings before implementing any
-additional fixes.
+Executed on `arena/01a033af-slumdog` HEAD `4b1546f` in data-bearing Codespace with 11 ledger files.
 
-1. Scan every `data/reports/history_*.jsonl.gz` for duplicate event IDs. Report
-   exact versus conflicting duplicates and deduplicated counts. Do not rewrite
-   a ledger automatically.
-2. Inspect the 11 MMA rows that are both void and priced against retained raw
-   captures, where available. Determine whether prices were posted before a
-   scratch/no-contest; do not assume.
-3. Inventory retained `data/raw/mma/` captures and determine whether they cover
-   the dates represented by all 759 legacy rows. Report provenance-rebuild
-   feasibility only.
-4. Broader adversarial Forebet audit, discussion before coding:
-   - detail-only corners, double chance, and top-scorer information;
-   - ensure HT/FT is treated as one combined price, not a 9-cell matrix;
-   - sparse hockey/rugby/volleyball pricing: coverage truth versus parser miss;
-   - the football 963-date backfill gap;
-   - separate esoccer audit.
-5. Run the NFL odds probe on or after approximately 2026-09-10.
-
-## Final merge procedure
-
-When the user says the work is complete, update this file with final evidence
-and a section titled `After merge: next session starts here`. Commit that update
-on this branch, then merge PR #4 only with explicit user authorization.
-
-## Cross-sport duplicate findings (2026-08-24)
-
-A local read-only scan of all available `history_*.jsonl.gz` files found 279
-byte-identical extra rows across 278 repeated same-date keys. Forebet IDs also
-recur across dates for genuinely distinct fixtures, so the valid identity is
-`(sport, event_id, event_date)`, never event ID alone.
-
-Four legacy cross-date pairs are identical after removing only `event_date`:
-`basketball:198045`, `basketball:198046`, `football:2041406`, and
-`volleyball:96303`. Treat these as unresolved; do not auto-delete them. A
-same-key conflict also exists for `hockey:278977` on 2023-08-20: the ledger has
-incompatible 1-6 and 0-4 results. Neither can be selected without source bytes.
-
-Raw files were absent for seven sampled suspicious dates, although manifest
-receipts preserve source URL, byte count, and SHA-256. This is a sampled result,
-not a claim that every legacy raw file is absent. Hashes alone cannot restore
-provenance and a refetch is not the historical capture.
-
-The backfill write path now validates a complete day before output: exact
-same-key payloads collapse, while conflicting payloads raise with identifying
-fields before any day rows are appended. `append_settled_from_capture` remains
-out of scope because it writes a separate interim artifact.
-
-## MMA void-and-priced raw verification (2026-08-24)
-
-The 11 rows that are both `VOID` and priced span seven dates from 2026-04-19
-through 2026-07-25. Each date has a manifest receipt with source URL, byte count,
-and source SHA-256, but no corresponding local file under `data/raw/mma/<date>`.
-The derived ledger proves the rows contain both fields; it does not prove the
-history of when prices were posted relative to a scratch/no-contest. Treat the
-pre-scratch explanation as plausible but unverified. Do not refetch and present
-new bytes as the historical capture.
-
-## After merge: next session starts here
-
-PR #4 is the completed integrity checkpoint and was explicitly authorized for
-merge on 2026-08-24. The next session should start from updated `main`, read
-this file and `docs/FOREBET_DEPTH_AUDIT.md`, and keep model training frozen.
-
-Next priorities, discussion before coding:
-
-1. Finish the retained DOM field map for `#dbc_table .rcnt` and
-   `#gscr_table .rcnt`. Verified so far: double-chance probability/pick are
-   captured, its single selected-pick American coefficient is dropped, and
-   goalscorer containers expose three player predictions that are currently
-   dropped. Do not infer first/anytime semantics. Preserve the observed raw
-   DC token `21` until its meaning is verified.
-2. Quantify the 963-date football backfill gap and retained-capture replay
-   feasibility before fetching anything.
-3. Audit sparse pricing markup for hockey, rugby, volleyball, handball, and
-   baseball using retained bytes first.
-4. Audit dropped football getrs.php keys from retained captures where possible.
-5. Perform a separate read-only esoccer depth assessment.
-6. Run the American-football odds probe only on or after approximately
-   2026-09-10.
-
-Unresolved legacy evidence must stay unresolved: four cross-date normalized-
-identical pairs, `hockey:278977`'s conflicting results, absent raw bytes for the
-sampled suspicious dates, and the 11 MMA void/priced rows whose pre-scratch
-explanation is plausible but unverified. Never rewrite those ledgers or invent
-provenance without explicit authorization and source bytes.
-
-## Durable operating guide and evidence standard
-
-This section is a mandatory continuation contract. Treat it as an engineering
-deliverable, not an informal summary. It must be updated before a merge and
-must retain evidence needed to continue without reconstructing it from chat.
-
-### Repository and workspace workflow
-
-- `main` is the only permanent branch. Arena work is delivered from the
-  session-assigned `arena/...` branch; do not create another permanent branch,
-  rewrite `main`, force-push, or delete unmerged work.
-- Keep one coherent PR open for active-session work. Do not merge it without
-  explicit user authorization. Immediately before a user-authorized merge,
-  update this file, run/record verification, commit and push the final handoff,
-  and confirm PR mergeability.
-- Arena checkout: `/home/user/Slumdog`. User Codespace checkout:
-  `/workspaces/Slumdog`. They are separate filesystems. Uncommitted files,
-  ignored files, captures, and ledgers do not cross this boundary.
-- Tracked Git changes transfer only via commit/push/pull. Never assume a file
-  visible in Codespace is visible in Arena. Inspect retained Codespace data
-  before proposing a network refetch.
-- For small evidence, produce a compact structured report under `/tmp` and
-  paste/attach it. When exact bytes matter, transfer only relevant retained
-  files and record their SHA-256; a compact report is not equivalent to source
-  bytes. Never commit raw captures, ledgers, temporary archives, or secrets.
-- After an authorized merge, the user may safely run in Codespace:
-  ```bash
-  cd /workspaces/Slumdog
-  git status --short
-  git checkout main
-  git pull --ff-only origin main
-  git branch -d <merged-arena-branch>
-  git push origin --delete <merged-arena-branch>
-  git fetch --prune origin
-  git status
-  git branch -a
-  ```
-  Lowercase `git branch -d` is intentional: it refuses to delete unmerged work.
-
-### Evidence language
-
-Classify claims precisely:
-
-- **Verified from code:** name exact file/function/selector (and line context
-  when useful).
-- **Verified from retained bytes:** record source paths, available SHA-256,
-  selectors, and representative observed values.
-- **Verified from an executed live probe:** record date, URL, route, request
-  count, outcome, and rate-limit behavior.
-- **Derived from a ledger:** name ledger path, row counts, dedupe key, and
-  provenance limitations.
-- **Plausible but unverified:** explain why no source can prove it.
-- **Unresolved conflict:** retain competing facts; never silently choose one.
-
-Do not call chat memory, navigation labels, assumptions, or missing raw bytes
-"confirmed." Newly fetched bytes are never a replacement for a missing
-historical capture.
-
-### Change control, parser, and network rules
-
-- Discuss findings before coding unless the user explicitly authorizes a change.
-  No drive-by refactors or speculative abstractions.
-- Model training remains frozen until the user explicitly unlocks it. Forebet is
-  the sole external source. Preserve immutable captures, never fabricate
-  provenance, never automatically rewrite/compact legacy ledgers, and fail
-  loudly on conflicting source facts.
-- Missing stays missing; never zero-fill. Do not infer market semantics absent
-  from source labels. Prefer selector-scoped parsing where stable DOM exists.
-  Every parser change needs a minimal fixture-based regression test.
-- Prefer retained bytes before network access. Use existing collector/relay code,
-  never ad-hoc scraping; at most six workers, small batches, and 62-second
-  inter-batch pauses. One-off probes are sequential/minimal and must record URL,
-  date, route, and result. Do not run the NFL odds probe before approximately
-  2026-09-10.
-
-### Required handoff content and verification gates
-
-For every complete/open/parked/unresolved item, record: status; problem/root
-cause; exact files/functions; implemented behavior; test names; commands and
-results; evidence paths/values; unresolved edge cases; prohibited assumptions;
-and precise next action. DOM work additionally records root/row selectors,
-field selectors, observed values, dash/missing behavior, ambiguous tokens,
-count/order assumptions, and test fixture shapes.
-
-Before push, run and record:
-```bash
-python -m pytest -q
-python3 -m py_compile scripts/*.py src/slumdog/*.py
-pyflakes scripts/*.py src/slumdog/*.py tests
-git diff --check
-git status --short
+Command:
 ```
-If unavailable, record the exact failure and give the user the precise
-Codespace command. Before merge also record branch/HEAD, diffstat/files, test
-count, compile/lint/diff-check results, data-bearing Codespace audits, parked
-items, PR mergeability, and explicit user authorization.
-
-## DOM market field-map checkpoint (2026-08-24)
-
-Status: implemented on the active Arena branch; unmerged at this writing.
-Evidence: compact DOM report generated in the user Codespace from five retained
-`data/raw/details/football/*.html` captures and pasted into the session. It is
-verified retained-byte evidence, but those source bytes are not present in the
-Arena filesystem.
-
-### Verified selector map
-
-```
-#dbc_table .rcnt
-  probability: .fprc .fpr
-  raw pick: .predict .forepr
-  selected-pick coefficient: .prmod .lscrsp
-
-#gscr_table .rcnt
-  probabilities: .fprc > .playerPred
-  names: .predict .forepr .playerPred
-  coefficients: .prmod .lscrsp
+rm -rf /tmp/slumdog_price_free && mkdir -p /tmp/slumdog_price_free
+python -m slumdog.dataset_audit --root data --conflict-report /tmp/slumdog_price_free/conflicts.json --receipt /tmp/slumdog_price_free/receipt.json --sample /tmp/slumdog_price_free/examples_sample.json --sample-size 5
+# exit 1 expected
 ```
 
-A `.rcnt` is one fixture row in both tables. In the scorer table, one fixture
-row contains up to three probability/player descendants; it is not three scorer
-rows. Observed retained examples:
-
+Summary (exact from receipt):
 ```
-DC: 85% / 12 / -1111; 76% / 12 / -435; 77% / 12 / -;
-    70% / 21 / -556; 73% / 12 / -345
-Scorers: 19%,18%,18% <-> Tulio,Dulay,Tesar <-> -,-,-
-         46%,24%,24% <-> Ouattara,Labeau,Stewart <-> -,-,-
-         18%,12%,12% <-> Bačić,Krilanovich,Pudić <-> -,-,-
+Status: DATA_CONFLICTS
+Files found: 11
+Files empty: 0
+Files unreadable: 0
+Raw input rows: 655,394
+Schema excluded: 6
+Schema reason: SCHEMA_MISSING_PARTICIPANT_1 = 6
+Valid loaded rows: 655,388
+Exact duplicates collapsed: 279
+Canonical non-conflicting rows: 655,107
+Eligible examples before conflict gate: 654,029
+Builder exclusions: 1,078
+Conflicting composite keys: 1
+Conflicting rows: 2
+Conflict sport: hockey = 1
+Conflict fields: score_1, score_2, period_scores_1, period_scores_2
+Conflict valid raw SHA-256: 0
+Conflict missing raw SHA-256: 1
+Eligible provenance present: 0
+Eligible provenance missing: 654,029
+Canonical date range: 2023-02-12 through 2026-08-21
+Examples emitted: no
+Training: frozen
+Production: unauthorized
 ```
 
-`21` remains raw and unnormalized. The DC coefficient prices one selected pick,
-not a matrix. Scorer market subtype is unknown; display order is preserved but
-not asserted to be a ranking. Empty scorer rows emit nothing. Sample population
-fill-rate remains unknown.
+Accounting balances:
+```
+655,394 = 6 + 655,388
+655,388 = 279 + 655,107 + 2
+655,107 = 654,029 + 1,078
+```
 
-Implementation: `src/slumdog/detail_facets.py` adds a small soup-based helper
-called from the football branch of `parse_detail()`. It scopes DC/scorer parsing
-to the roots above; `_football_detail_stats(text)` retains text-only
-corners/cards extraction and no longer uses a global double-chance regex.
-Typed DC fields are `doublechance_prob`, `doublechance_pick_raw`,
-`doublechance_pick` (only `1X`, `12`, `X2`), and
-`doublechance_pick_price_am` (signed token only). Typed scorer fields pair
-probabilities/names only when nonempty, equal count, valid percentages, and at
-most three; prices are optional signed tokens. No model feature or market
-semantic is added.
+Known conflict:
+```
+Composite key: hockey / hockey:278977 / 2023-08-20
+Participants: Netherlands W / Denmark W
+Variant A: 1–6; periods 0,1,0 / 2,1,3
+Variant B: 0–4; periods 0,0,0 / 1,2,1
+File: data/reports/history_hockey.jsonl.gz SHA 36eec2b1493aca1b52f92d843485794255db02d246e9d5b6ced4a18b4c371542 lines 62 and 67
+Classification: OUTCOME_CONFLICT
+Both records lack raw_sha256 and captured_at.
+No variant has been selected, rewritten, deleted, or quarantined.
+```
 
-Regression fixtures: `tests/test_football_dom_markets.py` covers standard DC,
-raw `21`/dash behavior, aligned scorers, empty rows, mismatch suppression, and
-out-of-root lookalikes. `tests/test_detail_facets.py` now proves the established
-text extractor still coexists with DOM-scoped DC extraction.
+Diagnostic:
+```
+DIAGNOSTIC history_hockey.json: container dict, top-level keys ['daily_receipts', 'dates_completed', 'dates_requested', 'end', 'failures', 'history_file', 'priced_rows', 'settled_rows', 'sport', 'start', 'void_rows'], file data/reports/history_hockey.json size 426204
+```
 
-## Current-session verification (DOM market implementation)
+Temporary artifacts (not committed):
+```
+/tmp/slumdog_price_free/receipt.json
+/tmp/slumdog_price_free/conflicts.json
+```
 
-Codespace verification completed on 2026-08-24 at commit
-`e1a7716a99ae4e545b57c04df7d26cb57c1269fb`, after installing the project with
-`python -m pip install -e '.[dev]'`.
+## Verification Receipt (Milestones 0–4F)
 
-- Full `python -m pytest -q`: passed. Its quiet progress output did not establish
-  a count.
-- Focused `python -m pytest -q tests/test_football_dom_markets.py tests/test_detail_facets.py`:
-  passed (16 tests).
-- `python -m py_compile scripts/*.py src/slumdog/*.py tests/*.py`: passed.
-- `python -m pyflakes scripts src/slumdog tests`: passed with no findings.
-- `git diff --check`: passed with no output.
-- Exact collection was subsequently measured, after synchronizing to
-  `8e292046340886bac087a9b3bb71372ebe8e2058`, with a pytest collection hook:
-  `EXACT_COLLECTED_TESTS=192`. A prior `grep '::' | wc -l` command returned `0`
-  because quiet collection output has no matching node-ID lines; it is not a
-  test count and must not be reused.
-- Temporary `football-detail-samples.tar.gz` was removed in Codespace; subsequent
-  `git status --short` was empty. No raw captures or ledgers appear in the PR diff.
+- `python -m pytest -q` → 337 passed
+- `python -m pyflakes scripts src/slumdog tests` → clean
+- `python3 -m py_compile scripts/*.py src/slumdog/*.py tests/*.py` → ok
+- `git diff --check` → ok
+- `git status --short` → clean after commit
+- Real-data census: 655,394 raw, 6 schema excluded, 655,388 valid, 279 exact duplicates collapsed, 655,107 canonical non-conflicting, 654,029 eligible before gate, 1,078 builder exclusions, 1 conflicting key (hockey outcome), 2 conflicting rows, 0 provenance present, 654,029 missing
+- Census behavior: deterministic, conflict report emitted, no examples emitted, all readable rows accounted, conflicts reported not silently removed
 
-The earlier Arena-only dependency limitations remain true of that sandbox, but
-are superseded as merge-gate evidence by this dependency-equipped Codespace run.
+## Training / Production Status
 
+- **Training:** FROZEN (`MODEL_TRAINING_ALLOWED=False`)
+- **Production:** NOT AUTHORIZED
+- **Price-free foundation:** MERGE READY
+- **Historical dataset generation:** FAIL-CLOSED (correctly refuses corrupted ledger)
+- **Real-data readiness:** BLOCKED by 1 outcome conflict and 6 schema exclusions + absent provenance (0 present)
+- **No conflict may be guessed, deleted, or silently quarantined**
+- **period_values remains UNKNOWN and PROHIBITED** per FEATURE_TIMING_CONTRACT.md 10-point investigation
+- **Source-conflict visibility limitation:** SettledEvent contract does not represent source conflict; not in digest; builder assumes no conflict; receipt excluded_source_conflict=0 for current schemas; documented in _canonical_event_repr
 
-## After merge: next session starts here
+## Next Milestone
 
-Read `HANDOFF.md` first, then `docs/FOREBET_DEPTH_AUDIT.md`, then the DOM helper
-in `src/slumdog/detail_facets.py` and `tests/test_football_dom_markets.py`.
-Model training remains frozen.
+**Milestone 5: historical integrity investigation**
 
-1. PR #5's DOM-market implementation has passed the recorded Codespace gates.
-   Review its final diff and mergeability, then await explicit user merge
-   authorization; do not rerun or alter it without new evidence.
-2. Quantify the 963-date football backfill gap and retained-capture replay
-   feasibility before fetching anything.
-3. Audit sparse hockey/rugby/volleyball/handball/baseball pricing from retained
-   bytes; then audit dropped football getrs.php keys and esoccer separately.
+- Investigate historical reconstruction conflicts (hockey 278977)
+- Provenance/reconstruction investigation: why same composite key has two settled scores in same file, no raw_sha256/captured_at
+- Establish provenance for historical ledgers (currently 0 present for 654,029 eligible)
+- Do not query Forebet until provenance established
+- Do not choose more plausible score, average, or infer correctness
+- No deletion/dedup of ledger rows
+- After provenance established, transparent baselines with walk-forward validation
 
-Safe read-only commands include `git status --short`, `git diff --check`, the
-compile/lint/test gates above, and local retained-data inventory. Do not run the
-American-football odds probe before approximately 2026-09-10. Do not fetch to
-replace missing historical bytes. Arena currently lacks the five retained
-football detail captures; the compact Codespace DOM report is recorded above,
-but exact-byte review requires the user to transfer relevant bytes.
+## PR State
 
-Do not "fix" unresolved legacy evidence without new source bytes: four
-cross-date normalized-identical pairs, hockey `278977` conflicting results,
-absent sampled raw bytes, and 11 MMA void/priced rows with only a plausible
-pre-scratch explanation. Preserve raw DC token `21`, scorer-market semantic
-uncertainty, and unknown scorer sample fill rate.
+- **Branch:** `arena/01a033af-slumdog`
+- **Base:** `main` @ `2e3daa4`
+- **PR:** #6 https://github.com/6ixtyn9-sudo/Slumdog/pull/6 — OPEN, MERGE READY
+- **Final head:** 4b1546f + documentation commit (pending)
+- **Merge approves only:** governance documentation; price-free identity and label contracts; safe historical example contracts; strict adapters and receipts; conflict detection and census tooling; tests
+- **Merge does NOT approve:** excluding the hockey conflict; training a model; ranking candidates; thresholds; production integration; daily selections; legacy Robber removal
+
+## Evidence Language Compliance
+
+- Verified from code: file paths, function names, disposition vocabulary SETTLED/SETTLED_CUP/SETTLED_DRAW/VOID/NO_CONTEST, winner_index strict, provenance merge deterministic, composite key (sport,event_id,event_date), conflict classification, receipt fields, accounting equations
+- Verified from executed census: 11 files, 655,394 raw, 6 schema excluded SCHEMA_MISSING_PARTICIPANT_1, 279 exact duplicates, 1 conflicting key hockey 278977 OUTCOME_CONFLICT, 2 conflicting rows, 0 valid SHA, 1 missing SHA, 654,029 eligible, 1,078 builder exclusions, 0 provenance present
+- Verified from tests: 337 passed, pyflakes clean, py_compile ok, diff-check ok
+- Unresolved: hockey 278977 conflicting scores — retained both, no selection
+- Parked: period_values UNKNOWN PROHIBITED, detail facets UNKNOWN/PARKED, American football odds probe, esoccer audit

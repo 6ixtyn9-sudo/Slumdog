@@ -1,5 +1,12 @@
 # Forebet Depth Audit — Training Freeze Receipt
 
+> **Status: CURRENT — Depth Evidence**
+>
+> This document is the training-freeze receipt and facet inventory.
+> Price coverage snapshots are **reference evidence only**, not a candidate-readiness gate.
+> Odds are optional context per `AGENTS.md` and `docs/STATE.md`.
+> Current authority for product contract: `AGENTS.md`, `README.md`, `docs/STATE.md`.
+
 ## Finding
 
 The preliminary model used one estimator per sport, but too many features were

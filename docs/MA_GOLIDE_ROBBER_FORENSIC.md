@@ -1,5 +1,12 @@
 # Ma Golide Robber Forensic Specification
 
+> **Status: HISTORICAL**
+>
+> This document describes the legacy odds-first Robber system. It is retained
+> as forensic evidence and is not the current Slumdog product contract.
+> Current authority: `AGENTS.md`, `README.md`, and `docs/STATE.md`.
+> Price coverage is reference evidence only, not a candidate-readiness gate.
+
 ## Authoritative meaning selected for Slumdog
 
 The Gold Universe contains two uses of the word `ROBBER`:
