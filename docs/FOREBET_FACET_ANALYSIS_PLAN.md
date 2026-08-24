@@ -1,5 +1,12 @@
 # Forebet Full-Facet Analysis Plan
 
+> **Status: REFERENCE — Analysis Plan**
+>
+> Timing classes (PRE_EVENT / LIVE_ONLY / RESULT_ONLY / UNKNOWN) remain authoritative.
+> Steps mentioning price / value / ROI are historical planning; per current mission,
+> ROI is not primary metric and price coverage is reference only, not a readiness gate.
+> Current authority: `AGENTS.md`, `README.md`, `docs/STATE.md`.
+
 ## Coverage
 
 Slumdog captures Football, Basketball, Tennis, Hockey, Baseball, American

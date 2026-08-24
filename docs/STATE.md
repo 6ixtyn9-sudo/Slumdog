@@ -19,15 +19,18 @@ Invariants (from `AGENTS.md`):
 
 ## Current Phase
 
-**Milestone 0 — Repository Truth and Documentation Governance** (pre-authorized).
+**Current phase: Milestone 1 — price-free underdog machinery audit**
+**Milestone 0 documentation governance: COMPLETE**
+**Model training: FROZEN**
 
-Completing:
-- `STATE.md` → `docs/STATE.md` move + reference cleanup
-- `AGENTS.md` entrypoint
+Milestone 0 completed:
+- `STATE.md` → `docs/STATE.md` move + reference cleanup (git mv)
+- `AGENTS.md` entrypoint with permanent mission + invariants
 - Docs audit/classification + `docs/README.md` index
+- README.md rewrite to price-free UNDERDOG_WIN mission
 - Freshness workflow lock
 
-Next: Milestone 1 — audit existing underdog machinery against price-free contract (discuss before coding).
+Active: Milestone 1 — audit existing underdog machinery against price-free contract (read-only, discuss before coding).
 
 ## Merged Work (main @ 2e3daa4)
 
@@ -40,10 +43,18 @@ Next: Milestone 1 — audit existing underdog machinery against price-free contr
 
 ## Active Blockers
 
-1. **Doc governance incomplete** — this file, `AGENTS.md`, `README.md`, `docs/README.md` need to reflect price-free mission before Milestone 1.
-2. **Underdog machinery misalignment** — existing `contracts.py`/`magolide.py`/`feature_contracts.py` still encode odds-first identity and legacy score; needs gap analysis vs new candidate contract.
-3. **Training frozen** — explicit user unlock required after label/eligibility + feature/timing contracts approved.
-4. **Data limitations** (see below) block reliable baselines.
+**Milestone 0 governance: COMPLETE.** Missing prices are NOT blockers — odds are optional context only (see invariants).
+
+Real blockers (per user correction):
+
+1. **Underdog machinery may still be odds-first** — `contracts.py`/`magolide.py`/`feature_contracts.py` encode odds-first identity and legacy score; needs gap analysis vs price-free candidate contract.
+2. **Underdog-win label contract not yet verified** — need exact testable label for two-way and draw-capable sports, void handling, equal-prob policy.
+3. **Draw settlement behavior not yet verified** — must count as failed `UNDERDOG_WIN`, never as success.
+4. **Feature timing and leakage controls need auditing** — PRE_EVENT vs RESULT_ONLY vs UNKNOWN, odds must not be features, missingness policy.
+5. **Model validation and daily shortlist behavior not yet approved** — walk-forward, calibration, no-pick state, 1–3 cap, evidence fields.
+6. **Training remains frozen** — explicit user unlock required after dataset/target/timing/validation contract approved.
+
+Data limitations below are parked observations, not candidate-readiness gates.
 
 ## Current Model-Training Status
 
@@ -53,11 +64,11 @@ Next: Milestone 1 — audit existing underdog machinery against price-free contr
 - No retraining allowed until each sport has: listing/detail facet contract, historical depth receipt, timing classification, settlement coverage, price-availability profile, AND user approves dataset/target/timing/validation contract.
 - When unlocked, first implement transparent baselines (Forebet underdog prob, gap, recent-form differential, Ma Golide heuristic, simple interpretable model) with walk-forward validation, never random splits.
 
-## Current Data Limitations
+## Current Data Limitations (Reference Observations, Not Readiness Gates)
 
 - **Football backfill gap:** 963 dates failed on runner (401 relay) — Markdown reader path added but needs next pipeline probe.
 - **Relay egress:** Direct `forebet.com` from Azure (Codespaces + GH runners) behind Cloudflare JS challenge (403). Jina relay Markdown mode works locally (714 rows, 2.4MB) but GH Actions IP 401 status still to be verified.
-- **Price coverage (snapshot, not global):** Football 77.3% (778/1006), Basketball 60.6%, Tennis 96%, Baseball 68.4%, Cricket 0% (6643 settled rows, zero priced, verified no `.haodd`), Handball 0% but actually 2-price American format fixed, Hockey 0% on sampled WHL/AHL date (99 dashes) — needs in-season NHL/KHL/SHL re-check, Rugby/Volleyball 0%, American football 0% (7447 archived rows zero priced, pending 2026-09-10 probe), MMA 153 priced / 757 unique, Esoccer rolling board no reliable dated archive.
+- **Price coverage — reference evidence only, NOT a candidate-readiness gate:** `FOREBET_PRICE_COVERAGE.json` is snapshot (one active-season date per sport), not global. Football 77.3% (778/1006), Basketball 60.6%, Tennis 96%, Baseball 68.4%, Cricket 0% (6643 settled rows, zero priced, verified no `.haodd`), Handball 0% but actually 2-price American format fixed, Hockey 0% on sampled WHL/AHL date (99 dashes) — needs in-season NHL/KHL/SHL re-check, Rugby/Volleyball 0%, American football 0% (7447 archived rows zero priced, pending 2026-09-10 probe), MMA 153 priced / 757 unique, Esoccer rolling board no reliable dated archive. Sparse/missing prices do NOT block strong-underdog generation — odds are optional context only.
 - **Detail coverage:** Three-page sample per sport in `FOREBET_DETAIL_COVERAGE.json` justified parser families, but full census missingness not yet measured from `depth-sweep`.
 - **Legacy ledger integrity:** 279 byte-identical extra rows across 278 repeated same-date keys; 4 cross-date identical pairs after removing `event_date` (`basketball:198045`, `basketball:198046`, `football:2041406`, `volleyball:96303`); hockey `278977` same-key conflicting results (1-6 vs 0-4); MMA 11 rows both void+priced (7 raw captures absent, plausible pre-scratch); all 759 legacy MMA rows lacked `raw_sha256`/`captured_at` (predates provenance retention).
 - **Missing raw bytes:** 7 sampled suspicious dates had manifest hashes but no local `data/raw` files; hash cannot reconstruct bytes, refetch ≠ historical capture.
@@ -65,17 +76,19 @@ Next: Milestone 1 — audit existing underdog machinery against price-free contr
 
 ## Next Approved Milestone
 
-**Milestone 0 completion:**
-- Move + update refs (done: `git mv STATE.md docs/STATE.md`, grep proof required)
+**Milestone 0: COMPLETE (approved with 5 documentation corrections, no deletions authorized).**
+
+Completed:
+- Move + update refs (`git mv STATE.md docs/STATE.md`, grep proof)
 - `AGENTS.md` with invariants + read order
-- `docs/STATE.md` rewritten as current truth (this file)
+- `docs/STATE.md` rewritten as current truth
 - Audit docs/ and classify CURRENT/REFERENCE/HISTORICAL/STALE/UNKNOWN
 - `docs/README.md` index with purpose/status/last-verified/canonical links
-- Update `README.md` to new mission
+- `README.md` rewritten to price-free mission
 - Report files moved, links updated, stale/duplicates, proposed removals, canonical read order, checks run
-- Stop for user review before deleting docs or changing model logic
+- User review done — no doc deletions authorized
 
-**Then Milestone 1:** audit existing underdog machinery (candidate generation, favorite/underdog assignment, features, labels, training, calibration, ranking, reporting, scheduling, settlement, model cards, shadow outputs) vs price-free candidate contract — discuss before coding.
+**Milestone 1 (current):** audit existing underdog machinery (candidate generation, favorite/underdog assignment, features, labels, training, calibration, ranking, reporting, scheduling, settlement, model cards, shadow outputs) vs price-free candidate contract — read-only audit, discuss before coding, no model/candidate/label/feature code changes until approved.
 
 ## Parked Work
 
@@ -110,16 +123,20 @@ Next: Milestone 1 — audit existing underdog machinery against price-free contr
 - `docs/MA_GOLIDE_ROBBER_FORENSIC.md` — legacy Robber forensic spec (authoritative meaning 2, cascade, score, calibration warning, defects)
 - `docs/README.md` — (to be created) doc index with status/last-verified
 
-## Verification Receipt (Milestone 0 in-progress)
+## Verification Receipt (Milestone 0 complete, corrections applied)
 
-- `git mv STATE.md docs/STATE.md` executed
-- `grep -Rni --exclude-dir=.git 'STATE\.md' .` to be run after README update
+- `git mv STATE.md docs/STATE.md` executed, verified `test ! -e STATE.md && test -e docs/STATE.md`
+- `grep -Rni --exclude-dir=.git --exclude='*.pyc' 'STATE\.md' .` shows only `docs/STATE.md` refs (plus historical mention of move in docs/README.md — acceptable, no active root link)
 - `AGENTS.md` created with invariants + read order
-- This file rewritten from diary to current-truth contract
-- Tests/checks pending final doc updates: `python -m pytest -q`, `python3 -m py_compile scripts/*.py src/slumdog/*.py tests/*.py`, `pyflakes`, `git diff --check`, `git status --short`
+- `docs/STATE.md` rewritten from diary to current-truth, phase advanced to Milestone 1 audit, Milestone 0 marked COMPLETE, missing prices clarified as NOT blockers
+- `README.md` rewritten to price-free mission, operational commands preserved
+- `docs/README.md` index created, price coverage clarified as reference only, not readiness gate
+- `docs/MA_GOLIDE_ROBBER_FORENSIC.md` banner added: HISTORICAL, not current contract
+- Tests: `python3 -m pytest -q` 192 passed, `py_compile` ok, `pyflakes` ok, `git diff --check` ok
 
-## After Milestone 0
+## After Milestone 0 (Now)
 
-- User reviews doc audit classification before deletions
-- Then Milestone 1 gap analysis vs price-free candidate contract (event identity, sport, date/time, Forebet fav/underdog, fav/underdog prob, draw prob, model underdog-win prob, lift, strength score, supporting/contradicting/missing evidence, candidate status, model/version id, provenance, optional price context)
+- Milestone 0 approved, no deletions authorized
+- Milestone 1 read-only audit in progress on same branch `arena/01a033af-slumdog`
+- Gap analysis vs price-free candidate contract (event identity, sport, date/time, Forebet fav/underdog, fav/underdog prob, draw prob, model underdog-win prob, lift, strength score, supporting/contradicting/missing evidence, candidate status, model/version id, provenance, optional price context)
 - Do not implement contract until user approves audit

@@ -20,7 +20,7 @@ This index classifies every file under `docs/` as:
 | `FOREBET_DEPTH_AUDIT.md` | Training freeze receipt, common listing surface, match-detail surface by sport, historical depth contract (conservative backfill starts), 3-page detail coverage table, representative price coverage, verified no-odds gaps (cricket 0%, American football dash), MMA legacy integrity, cross-sport duplicate audit, cup settlement notes. | **CURRENT** | 2026-08-24 | Current operating evidence; complements `STATE.md`. Needs price-free mission alignment note in Milestone 1 (remove ROI-primary language, clarify draw=failed). |
 | `FOREBET_ARCHIVE_DEPTH.json` | Annual archive probe matrix (one sport-season date per year, 2018-2026) proving availability lower bounds; conservative backfill start dates derived from it. Method: nonzero proves availability, zero may be off-season. | **REFERENCE** | 2026-08-24 (probe date 2026-08-15 sample) | Stable reference; source for `FOREBET_DEPTH_AUDIT.md` table. |
 | `FOREBET_DETAIL_COVERAGE.json` | 3 live detail pages per sport checked for factor availability (H2H, Last6, venue splits, standings, quarters, surface, height, expected total, etc.). 1612 lines, pre-deployment receipt that justified parser families. | **REFERENCE** | 2026-08-24 | Reference; superseded for missingness by future full census (`depth-sweep`) but retained as justification. |
-| `FOREBET_PRICE_COVERAGE.json` | Representative displayed-price snapshot: one active-season date per sport, events count, both participant prices, coverage %. Not global estimate. | **REFERENCE** | 2026-08-24 (dates: football 2026-08-15, basketball 2026-01-15, etc.) | Reference snapshot; complements depth audit price table. Must be measured across many dates before any value conclusion; unpriced events remain useful for upset learning (price optional per new mission). |
+| `FOREBET_PRICE_COVERAGE.json` | Representative displayed-price snapshot: one active-season date per sport, events count, both participant prices, coverage %. Not global estimate. | **REFERENCE** | 2026-08-24 (dates: football 2026-08-15, basketball 2026-01-15, etc.) | **Reference evidence only. Price coverage is not a Slumdog candidate-readiness gate.** Complements depth audit price table. Must be measured across many dates before any value conclusion; unpriced events remain useful for upset learning (price optional per new mission). |
 | `FOREBET_FACET_ANALYSIS_PLAN.md` | Timing class definitions (PRE_EVENT / LIVE_ONLY / RESULT_ONLY / UNKNOWN), common fields to catalogue, sport-specific catalogue, 10-step analysis order (availability, timestamp, parser reliability, univariate upset rate, calibration, lift over Forebet underdog prob, interaction with legacy factors, stability, out-of-time Brier/logloss/hit rate, priced vs unpriced bias). | **REFERENCE** | 2026-08-24 | Stable technical plan; still valid but step 5 calibration must not use ROI-primary; step 6 lift is over Forebet underdog probability (price-free). |
 | `MA_GOLIDE_ROBBER_FORENSIC.md` | Forensic spec of legacy Ma Golide Robber: authoritative meaning (upset participant, not warning slice), source of truth (`Accumulator_Builder.gs`), underdog identity cascade (odds → pick → prob → form), legacy score table, raw confidence formula, price calibration warning (max 67%, min 30%, min 8pp advantage, manufactured advantage), defects (odds bounds only warned, missing odds lowered threshold, deterministic confidence, uncapped output). | **HISTORICAL** | 2026-08-24 | Historical evidence — useful to understand `magolide.py` reproducer but NOT current operating truth. New mission supersedes odds-first cascade with Forebet-probability underdog + pre-event evidence. Retain for audit comparability, do not delete. |
 | `README.md` (this file) | Doc index with purpose/status/last-verified/canonical relationships. | **CURRENT** | 2026-08-24 | Canonical index — required by Milestone 0. |
@@ -50,9 +50,22 @@ Expected after Milestone 0:
 - `docs/README.md` and `docs/STATE.md` self-reference canonical path
 - No stale root `STATE.md` references
 
+## Price Coverage Clarification (Required Correction)
+
+```text
+FOREBET_PRICE_COVERAGE.json is reference evidence only.
+Price coverage is not a Slumdog candidate-readiness gate.
+```
+
+- Odds are optional metadata per `AGENTS.md` invariants 5-11.
+- Missing odds must not lower confidence, must not gate candidates, must not be model features.
+- Sparse or missing prices in `FOREBET_DEPTH_AUDIT.md` and `FOREBET_PRICE_COVERAGE.json` are parked data-quality observations, not current blockers to strong-underdog generation.
+- If optional odds later used for retrospective context, report separately, never as training or eligibility requirement.
+- ROI is not primary metric.
+
 ## Notes for Next Milestone
 
-- Milestone 1 will audit existing underdog machinery (`contracts.py`, `magolide.py`, `training.py`, `research.py`, `pipeline.py`, `history.py`, `feature_contracts.py`, sport modules, tests) vs price-free candidate contract.
-- `FOREBET_DEPTH_AUDIT.md` needs note that odds are optional context, not required for upset learning, and that ROI is not primary metric (if optional odds used for retrospective context, report separately).
+- Milestone 0: COMPLETE, no deletions authorized (user approval 2026-08-24).
+- Milestone 1 (current): audit existing underdog machinery (`contracts.py`, `magolide.py`, `training.py`, `research.py`, `pipeline.py`, `history.py`, `feature_contracts.py`, sport modules, tests) vs price-free candidate contract — read-only audit, discuss before coding.
 - `feature_contracts.py` currently `MODEL_TRAINING_ALLOWED = False` — remains frozen until user approves dataset/target/timing/validation.
-- No doc deletions authorized until user reviews this classification.
+- Historical banner added to `MA_GOLIDE_ROBBER_FORENSIC.md`; CURRENT/REFERENCE banners added to `FOREBET_DEPTH_AUDIT.md` and `FOREBET_FACET_ANALYSIS_PLAN.md`; JSON files untouched, status in this index.

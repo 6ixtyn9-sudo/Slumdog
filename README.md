@@ -65,8 +65,8 @@ Football, Basketball, Tennis, Hockey, Baseball, American Football, Rugby, Handba
 
 ## Status
 
-- Phase: Milestone 0 — repository truth and documentation governance (docs/STATE.md is canonical current truth).
-- Training frozen. See `docs/STATE.md` for blockers, data limitations, unresolved evidence.
+- Phase: Milestone 1 — price-free underdog machinery audit (Milestone 0 COMPLETE, docs/STATE.md is canonical current truth).
+- Model training: FROZEN. See `docs/STATE.md` for blockers (missing prices NOT blockers), data limitations (reference observations), unresolved evidence.
 - Slumdog emits shadow research only; no CERTIFIED output.
 
 ## Quick Start
