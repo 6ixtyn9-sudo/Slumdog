@@ -1,8 +1,8 @@
 # Slumdog Living Handoff
 
 **Last updated:** 2026-08-24 (UTC) — Milestones 0–4F COMPLETE, real-data census executed, PR #6 MERGE READY
-**Branch:** `arena/01a033af-slumdog`
-**HEAD SHA:** 4b1546f Milestone 4F: conflict census mode for genuine ledger conflicts
+**Branch:** `arena/01a034f6-slumdog`
+**HEAD SHA:** 2c0e0cf Milestone 5 Investigation Script added
 **Phase:** Milestones 0–4F COMPLETE, price-free foundation MERGE READY, historical dataset generation FAIL-CLOSED, real-data readiness BLOCKED by historical conflicts, training FROZEN, production NOT AUTHORIZED
 **Mission:** Slumdog identifies a small daily shortlist of participants that Forebet considers underdogs but whose available pre-event evidence indicates a credible outright-win upset.
 **PR:** #6 https://github.com/6ixtyn9-sudo/Slumdog/pull/6 — OPEN, MERGE READY after documentation commit
@@ -166,6 +166,7 @@ Temporary artifacts (not committed):
 
 **Milestone 5: historical integrity investigation**
 
+- *Action:* Extended `dataset_audit.py` with `--schema-exclusion-report` and added `docs/HISTORICAL_INTEGRITY_AUDIT.md` to safely document exclusions and provenance limits.
 - Investigate historical reconstruction conflicts (hockey 278977)
 - Provenance/reconstruction investigation: why same composite key has two settled scores in same file, no raw_sha256/captured_at
 - Establish provenance for historical ledgers (currently 0 present for 654,029 eligible)
@@ -176,10 +177,10 @@ Temporary artifacts (not committed):
 
 ## PR State
 
-- **Branch:** `arena/01a033af-slumdog`
-- **Base:** `main` @ `2e3daa4`
-- **PR:** #6 https://github.com/6ixtyn9-sudo/Slumdog/pull/6 — OPEN, MERGE READY
-- **Final head:** 4b1546f + documentation commit (pending)
+- **Branch:** `arena/01a034f6-slumdog`
+- **Base:** `main` @ `c48d5dc`
+- **PR:** #7 https://github.com/6ixtyn9-sudo/Slumdog/pull/7 — OPEN
+- **Final head:** 2c0e0cf
 - **Merge approves only:** governance documentation; price-free identity and label contracts; safe historical example contracts; strict adapters and receipts; conflict detection and census tooling; tests
 - **Merge does NOT approve:** excluding the hockey conflict; training a model; ranking candidates; thresholds; production integration; daily selections; legacy Robber removal
 
