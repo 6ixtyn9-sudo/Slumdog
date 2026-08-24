@@ -31,11 +31,9 @@ from pathlib import Path
 from typing import Any
 
 from .dataset import (
-    SchemaLoadResult,
     ValidEventWithSource,
     build_conflict_census,
     build_dataset_with_raw_accounting,
-    load_settled_events_from_dicts,
     _validate_settled_dict,
 )
 
@@ -460,7 +458,7 @@ def audit_dataset(
             print(f"Valid loaded rows: {receipt_full.valid_loaded_rows}")
             print(f"Canonical input rows: {receipt_full.canonical_input_rows}")
             print(f"Eligible examples: {receipt_full.eligible_examples}")
-            print(f"Status: OK — no conflicts")
+            print("Status: OK — no conflicts")
             print(f"Wrote receipt to {receipt_path}")
             print(f"Wrote sample ({len(sample_examples)} examples) to {sample_path}")
             print(f"Wrote empty conflict report to {conflict_path}")
