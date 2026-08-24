@@ -87,6 +87,45 @@ def _load_manifest(report_dir: Path, sport: str) -> dict:
     return {}
 
 
+def _validated_ledger_payloads(rows, sport: str, raw_sha256: str) -> list[dict]:
+    """Stamp provenance, collapse exact keys, and reject conflicting facts."""
+    payloads: list[dict] = []
+    by_key: dict[tuple[str, str, str], dict] = {}
+    for row in rows:
+        payload = asdict(row)
+        payload.setdefault("facets", {})
+        if isinstance(payload.get("facets"), dict):
+            payload["facets"]["raw_sha256"] = raw_sha256
+
+        event_id = str(payload.get("event_id") or "")
+        event_date = str(payload.get("event_date") or "")
+        if not event_id:
+            payloads.append(payload)
+            continue
+
+        key = (sport, event_id, event_date)
+        prior = by_key.get(key)
+        if prior is None:
+            by_key[key] = payload
+            payloads.append(payload)
+            continue
+        if json.dumps(prior, sort_keys=True, separators=(",", ":")) == json.dumps(
+            payload, sort_keys=True, separators=(",", ":")
+        ):
+            continue
+
+        differing = sorted(
+            field for field in set(prior) | set(payload)
+            if prior.get(field) != payload.get(field)
+        )
+        raise ValueError(
+            "conflicting settled rows for "
+            f"sport={sport} date={event_date} event_id={event_id}; "
+            f"differing_fields={','.join(differing)}"
+        )
+    return payloads
+
+
 def _is_empty_day_error(sport: str, exc: BaseException) -> bool:
     """Whether a fetch error means "no games on that date", not a real failure.
 
@@ -167,17 +206,18 @@ def backfill_sport(
                             capture = futures[day].result()
                             body_path = root / capture.body_path
                             rows = _parse_settled_body(sport, body_path.read_bytes(), day)
-                            for row in rows:
-                                payload = asdict(row)
-                                # Link every ledger row back to its exact raw
-                                # body so facet extraction is replayable.
-                                payload.setdefault("facets", {})
-                                if isinstance(payload.get("facets"), dict):
-                                    payload["facets"]["raw_sha256"] = capture.sha256
+                            # Validate the complete day before writing anything:
+                            # exact source repeats collapse; conflicting facts fail.
+                            payloads = _validated_ledger_payloads(rows, sport, capture.sha256)
+                            for payload in payloads:
                                 output.write(json.dumps(payload, sort_keys=True) + "\n")
                                 total_rows += 1
-                                priced_rows += row.odds_1 is not None and row.odds_2 is not None
-                                void_rows += row.disposition == "VOID"
+                                priced_rows += (
+                                    payload.get("odds_1") is not None
+                                    and payload.get("odds_2") is not None
+                                )
+                                void_rows += payload.get("disposition") == "VOID"
+                            settled_rows_written = len(payloads)
                             if keep_raw:
                                 raw_bytes_retained += capture.bytes
                             # A valid page with zero settled rows is a covered
@@ -185,7 +225,7 @@ def backfill_sport(
                             manifest.append({
                                 "date": day, "source_url": capture.source_url,
                                 "sha256": capture.sha256, "bytes": capture.bytes,
-                                "settled_rows": len(rows),
+                                "settled_rows": settled_rows_written,
                                 "raw_retained": keep_raw,
                             })
                             if not keep_raw:

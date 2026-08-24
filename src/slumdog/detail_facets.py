@@ -121,8 +121,11 @@ def _h2h_from_page(
             out["h2h_total_games"] = float(games)
             return out
 
+    h2h_root = soup.select_one(".h2h, .h2h_div, #h2h, [id*=h2h], [class*=h2h]")
+    if h2h_root is None:
+        return out
     scores = []
-    for row in soup.select("table tr, .h2h tr, .h2h_div tr"):
+    for row in h2h_root.select("table tr, tr"):
         numbers = [float(value) for value in re.findall(r"\d+(?:\.\d+)?", row.get_text(" ", strip=True))]
         if len(numbers) >= 2:
             scores.append((numbers[0], numbers[1]))

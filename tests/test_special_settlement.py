@@ -26,6 +26,15 @@ def test_mma_winner_name_settlement():
     assert rows[0].score_1 is None
 
 
+def test_mma_duplicate_listing_rows_are_settled_once():
+    duplicate = MMA.replace(b"</body></html>", b"").replace(
+        b"<html><body>", b""
+    )
+    body = MMA.replace(b"</body></html>", duplicate + b"</body></html>")
+    rows = parse_mma_settled(body, "2026-08-16")
+    assert [row.event_id for row in rows] == ["mma:1"]
+
+
 def test_cricket_draw_is_not_an_underdog_loss_or_void():
     rows = parse_cricket_settled(CRICKET, "2026-05-11")
     assert len(rows) == 1

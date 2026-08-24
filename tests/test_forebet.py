@@ -67,3 +67,32 @@ def test_capture_all_is_fail_soft_and_writes_receipt(tmp_path, monkeypatch):
     assert len(rows) == len(SPORTS) - 1
     receipt = json.loads((tmp_path / "data" / "reports" / "capture_2026-08-22.json").read_text())
     assert receipt["failures"] == ["mma:RuntimeError:temporary"]
+
+
+def test_football_validation_parses_html_wrapped_payload():
+    from slumdog.forebet import validate_football_json_body
+    body = b'<html><body>[[{"id":"1","Pred_1":"50","Pred_2":"50"}]]</body></html>'
+    validate_football_json_body(body)
+
+
+def test_football_validation_rejects_truncated_html_wrapped_json():
+    from slumdog.forebet import validate_football_json_body
+    body = b'<html><body>[[{"id":"1","Pred_1":"50"},{"id":"2"'
+    with pytest.raises(ValueError, match="football JSON body missing"):
+        validate_football_json_body(body)
+
+
+def test_football_fetch_retries_truncated_then_succeeds(tmp_path, monkeypatch):
+    from slumdog import forebet as forebet_mod
+    good = b'<html><body>[[{"id":"1","Pred_1":"50","Pred_2":"50"}]]</body></html>'
+    bad = b'<html><body>[[{"id":"1","Pred_1":"50"},{"id":"2"'
+    responses = [bad, good]
+
+    def fake_relay_markdown(relay, target, timeout):
+        return responses.pop(0)
+
+    monkeypatch.setattr(forebet_mod, "relay_get_markdown", fake_relay_markdown)
+    monkeypatch.setattr(forebet_mod, "_sleep_with_jitter", lambda *a, **k: None)
+    cap = forebet_mod.ForebetCollector(tmp_path)._fetch("football", "2025-09-21")
+    assert cap.bytes == len(good)
+    assert (tmp_path / cap.body_path).read_bytes() == good

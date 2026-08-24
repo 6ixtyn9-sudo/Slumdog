@@ -192,10 +192,12 @@ def _base_row(row, sport: str, target_date: str):
 def parse_mma_settled(body: bytes, target_date: str) -> list[SettledEvent]:
     soup = BeautifulSoup(body, "html.parser")
     settled = []
+    seen_event_ids: set[str] = set()
     for row in soup.select("div.rcnt"):
         base = _base_row(row, "mma", target_date)
         if not base:
             continue
+        event_id = str(base.get("event_id") or "")
         result_text = _text(row.select_one(".lscr_td"))
         if not result_text:
             continue
@@ -211,6 +213,10 @@ def parse_mma_settled(body: bytes, target_date: str) -> list[SettledEvent]:
             else:
                 continue
             disposition = "SETTLED"
+        if event_id and event_id in seen_event_ids:
+            continue
+        if event_id:
+            seen_event_ids.add(event_id)
         settled.append(SettledEvent(
             **base, sport="mma", event_date=target_date, winner_index=winner,
             score_1=None, score_2=None, disposition=disposition,

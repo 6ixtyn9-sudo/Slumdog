@@ -277,3 +277,57 @@ coverage estimate.
 Price coverage must be measured across many dates and leagues before any value
 or ROI conclusion. Unpriced events remain useful for upset learning but cannot
 support expected-value certification.
+
+## Verified no-odds coverage gaps (2026-08-24)
+
+Live relay probes and settled ledgers found no bookmaker prices for cricket:
+6,643 settled rows (6,119 SETTLED, 375 SETTLED_DRAW, 149 VOID), zero priced.
+Cricket listings expose Forebet probabilities via `.fprc`, but no `.haodd` odds
+container. This is a coverage limitation rather than a parser gap.
+
+American-football upcoming rows expose `.haodd` with dashes. Four 2026
+preseason fixtures and 7,447 archived settled rows contained zero prices. This
+remains subject to a regular-season re-check on or after approximately
+2026-09-10; no final claim should be made until that probe is executed.
+
+### MMA legacy-ledger integrity
+
+The 2026-08-24 audit of `history_mma.jsonl.gz` found 759 stored rows and 757
+unique event IDs. Two settled, priced events (`mma:2638` and `mma:2721`) were
+byte-identical duplicate writes from the 2026-06-15 listing. Deduplication gives
+600 settled, 157 void, and 153 priced events; 11 events are both void and
+priced. Thus the earlier `159 void == 159 priced` observation is neither
+reproduced nor a structural settlement bug. Eleven rows are both void and
+priced, but their seven sampled raw captures are absent locally. Manifest
+receipts retain hashes only, so whether these were prices posted before a later
+scratch/no-contest is plausible but cannot be verified from surviving bytes.
+
+All 759 legacy rows lack both `raw_sha256` and `captured_at`; they predate raw
+provenance retention. Current backfill writes `facets.raw_sha256` for new rows.
+Legacy provenance can only be restored by rebuilding from retained raw captures;
+hashes must never be fabricated. The existing derived ledger is not rewritten
+automatically.
+
+### Cross-sport legacy duplicate audit (2026-08-24)
+
+A read-only scan found 279 byte-identical extra rows (278 repeated same-date
+keys) across the legacy ledgers. Forebet numeric IDs are not globally unique:
+many IDs recur on different dates for distinct fixtures, including rematches
+between the same participants with different settled scores. Ledger identity
+must therefore include `(sport, event_id, event_date)`; global event-ID dedupe
+would destroy valid history.
+
+Four cross-date pairs became byte-identical after removing only `event_date`:
+`basketball:198045`, `basketball:198046`, `football:2041406`, and
+`volleyball:96303`. They may be rescheduled or date-boundary listings, but are
+explicitly unresolved and are not automatically removed. Raw files were absent
+for the seven sampled suspicious dates. Their manifest receipts retain source
+URL, byte count, and SHA-256, but a hash cannot reconstruct source bytes and a
+refetch would be a new capture.
+
+One same-key conflict is also unresolved: `hockey:278977` on 2023-08-20 has two
+settled rows for Netherlands W v Denmark W, one 1-6 and one 0-4. With no sampled
+raw file available, neither result can be selected honestly. New backfills
+collapse only canonical-identical same-key rows; conflicting same-key payloads
+fail the complete day before any rows are appended, with differing fields in
+the error. Existing ledgers remain untouched.

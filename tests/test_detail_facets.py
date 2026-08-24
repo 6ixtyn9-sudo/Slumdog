@@ -187,3 +187,26 @@ def test_football_shots_nan_percentages_still_extracts_totals():
     # The 0% inside-box value is a real (zero) figure, not NAN.
     assert out["p1_shots_inside_box_pct"] == 0
     assert out["p2_shots_total"] == 0
+
+
+def test_h2h_fallback_does_not_sweep_standings_tables():
+    body = b'''<html><body><h2>League standings</h2><table>
+      <tr><th>PTS</th><th>GP</th><th>W</th></tr>
+      <tr><td>24</td><td>10</td><td>7</td></tr>
+      <tr><td>22</td><td>10</td><td>6</td></tr>
+    </table></body></html>'''
+    facets = parse_detail(body, "basketball", "Lakers", "Celtics")
+    assert "h2h_participant_1_wins" not in facets.common
+    assert "h2h_participant_2_wins" not in facets.common
+    assert "h2h_total_games" not in facets.common
+
+
+def test_h2h_scoped_fallback_still_reads_real_h2h_table():
+    body = b'''<html><body><div class="h2h"><table>
+      <tr><td>102 - 99</td></tr><tr><td>88 - 95</td></tr>
+      <tr><td>110 - 104</td></tr>
+    </table></div></body></html>'''
+    facets = parse_detail(body, "basketball", "Home", "Away")
+    assert facets.common["h2h_participant_1_wins"] == 2
+    assert facets.common["h2h_participant_2_wins"] == 1
+    assert facets.common["h2h_total_games"] == 3
