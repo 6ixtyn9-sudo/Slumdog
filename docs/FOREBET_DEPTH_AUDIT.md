@@ -277,3 +277,15 @@ coverage estimate.
 Price coverage must be measured across many dates and leagues before any value
 or ROI conclusion. Unpriced events remain useful for upset learning but cannot
 support expected-value certification.
+
+## Verified no-odds coverage gaps (2026-08-24)
+
+Live relay probes and settled ledgers found no bookmaker prices for cricket:
+6,643 settled rows (6,119 SETTLED, 375 SETTLED_DRAW, 149 VOID), zero priced.
+Cricket listings expose Forebet probabilities via `.fprc`, but no `.haodd` odds
+container. This is a coverage limitation rather than a parser gap.
+
+American-football upcoming rows expose `.haodd` with dashes. Four 2026
+preseason fixtures and 7,447 archived settled rows contained zero prices. This
+remains subject to a regular-season re-check on or after approximately
+2026-09-10; no final claim should be made until that probe is executed.

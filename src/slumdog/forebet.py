@@ -19,6 +19,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from bs4 import BeautifulSoup
+
 from .sports import SPORTS, SportSpec
 
 RELAY_BASE = "https://r.jina.ai/"
@@ -372,16 +374,29 @@ def validate_html_body(body: bytes, sport: str, target_date: str) -> None:
             raise ValueError(f"target date missing from HTML: {target_date}")
 
 
-def validate_football_json_body(body: bytes) -> None:
-    """Accept the relay's HTML-wrapped JSON or Forebet's raw JSON payload."""
-    if b"<body>[[{" in body.lower():
-        return
-    try:
-        payload = json.loads(body.decode("utf-8", "replace"))
-    except Exception as exc:
-        raise ValueError(f"football JSON body missing: {exc}") from exc
+def _parse_football_payload(body: bytes):
+    """Parse football JSON from relay HTML-wrapped or raw form; validate shape."""
+    stripped = body.lstrip()
+    if stripped[:1] in (b"[", b"{"):
+        try:
+            payload = json.loads(body.decode("utf-8", "replace"))
+        except Exception as exc:
+            raise ValueError(f"football JSON body missing: {exc}") from exc
+    else:
+        soup = BeautifulSoup(body, "html.parser")
+        text = soup.body.get_text() if soup.body else body.decode("utf-8", "replace")
+        try:
+            payload = json.loads(text)
+        except Exception as exc:
+            raise ValueError(f"football JSON body missing: {exc}") from exc
     if not (isinstance(payload, list) and payload and isinstance(payload[0], list)):
         raise ValueError("unexpected football JSON shape")
+    return payload
+
+
+def validate_football_json_body(body: bytes) -> None:
+    """Accept the relay's HTML-wrapped JSON or Forebet's raw JSON payload."""
+    _parse_football_payload(body)
 
 
 def validate_capture_body(body: bytes, sport: str, target_date: str, route: str) -> None:
@@ -410,14 +425,28 @@ class ForebetCollector:
             # qualified path for the football JSON endpoint; the html-forced
             # mode 401s on cloud IPs. Try markdown first, then html, then
             # direct (local-only, fail-fast on a runner).
-            try:
-                body = relay_get_markdown(relay, target, timeout=self.timeout)
-                route = "relay_markdown"
-            except Exception:
-                body, route = fetch_with_fallback(relay, target, timeout=self.timeout)
+            body = b""
+            route = ""
+            last_error = None
+            for attempt in range(3):
+                try:
+                    try:
+                        body = relay_get_markdown(relay, target, timeout=self.timeout)
+                        route = "relay_markdown"
+                    except Exception:
+                        body, route = fetch_with_fallback(relay, target, timeout=self.timeout)
+                    validate_capture_body(body, sport, target_date, route)
+                    last_error = None
+                    break
+                except ValueError as exc:
+                    last_error = exc
+                    if attempt + 1 < 3:
+                        _sleep_with_jitter(attempt)
+            if last_error is not None:
+                raise last_error
         else:
             body, route = fetch_with_fallback(relay, target, timeout=self.timeout)
-        validate_capture_body(body, sport, target_date, route)
+            validate_capture_body(body, sport, target_date, route)
         captured_at = datetime.now(timezone.utc).isoformat()
         digest = hashlib.sha256(body).hexdigest()
         stamp = captured_at.replace(":", "").replace("+00:00", "Z").replace("-", "")
