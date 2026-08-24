@@ -1,10 +1,10 @@
 # Slumdog State — Canonical Current Truth
 
 **Last verified:** 2026-08-24 (UTC) — Real-data census executed
-**Branch:** `arena/01a033af-slumdog` (delivery), `main` is only permanent branch
+**Branch:** `arena/01a034f6-slumdog` (delivery), `main` is only permanent branch
 **Doc canonical path:** `docs/STATE.md`
-**PR:** #6 MERGE READY — 337 tests passed
-**HEAD:** 4b1546f + documentation commit
+**PR:** (pending) — 337 tests passed
+**HEAD:** (pending commit)
 
 ## Permanent Product Mission
 
@@ -104,6 +104,7 @@ Next: historical conflict provenance/reconstruction investigation
 
 **Milestone 5: historical integrity investigation**
 
+- *Action:* Added `scripts/investigate_m5.py` and `docs/MILESTONE5_INVESTIGATION.md` to run the historical audit without side effects.
 - Investigate why hockey:278977 has two settled scores in same file
 - Establish provenance for historical ledgers (currently 0 present)
 - Do not query Forebet until provenance established

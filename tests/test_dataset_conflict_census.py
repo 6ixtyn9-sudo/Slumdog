@@ -231,7 +231,7 @@ def test_no_full_serialization_in_conflict_report():
         "source_url_values": g.source_url_values,
         "source_entries": g.source_entries,
     }
-    json_str = json.dumps(entry)
+    json.dumps(entry)  # ensure serializable
     # Should not contain full participant names as top-level keys? But source_url may contain them
     # Check that no full event serialization like participant_1, score_1 etc as top-level
     assert "participant_1" not in entry

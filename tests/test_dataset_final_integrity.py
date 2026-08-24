@@ -4,8 +4,6 @@ import pytest
 
 from slumdog.dataset import (
     SUPPORTED_DISPOSITIONS,
-    SETTLED_DISPOSITIONS,
-    VOID_DISPOSITIONS,
     _compute_input_digest,
     _validate_settled_dict,
     build_dataset_with_raw_accounting,

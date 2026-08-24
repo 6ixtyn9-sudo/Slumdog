@@ -1,22 +1,14 @@
 """Milestone 4E hardening tests — no unsafe defaults, raw/canonical accounting, digest, provenance, duplicate identity, adapter."""
 
-import gzip
-import json
 import tempfile
-from collections import Counter
 from pathlib import Path
 
 import pytest
 
-from slumdog.contracts import SettledEvent
 from slumdog.dataset import (
-    FEATURE_CONTRACT_VERSION,
-    LABEL_CONTRACT_VERSION,
-    PriceFreeDatasetReceipt,
     _compute_input_digest,
     _validate_settled_dict,
     build_dataset_with_raw_accounting,
-    build_price_free_examples,
     load_settled_events_from_dicts,
 )
 from slumdog.dataset_audit import _load_json_file, _load_jsonl_gz_file
