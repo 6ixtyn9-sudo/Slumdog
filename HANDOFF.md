@@ -341,9 +341,9 @@ Read `HANDOFF.md` first, then `docs/FOREBET_DEPTH_AUDIT.md`, then the DOM helper
 in `src/slumdog/detail_facets.py` and `tests/test_football_dom_markets.py`.
 Model training remains frozen.
 
-1. If the DOM-market implementation is still unmerged, run the mandatory gates
-   in an environment with project/dev dependencies, review the resulting diff,
-   update this handoff with exact results, and await explicit merge approval.
+1. PR #5's DOM-market implementation has passed the recorded Codespace gates.
+   Review its final diff and mergeability, then await explicit user merge
+   authorization; do not rerun or alter it without new evidence.
 2. Quantify the 963-date football backfill gap and retained-capture replay
    feasibility before fetching anything.
 3. Audit sparse hockey/rugby/volleyball/handball/baseball pricing from retained
