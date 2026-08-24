@@ -133,3 +133,32 @@ The derived ledger proves the rows contain both fields; it does not prove the
 history of when prices were posted relative to a scratch/no-contest. Treat the
 pre-scratch explanation as plausible but unverified. Do not refetch and present
 new bytes as the historical capture.
+
+## After merge: next session starts here
+
+PR #4 is the completed integrity checkpoint and was explicitly authorized for
+merge on 2026-08-24. The next session should start from updated `main`, read
+this file and `docs/FOREBET_DEPTH_AUDIT.md`, and keep model training frozen.
+
+Next priorities, discussion before coding:
+
+1. Finish the retained DOM field map for `#dbc_table .rcnt` and
+   `#gscr_table .rcnt`. Verified so far: double-chance probability/pick are
+   captured, its single selected-pick American coefficient is dropped, and
+   goalscorer containers expose three player predictions that are currently
+   dropped. Do not infer first/anytime semantics. Preserve the observed raw
+   DC token `21` until its meaning is verified.
+2. Quantify the 963-date football backfill gap and retained-capture replay
+   feasibility before fetching anything.
+3. Audit sparse pricing markup for hockey, rugby, volleyball, handball, and
+   baseball using retained bytes first.
+4. Audit dropped football getrs.php keys from retained captures where possible.
+5. Perform a separate read-only esoccer depth assessment.
+6. Run the American-football odds probe only on or after approximately
+   2026-09-10.
+
+Unresolved legacy evidence must stay unresolved: four cross-date normalized-
+identical pairs, `hockey:278977`'s conflicting results, absent raw bytes for the
+sampled suspicious dates, and the 11 MMA void/priced rows whose pre-scratch
+explanation is plausible but unverified. Never rewrite those ledgers or invent
+provenance without explicit authorization and source bytes.
