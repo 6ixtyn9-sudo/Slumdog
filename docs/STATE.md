@@ -3,8 +3,8 @@
 **Last verified:** 2026-08-24 (UTC) — Real-data census executed
 **Branch:** `arena/01a034f6-slumdog` (delivery), `main` is only permanent branch
 **Doc canonical path:** `docs/STATE.md`
-**PR:** (pending) — 337 tests passed
-**HEAD:** (pending commit)
+**PR:** #7 OPEN — 337 tests passed
+**HEAD:** a86252f
 
 ## Permanent Product Mission
 

@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-08-24 (UTC) — Milestones 0–4F COMPLETE, real-data census executed, PR #6 MERGE READY
 **Branch:** `arena/01a034f6-slumdog`
-**HEAD SHA:** (pending commit) — Milestone 5 Investigation Script added
+**HEAD SHA:** a86252f Milestone 5 Investigation Script added
 **Phase:** Milestones 0–4F COMPLETE, price-free foundation MERGE READY, historical dataset generation FAIL-CLOSED, real-data readiness BLOCKED by historical conflicts, training FROZEN, production NOT AUTHORIZED
 **Mission:** Slumdog identifies a small daily shortlist of participants that Forebet considers underdogs but whose available pre-event evidence indicates a credible outright-win upset.
 **PR:** #6 https://github.com/6ixtyn9-sudo/Slumdog/pull/6 — OPEN, MERGE READY after documentation commit
@@ -179,8 +179,8 @@ Temporary artifacts (not committed):
 
 - **Branch:** `arena/01a034f6-slumdog`
 - **Base:** `main` @ `c48d5dc`
-- **PR:** (pending)
-- **Final head:** (pending commit)
+- **PR:** #7 https://github.com/6ixtyn9-sudo/Slumdog/pull/7 — OPEN
+- **Final head:** a86252f
 - **Merge approves only:** governance documentation; price-free identity and label contracts; safe historical example contracts; strict adapters and receipts; conflict detection and census tooling; tests
 - **Merge does NOT approve:** excluding the hockey conflict; training a model; ranking candidates; thresholds; production integration; daily selections; legacy Robber removal
 
