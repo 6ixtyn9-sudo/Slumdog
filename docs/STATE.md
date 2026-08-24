@@ -113,15 +113,17 @@ Completed:
 ## Links to Deeper Documents
 
 - `AGENTS.md` — permanent mission + operating constitution
-- `README.md` — product overview (to be updated to new mission)
-- `HANDOFF.md` — session continuation record
-- `docs/FOREBET_DEPTH_AUDIT.md` — training freeze receipt, facet inventory, historical depth contract, price coverage snapshots, verified no-odds gaps, duplicate audits
+- `README.md` — product overview (price-free mission, operational commands)
+- `HANDOFF.md` — session continuation record (Milestone 0 corrections + Milestone 1 audit)
+- `docs/STATE.md` — this file, canonical current truth (Milestone 1 audit phase)
+- `docs/README.md` — doc index with purpose/status/last-verified, price coverage reference-only clarification
+- `docs/MILESTONE1_AUDIT.md` — **NEW** price-free machinery audit: 10 gaps (odds-first identity, threshold, price features, zero-fill, equal prob, shortlist policy, ROI gate, incomplete receipt, evidence, timing), staged implementation plan
+- `docs/FOREBET_DEPTH_AUDIT.md` — training freeze receipt, facet inventory, historical depth contract, price coverage snapshots (reference only), verified no-odds gaps, duplicate audits
 - `docs/FOREBET_ARCHIVE_DEPTH.json` — annual archive probe matrix (conservative backfill starts)
 - `docs/FOREBET_DETAIL_COVERAGE.json` — 3-page-per-sport detail factor sample
-- `docs/FOREBET_PRICE_COVERAGE.json` — representative price snapshot per sport
-- `docs/FOREBET_FACET_ANALYSIS_PLAN.md` — timing classes + analysis order (10-step)
-- `docs/MA_GOLIDE_ROBBER_FORENSIC.md` — legacy Robber forensic spec (authoritative meaning 2, cascade, score, calibration warning, defects)
-- `docs/README.md` — (to be created) doc index with status/last-verified
+- `docs/FOREBET_PRICE_COVERAGE.json` — representative price snapshot per sport (reference evidence only, not readiness gate)
+- `docs/FOREBET_FACET_ANALYSIS_PLAN.md` — timing classes + analysis order (10-step, ROI not primary)
+- `docs/MA_GOLIDE_ROBBER_FORENSIC.md` — legacy Robber forensic spec (HISTORICAL, not current contract)
 
 ## Verification Receipt (Milestone 0 complete, corrections applied)
 
