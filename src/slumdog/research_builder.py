@@ -277,6 +277,14 @@ class _IncrementalBuilder:
             self.excluded[_exclusion_counter_name(reason)] += 1
             return
 
+        # v2 research eligibility: a row whose two sides are the same
+        # participant is not a valid canonical settled event — never emit an
+        # example and never feed history (the strict builder may emit such
+        # rows; intentional difference, mirroring research_history_eligible).
+        if _key(row.participant_1) == _key(row.participant_2):
+            self.excluded["excluded_self_pair"] += 1
+            return
+
         label_result = label_underdog_outcome(
             sport, identity, row.winner_index, disposition=disp, source_conflict=False
         )

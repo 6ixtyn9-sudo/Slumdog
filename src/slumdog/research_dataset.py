@@ -404,8 +404,8 @@ def _readiness_view(
     stats: dict[str, Any] = {
         "eligible_examples": agg.eligible,
         "positive_examples": agg.positive,
-        "negative_favorite_wins": agg.negative_fav + agg.negative_draw,
-        "negative_draws": 0,  # draws are labeled 0 alongside favorite wins in examples; see outcomes
+        "negative_favorite_wins": agg.negative_fav,
+        "negative_draws": agg.negative_draw,
     }
     stats["positive_rate"] = (agg.positive / agg.eligible) if agg.eligible else None
     stats["date_min"] = agg.date_min

@@ -222,7 +222,8 @@ def test_equivalence_counters_and_outcomes():
         rs = result.receipt["readiness"]["by_sport"][sport]
         assert counter["eligible_examples"] == rs["eligible_examples"]
         assert counter.get("positive_underdog_wins", 0) == rs["positive_examples"]
-        assert counter.get("negative_favorite_wins", 0) + counter.get("negative_draws", 0) == rs["negative_favorite_wins"]
+        assert counter.get("negative_favorite_wins", 0) == rs["negative_favorite_wins"]
+        assert counter.get("negative_draws", 0) == rs["negative_draws"]
 
 
 def test_equivalence_same_date_isolation_explicit():
@@ -724,3 +725,130 @@ def test_pick_representative_deterministic_no_input_order():
     f2 = entry(raw_only, "b.json", "line:1")
     assert _pick_representative([f1, f2]) is f1
     assert _pick_representative([f2, f1]) is f1
+
+
+# ---------------------------------------------------------------------------
+# 4. Outcome subtypes (readiness must mirror top-level outcomes exactly)
+# ---------------------------------------------------------------------------
+
+
+def _check_subtypes(result, *, pos, fav, draw):
+    out = result.receipt["outcomes"]
+    g = result.receipt["readiness"]["global"]
+    # Top-level outcome counts.
+    assert out["positive_underdog_wins"] == pos
+    assert out["negative_favorite_wins"] == fav
+    assert out["negative_draws"] == draw
+    # Global readiness counts must equal top-level outcome counts.
+    assert g["positive_examples"] == pos
+    assert g["negative_favorite_wins"] == fav
+    assert g["negative_draws"] == draw
+    # Subtype invariant: eligible = pos + fav + draw.
+    assert g["eligible_examples"] == pos + fav + draw
+    assert g["eligible_examples"] == result.receipt["accounting"]["eligible_examples"]
+    # Per-sport subtype invariant.
+    for sport, rs in result.receipt["readiness"]["by_sport"].items():
+        assert rs["eligible_examples"] == (
+            rs["positive_examples"] + rs["negative_favorite_wins"] + rs["negative_draws"]
+        )
+
+
+def test_outcome_subtypes_draw_capable_sport():
+    # Underdog win (football).
+    result, _em = research_build([make_row("football:1", sport="football", draw_prob=0.3, winner=2)])
+    _check_subtypes(result, pos=1, fav=0, draw=0)
+    # Favorite win (football).
+    result, _em = research_build([make_row("football:2", sport="football", draw_prob=0.3, winner=1)])
+    _check_subtypes(result, pos=0, fav=1, draw=0)
+    # Draw (football) — label 0, must land in negative_draws, not favorite wins.
+    result, _em = research_build([make_row("football:3", sport="football", draw_prob=0.3, winner=0)])
+    _check_subtypes(result, pos=0, fav=0, draw=1)
+
+
+def test_outcome_subtypes_two_way_sport():
+    # Underdog win (hockey).
+    result, _em = research_build([make_row("hockey:1", winner=2)])
+    _check_subtypes(result, pos=1, fav=0, draw=0)
+    # Favorite win (hockey).
+    result, _em = research_build([make_row("hockey:2", winner=1)])
+    _check_subtypes(result, pos=0, fav=1, draw=0)
+
+
+def test_outcome_subtypes_anomalous_two_way_draw_excluded():
+    result, _em = research_build([make_row("hockey:3", winner=0, score1=1, score2=1)])
+    assert result.ready is True
+    acc = result.receipt["accounting"]
+    assert acc["eligible_examples"] == 0
+    assert acc["builder_excluded_rows"] == 1
+    assert tuple(result.sample) == ()
+    g = result.receipt["readiness"]["global"]
+    assert g["eligible_examples"] == 0
+    assert g["positive_examples"] == 0
+    assert g["negative_favorite_wins"] == 0
+    assert g["negative_draws"] == 0
+
+
+def test_outcome_subtypes_mixed_sports_global_and_per_sport():
+    rows = [
+        make_row("football:1", sport="football", event_date="2023-10-01", draw_prob=0.3, winner=2),  # positive
+        make_row("football:2", sport="football", event_date="2023-10-02", p1="Beta", p2="Alpha", draw_prob=0.3, prob1=0.4, prob2=0.6, winner=2),  # favorite (Alpha) win
+        make_row("football:3", sport="football", event_date="2023-10-03", draw_prob=0.3, winner=0),  # draw
+        make_row("hockey:1", event_date="2023-10-01", winner=2),  # positive
+        make_row("hockey:2", event_date="2023-10-02", winner=1),  # favorite win
+    ]
+    result, _em = research_build(rows)
+    _check_subtypes(result, pos=2, fav=2, draw=1)
+    by_sport = result.receipt["readiness"]["by_sport"]
+    f = by_sport["football"]
+    assert f["eligible_examples"] == 3
+    assert f["positive_examples"] == 1
+    assert f["negative_favorite_wins"] == 1
+    assert f["negative_draws"] == 1
+    assert f["positive_rate"] == 1 / 3
+    h = by_sport["hockey"]
+    assert h["eligible_examples"] == 2
+    assert h["positive_examples"] == 1
+    assert h["negative_favorite_wins"] == 1
+    assert h["negative_draws"] == 0
+    # Global equals the sum of per-sport subtypes.
+    g = result.receipt["readiness"]["global"]
+    assert g["negative_favorite_wins"] == by_sport["football"]["negative_favorite_wins"] + h["negative_favorite_wins"]
+    assert g["negative_draws"] == by_sport["football"]["negative_draws"] + h["negative_draws"]
+    assert g["positive_examples"] == by_sport["football"]["positive_examples"] + h["positive_examples"]
+
+
+# ---------------------------------------------------------------------------
+# 5. Self-pair behavior (unit level — participant names are not serialized
+#    in the example contract, so this is verified through the builder)
+# ---------------------------------------------------------------------------
+
+
+def test_self_pair_emits_no_example_and_has_explicit_reason_count():
+    from slumdog.research_builder import _IncrementalBuilder, _ReadinessAgg
+
+    row = _validate_settled_dict(make_row("hockey:sp", p1="Alpha", p2="Alpha"))
+    builder = _IncrementalBuilder()
+    emitter = ResearchExampleEmitter(None, sample_size=5)
+    builder.process_row(row, set(), emitter, _ReadinessAgg(), _ReadinessAgg())
+    # No research example emitted for a self-pair row.
+    assert emitter.emitted == 0
+    # Explicit exclusion reason with a count exists.
+    assert builder.excluded["excluded_self_pair"] == 1
+    assert sum(builder.excluded.values()) == 1
+
+
+def test_self_pair_does_not_update_history():
+    rows = [
+        make_row("hockey:sp", event_date="2023-09-01", p1="Alpha", p2="Alpha", prob1=0.6, prob2=0.4, winner=1, score1=5, score2=0),
+        make_row("hockey:2", event_date="2023-09-02", p1="Alpha", p2="Beta", prob1=0.6, prob2=0.4, winner=1, score1=3, score2=1),
+    ]
+    result, _em = research_build(rows)
+    assert result.ready is True
+    assert result.receipt["accounting"]["builder_excluded_rows"] == 1
+    assert [e.event_id for e in result.sample] == ["hockey:2"]
+    ex = result.sample[0]
+    # If the self-pair had fed history, Alpha (favorite) would show 1 prior
+    # game; the corrected builder must show none.
+    assert ex.features["favorite_prior_games"] == 0.0
+    assert ex.features["favorite_prior_win_rate"] is None
+    assert ex.missingness["favorite_prior_win_rate"] == 1
