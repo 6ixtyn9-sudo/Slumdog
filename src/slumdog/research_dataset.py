@@ -355,6 +355,9 @@ def build_research_dataset(
             "canonical_non_conflicting_rows": canonical_non_conflicting_rows,
             "eligible_examples": eligible_examples,
             "builder_excluded_rows": builder_excluded_rows,
+            "builder_exclusion_reasons": {
+                k: builder.excluded[k] for k in sorted(builder.excluded)
+            },
             "accounting_balanced": accounting_balanced,
         },
         "outcomes": {

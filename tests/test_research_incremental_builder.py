@@ -852,3 +852,110 @@ def test_self_pair_does_not_update_history():
     assert ex.features["favorite_prior_games"] == 0.0
     assert ex.features["favorite_prior_win_rate"] is None
     assert ex.missingness["favorite_prior_win_rate"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 6. Receipt exposure of builder exclusion reasons (auditability)
+# ---------------------------------------------------------------------------
+
+REASON_ROWS = [
+    make_row("hockey:ok", event_date="2023-11-01", p1="Alpha", p2="Beta", prob1=0.6, prob2=0.4, winner=1, score1=2, score2=1),
+    make_row("hockey:sp", event_date="2023-11-02", p1="Alpha", p2="Alpha", prob1=0.6, prob2=0.4, winner=1, score1=3, score2=0),
+    make_row("hockey:eq", event_date="2023-11-03", p1="Beta", p2="Gamma", prob1=0.5, prob2=0.5, winner=1, score1=1, score2=0),
+    make_row("hockey:dw", event_date="2023-11-04", p1="Gamma", p2="Delta", prob1=0.6, prob2=0.4, winner=0, score1=1, score2=1),
+    make_row("hockey:vd", event_date="2023-11-05", p1="Delta", p2="Alpha", prob1=0.6, prob2=0.4, winner=1, disposition="VOID", score1=2, score2=1),
+]
+
+
+def test_self_pair_exposed_in_builder_exclusion_reasons():
+    result, _em = research_build(REASON_ROWS)
+    acc = result.receipt["accounting"]
+    reasons = acc["builder_exclusion_reasons"]
+    assert reasons["excluded_self_pair"] == 1
+    # All existing builder reason keys are exposed, none collapsed.
+    assert reasons == {
+        "excluded_equal_probability": 1,
+        "excluded_self_pair": 1,
+        "excluded_unexpected_two_way_draw": 1,
+        "excluded_void": 1,
+    }
+    # Keys sorted deterministically.
+    assert list(reasons) == sorted(reasons)
+
+
+def test_exclusion_reasons_sum_equals_builder_excluded_rows():
+    result, _em = research_build(REASON_ROWS)
+    acc = result.receipt["accounting"]
+    assert acc["builder_excluded_rows"] == 4
+    assert acc["eligible_examples"] == 1
+    assert sum(acc["builder_exclusion_reasons"].values()) == acc["builder_excluded_rows"]
+
+
+def test_exclusion_reasons_deterministic_under_reorder():
+    import random as _random
+
+    rows = list(REASON_ROWS)
+    shuffled = list(rows)
+    _random.Random(11).shuffle(shuffled)
+    assert shuffled != rows
+    r1, _em = research_build(rows)
+    r2, _em = research_build(shuffled)
+    m1 = r1.receipt["accounting"]["builder_exclusion_reasons"]
+    m2 = r2.receipt["accounting"]["builder_exclusion_reasons"]
+    assert m1 == m2
+    assert list(m1) == sorted(m1)
+    assert list(m2) == sorted(m2)
+
+
+def test_receipt_serialization_stable_ready_and_not_ready(tmp_path):
+    # Ready receipts: two identical runs serialize byte-identically and
+    # expose the reasons mapping.
+    root, out1, out2 = tmp_path / "root", tmp_path / "o1", tmp_path / "o2"
+    out1.mkdir()
+    out2.mkdir()
+    write_ledger(root, REASON_ROWS)
+    code1, receipt1, _s1, _e1 = run_audit_research(root, out1, REASON_ROWS, sample_size=5)
+    code2, receipt2, _s2, _e2 = run_audit_research(root, out2, REASON_ROWS, sample_size=5)
+    assert code1 == 0 and code2 == 0
+    b1, b2 = receipt1.read_bytes(), receipt2.read_bytes()
+    assert b1 == b2
+    rj = json.loads(b1)
+    assert rj["status"] == RESEARCH_STATUS
+    assert "builder_exclusion_reasons" in rj["accounting"]
+
+    # NOT_READY (diagnostic) receipts: same stability, field still exposed.
+    import slumdog.research_dataset as rd
+
+    def run_not_ready(out: Path) -> bytes:
+        code = run_research_mode(
+            valid_with_source=vws(REASON_ROWS),
+            raw_input_rows=99,
+            schema_excluded_rows=0,
+            malformed_empty_participant_rows=0,
+            schema_exclusion_reasons={},
+            receipt_path=out / "receipt.json",
+            sample_path=out / "sample.json",
+            examples_path=out / "examples.jsonl.gz",
+            sample_size=5,
+            files_found=1,
+            files_empty=0,
+            files_unreadable=0,
+            file_errors=[],
+        )
+        assert code == 1
+        return (out / "receipt.json").read_bytes()
+
+    o3, o4 = tmp_path / "o3", tmp_path / "o4"
+    o3.mkdir()
+    o4.mkdir()
+    d1, d2 = run_not_ready(o3), run_not_ready(o4)
+    assert d1 == d2
+    dj = json.loads(d1)
+    assert dj["status"] == NOT_READY_STATUS
+    assert dj["research_ready"] is False
+    assert dj["accounting"]["builder_exclusion_reasons"] == {
+        "excluded_equal_probability": 1,
+        "excluded_self_pair": 1,
+        "excluded_unexpected_two_way_draw": 1,
+        "excluded_void": 1,
+    }
