@@ -5,7 +5,7 @@
 **Superseded branch:** `arena/01a03dc4-slumdog` (PR #8; untouched; closed not-merged as superseded once the replacement PR is verified — branch NOT deleted from this Arena session)
 **Phase:** Milestones 0–5 COMPLETE; Milestone 6A COMPLETE (implementation + real-data verification); awaiting maintainer review of the replacement PR; training FROZEN; production NOT AUTHORIZED; Milestone 6B NOT STARTED / NOT AUTHORIZED
 **Mission:** Slumdog identifies a small daily shortlist of participants that Forebet considers underdogs but whose available pre-event evidence indicates a credible outright-win upset.
-**PR:** replacement PR (see PR State) — "Add bounded research-only price-free dataset generation"; supersedes #8 (https://github.com/6ixtyn9-sudo/Slumdog/pull/8), which is closed not-merged once the replacement PR is verified
+**PR:** #9 https://github.com/6ixtyn9-sudo/Slumdog/pull/9 — "Add bounded research-only price-free dataset generation" (OPEN, mergeable, against `main`); supersedes #8 (https://github.com/6ixtyn9-sudo/Slumdog/pull/8), closed not-merged as superseded
 **Training:** FROZEN (`feature_contracts.py: MODEL_TRAINING_ALLOWED=False`)
 **Tests:** 396 passed (verified 2026-08-26)
 
@@ -188,8 +188,8 @@ Final real-data run passed every gate: audit exit 0, elapsed 192.61 s, peak RSS 
 ## PR State
 
 - **Active branch:** `arena/01a03e7a-slumdog` — v2 implementation, final tested head `3898103` (base `main` @ `efb4c90`, built on the preserved PR #8 commits via `bc5dd3c`). Replacement PR opened from here against `main`.
-- **Replacement PR:** "Add bounded research-only price-free dataset generation" — supersedes PR #8. (PR number assigned at open; see merge review.)
-- **PR #8 (superseded):** https://github.com/6ixtyn9-sudo/Slumdog/pull/8 — closed **not-merged** once the replacement PR is verified. Original `arena/01a03dc4-slumdog` branch is NOT deleted from this Arena session.
+- **Replacement PR:** #9 https://github.com/6ixtyn9-sudo/Slumdog/pull/9 — "Add bounded research-only price-free dataset generation" (OPEN, mergeable/CLEAN, against `main` from `arena/01a03e7a-slumdog`) — supersedes PR #8.
+- **PR #8 (superseded):** https://github.com/6ixtyn9-sudo/Slumdog/pull/8 — closed **not-merged** as superseded once the replacement PR was verified. Original `arena/01a03dc4-slumdog` branch is NOT deleted from this Arena session.
 - **Original #8 contents:** integrity-evidence docs (hockey mechanism, UNKNOWN origin layers, corrected provenance policy, docs index) + original Milestone 6A research mode (replaced by the v2 incremental builder).
 - **Merge approves only:** historical-integrity documentation; research-only dataset construction, receipt measurement, descriptive statistics, research artifact generation
 - **Merge does NOT approve:** model training, threshold optimization, calibrated probabilities, ranking, candidate shortlists, shadow picks, production integration, daily selections, legacy Robber removal, provenance fabrication
