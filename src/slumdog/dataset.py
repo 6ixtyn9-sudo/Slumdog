@@ -438,19 +438,68 @@ def _classify_conflict(categories: set[str]) -> str:
     }.get(cat, "MULTIPLE")
 
 
-def build_conflict_census(
-    valid_with_source: list[ValidEventWithSource],
-    *,
-    feature_contract_version: str = FEATURE_CONTRACT_VERSION,
-    label_contract_version: str = LABEL_CONTRACT_VERSION,
-) -> tuple[list[ConflictGroup], PriceFreeDatasetReceipt, dict[str, Any]]:
-    """Read-only conflict census — collects all ledger conflicts without failing loudly.
+def classify_provenance_pair(a: SettledEvent, b: SettledEvent) -> str:
+    """Deterministic provenance merge classification for two rows sharing a
+    composite key (mirrors _compare_events_for_conflict's provenance rule).
 
-    Returns (conflict_groups, receipt, debug_info)
-    - Does not emit examples
-    - Receipt accounts for all readable rows
-    - Deterministic under input reordering (sorted by composite key and source location)
-    - Conflict report entries contain only compact identifying fields, no full event serialization
+    - "identical": both provenances empty, or both present and equal
+    - "mergeable": one side carries more provenance (present wins over missing)
+    - "conflict": a field present on both sides differs (raw_sha256 or source_url)
+    """
+    a_raw, a_url = _extract_provenance(a)
+    b_raw, b_url = _extract_provenance(b)
+    if a_raw and b_raw and a_raw != b_raw:
+        return "conflict"
+    if a_url and b_url and a_url != b_url:
+        return "conflict"
+    a_has = _has_provenance(a_raw, a_url)
+    b_has = _has_provenance(b_raw, b_url)
+    if a_has and b_has:
+        return "identical" if (a_raw == b_raw and a_url == b_url) else "mergeable"
+    if not a_has and not b_has:
+        return "identical"
+    return "mergeable"
+
+
+def _source_location_key(location: str) -> tuple:
+    """Stable sort key for source locations: numeric line:N / index:N values
+    sort numerically; unparseable locations sort lexicographically after them."""
+    if ":" in location:
+        kind, _, num = location.partition(":")
+        try:
+            return (0, int(num), kind, "")
+        except ValueError:
+            pass
+    return (1, 0, "", location)
+
+
+def research_content_repr(row: SettledEvent) -> dict[str, Any]:
+    """Canonical research content representation: every field affecting
+    identity, label, eligibility, history, features, or the canonical input
+    digest, minus the mergeable provenance fields (source_url, raw_sha256)
+    that the deterministic provenance policy handles separately. Odds and
+    legacy pick are already excluded from _canonical_event_repr."""
+    canon = _canonical_event_repr(row)
+    canon.pop("source_url", None)
+    canon.pop("raw_sha256", None)
+    return canon
+
+
+
+def _census_grouping(
+    valid_with_source: list[ValidEventWithSource],
+) -> tuple[list[ConflictGroup], dict[str, Any], list[SettledEvent]]:
+    """Shared conflict-census grouping pass for build_conflict_census and
+    census_conflicts_only.
+
+    Returns (conflict_groups, counts, canonical_events):
+    - canonical_events: deterministic-merge representative per non-conflicting
+      composite key (plain SettledEvent), in (event_date, sport, event_id)
+      order — the same list the legacy census built inline
+    - counts keys: total_groups, exact_duplicates_collapsed,
+      conflicting_composite_keys, conflicting_rows, conflicts_by_sport,
+      conflicts_by_field, conflicts_with_valid_raw_sha256,
+      conflicts_without_valid_raw_sha256, canonical_input_rows
     """
     # Group by composite key
     groups: dict[tuple[str, str, str], list[ValidEventWithSource]] = defaultdict(list)
@@ -469,6 +518,7 @@ def build_conflict_census(
     conflicts_by_field: Counter = Counter()
     conflicts_with_valid = 0
     conflicts_without_valid = 0
+    canonical_count = 0
 
     conflict_groups: list[ConflictGroup] = []
 
@@ -482,6 +532,7 @@ def build_conflict_census(
         entries = groups[key]
         if len(entries) == 1:
             # Single entry — canonical
+            canonical_count += 1
             canonical_events.append(entries[0].event)
             continue
 
@@ -575,10 +626,50 @@ def build_conflict_census(
         else:
             # No conflict — deterministic merge resulted in one canonical
             exact_duplicates_collapsed += group_exact_collapsed
+            canonical_count += 1
             canonical_events.append(canonical_entry.event)
 
     # Sort conflict groups deterministically
     conflict_groups = sorted(conflict_groups, key=lambda g: (g.composite_key[2], g.composite_key[0], g.composite_key[1]))
+
+    counts = {
+        "total_groups": len(groups),
+        "exact_duplicates_collapsed": exact_duplicates_collapsed,
+        "conflicting_composite_keys": conflicting_composite_keys,
+        "conflicting_rows": conflicting_rows,
+        "conflicts_by_sport": dict(conflicts_by_sport),
+        "conflicts_by_field": dict(conflicts_by_field),
+        "conflicts_with_valid_raw_sha256": conflicts_with_valid,
+        "conflicts_without_valid_raw_sha256": conflicts_without_valid,
+        "canonical_input_rows": canonical_count,
+    }
+    return conflict_groups, counts, canonical_events
+
+
+
+def build_conflict_census(
+    valid_with_source: list[ValidEventWithSource],
+    *,
+    feature_contract_version: str = FEATURE_CONTRACT_VERSION,
+    label_contract_version: str = LABEL_CONTRACT_VERSION,
+) -> tuple[list[ConflictGroup], PriceFreeDatasetReceipt, dict[str, Any]]:
+    """Read-only conflict census — collects all ledger conflicts without failing loudly.
+
+    Returns (conflict_groups, receipt, debug_info)
+    - Does not emit examples
+    - Receipt accounts for all readable rows
+    - Deterministic under input reordering (sorted by composite key and source location)
+    - Conflict report entries contain only compact identifying fields, no full event serialization
+    """
+    conflict_groups, _counts, canonical_events = _census_grouping(valid_with_source)
+    exact_duplicates_collapsed = _counts["exact_duplicates_collapsed"]
+    conflicting_composite_keys = _counts["conflicting_composite_keys"]
+    conflicting_rows = _counts["conflicting_rows"]
+    conflicts_by_sport = Counter(_counts["conflicts_by_sport"])
+    conflicts_by_field = Counter(_counts["conflicts_by_field"])
+    conflicts_with_valid = _counts["conflicts_with_valid_raw_sha256"]
+    conflicts_without_valid = _counts["conflicts_without_valid_raw_sha256"]
+    total_groups = _counts["total_groups"]
 
     # Build receipt accounting for all readable rows
     # valid_loaded_rows = total valid events
@@ -718,11 +809,26 @@ def build_conflict_census(
     )
 
     debug_info = {
-        "total_groups": len(groups),
+        "total_groups": total_groups,
         "conflicting_keys": conflicting_composite_keys,
     }
 
     return conflict_groups, receipt, debug_info
+
+
+def census_conflicts_only(
+    valid_with_source: list[ValidEventWithSource],
+) -> tuple[list[ConflictGroup], dict[str, Any]]:
+    """Lightweight conflict census for research mode: O(rows) grouping plus
+    conflict classification only — no example building.
+
+    Returns (conflict_groups, counts) with the same counts keys as
+    _census_grouping. build_conflict_census() (strict / diagnostic census
+    mode) keeps its full example-build receipt behavior, unchanged.
+    """
+    conflict_groups, counts, _canonical = _census_grouping(valid_with_source)
+    return conflict_groups, counts
+
 
 
 def _prior_scoring_stats(

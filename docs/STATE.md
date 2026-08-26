@@ -86,13 +86,14 @@ Temporary artifacts (not committed):
 
 ```
 Milestones 0–5: COMPLETE
-Milestone 6A (research dataset readiness): COMPLETE locally (361 tests), real-data execution pending in Codespace
-Price-free foundation: MERGE READY (PR #8, combined with integrity evidence)
+Milestone 6A (research dataset readiness): COMPLETE locally (386 tests), real-data execution pending in Codespace
+Price-free foundation: corrected v2 incremental implementation on arena/01a03e7a-slumdog; replacement PR after local + Codespace verification (PR #8 stays open until then)
 Historical dataset generation: FAIL-CLOSED (strict); RESEARCH mode opt-in with whole-key conflict exclusion
+Research builder: v2 incremental — bounded-memory, linear-time, bit-identical to strict on valid canonical events
 Real-data readiness: 1 outcome conflict + 6 schema exclusions excluded explicitly in research mode; provenance absent (visible)
 Training: FROZEN
 Production: NOT AUTHORIZED
-Next: real-data research-mode execution in Codespace, then maintainer review
+Next: real-data research-mode execution in Codespace (v2), then maintainer review
 ```
 
 ## Training / Production
@@ -108,19 +109,22 @@ Next: real-data research-mode execution in Codespace, then maintainer review
 
 **Milestone 6A execution + review (current)**
 
-- Run research-only mode against retained Codespace ledgers (writes only under /tmp); expected accounting: 655,394 raw → 6 schema excluded → 655,388 valid → 279 exact duplicates + 2 conflict rows + 655,107 canonical → 654,029 eligible + 1,078 builder exclusions — regenerated and verified by the run, not assumed.
-- Maintainer review of the research receipt and readiness statistics.
+- Run the corrected v2 research-only mode against retained Codespace ledgers (writes only under /tmp). Strict-mode accounting is unchanged (655,394 raw → 6 schema excluded → 655,388 valid → 279 exact duplicates + 2 conflict rows + 655,107 canonical), but v2 history membership may shift the eligible/builder-exclusion split relative to the legacy 654,029 eligible — regenerated and verified by the run, not assumed. Record peak RSS as bounded-memory evidence.
+- Maintainer review of the research receipt and readiness statistics; then replacement PR from `arena/01a03e7a-slumdog`.
 
 **Milestone 6B (after review only):** transparent non-trained walk-forward baselines. Not started, not planned in detail here. Requires explicit approval; training stays frozen.
 
 ## Verification
 
-- pytest → 361 passed (340 prior + 21 research-mode tests)
+- pytest → 386 passed (340 prior + 21 research-mode + 25 incremental-builder tests)
+- pyflakes src/slumdog → clean
 - py_compile scripts/*.py src/slumdog/*.py tests/*.py → ok
 - git diff --check → ok
 - git status --short → clean after commit
-- Research-mode smoke test on synthetic ledger: census-before-collapse ordering verified, accounting balanced, deterministic gzip, price-independence passed, status RESEARCH_DATASET_READY_WITH_LIMITATIONS
-- Real-data census (historical, 2026-08-24): DATA_CONFLICTS, 1 conflicting key (hockey), 2 conflicting rows, 6 schema exclusions, 654,029 eligible before gate, 0 provenance present
+- Research-mode smoke test on synthetic ledger: census-before-normalization ordering verified, accounting balanced, deterministic gzip, price-independence passed, status RESEARCH_DATASET_READY_WITH_LIMITATIONS
+- v2 equivalence: bit-identical examples + matching counters to the strict builder on valid canonical settled events (single-sport, multi-sport, same-date isolation, input reordering, provenance duplicates); intentional v2-vs-legacy divergences (NO_CONTEST alias, SETTLED_CUP winner-0) covered as separate tests
+- Streaming: mid-stream gzip failure and mid-commit rename failure leave no final artifacts (verified by injected faults); sample bounded to first N emitted; no-preexist refusal; diagnostic receipt only on internal inconsistency
+- Real-data census (historical, 2026-08-24): DATA_CONFLICTS, 1 conflicting key (hockey), 2 conflicting rows, 6 schema exclusions, 654,029 eligible before gate (legacy membership; v2 may differ), 0 provenance present
 
 ## Links
 

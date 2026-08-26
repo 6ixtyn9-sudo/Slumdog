@@ -373,6 +373,7 @@ def audit_dataset(
     schema_excluded_rows = 0
     schema_reasons: Counter = Counter()
     schema_excluded_entries: list[dict] = []
+    malformed_empty_participant_rows = 0
 
     for rws in candidates_with_source:
         d = rws.raw_dict
@@ -382,6 +383,8 @@ def audit_dataset(
             if schema_exclusion_path:
                 schema_excluded_entries.append(_extract_schema_exclusion_diagnostic(d, rws, "SCHEMA_NOT_A_DICT", "Not a dict"))
             continue
+        if str(d.get("participant_1") or "") == "" and str(d.get("participant_2") or "") == "":
+            malformed_empty_participant_rows += 1
         try:
             ev = _validate_settled_dict(d)
             valid_with_source.append(ValidEventWithSource(event=ev, source_file=rws.source_file, source_location=rws.source_location))
@@ -418,9 +421,9 @@ def audit_dataset(
     if research_exclude_conflicts:
         return run_research_mode(
             valid_with_source=valid_with_source,
-            raw_dicts=[rws.raw_dict for rws in candidates_with_source],
             raw_input_rows=raw_input_rows,
             schema_excluded_rows=schema_excluded_rows,
+            malformed_empty_participant_rows=malformed_empty_participant_rows,
             schema_exclusion_reasons=schema_reasons,
             receipt_path=receipt_path,
             sample_path=sample_path,

@@ -1,13 +1,13 @@
 # Slumdog Living Handoff
 
-**Last updated:** 2026-08-26 (UTC) — Milestone 6A implemented, local verification complete (361 tests), real-data execution pending
-**Branch:** `arena/01a03dc4-slumdog`
-**HEAD SHA:** a7de11e Add Milestone 6A research-only dataset mode
-**Phase:** Milestones 0–5 COMPLETE; Milestone 6A (research dataset readiness) COMPLETE locally; price-free foundation in combined PR #8; training FROZEN; production NOT AUTHORIZED
+**Last updated:** 2026-08-26 (UTC) — Milestone 6A corrected v2 incremental implementation complete locally (386 tests), real-data execution pending in Codespace
+**Branch:** `arena/01a03e7a-slumdog` (corrected v2 implementation; base HEAD `bc5dd3c`)
+**Superseded branch:** `arena/01a03dc4-slumdog` (PR #8; untouched, stays open until the replacement PR lands, then closed not-merged)
+**Phase:** Milestones 0–5 COMPLETE; Milestone 6A (research dataset readiness) v2 corrected implementation COMPLETE locally; replacement PR after Codespace verification; training FROZEN; production NOT AUTHORIZED
 **Mission:** Slumdog identifies a small daily shortlist of participants that Forebet considers underdogs but whose available pre-event evidence indicates a credible outright-win upset.
-**PR:** #8 https://github.com/6ixtyn9-sudo/Slumdog/pull/8 — OPEN, "Historical integrity evidence and research dataset readiness" (integrity evidence docs + Milestone 6A), merge awaits maintainer authorization
+**PR:** #8 https://github.com/6ixtyn9-sudo/Slumdog/pull/8 — OPEN (superseded by the corrected v2 implementation; keep open until the replacement PR from `arena/01a03e7a-slumdog` is verified, then close not-merged and delete that branch)
 **Training:** FROZEN (`feature_contracts.py: MODEL_TRAINING_ALLOWED=False`)
-**Tests:** 361 passed (verified 2026-08-26)
+**Tests:** 386 passed (verified 2026-08-26)
 
 ## Product Invariants (from AGENTS.md)
 
@@ -162,23 +162,25 @@ Temporary artifacts (not committed):
 - **period_values** remains UNKNOWN and PROHIBITED per FEATURE_TIMING_CONTRACT.md
 - **Source-conflict visibility limitation:** SettledEvent contract does not represent source conflict; not in digest; builder assumes no conflict; receipt excluded_source_conflict=0 for current schemas; documented in _canonical_event_repr
 
-## Milestone 6A — Research Dataset Readiness (COMPLETE locally)
+## Milestone 6A — Research Dataset Readiness (v2 corrected implementation, COMPLETE locally)
 
-- **New module:** `src/slumdog/research_dataset.py` — research-only dataset construction + readiness measurement. Imports only stdlib + slumdog.dataset; never imported by production pipeline modules (asserted in tests).
-- **Explicit opt-in:** `python -m slumdog.dataset_audit --root data --research-exclude-conflicts --receipt ... --sample ... --examples /tmp/.../examples.jsonl.gz --sample-size 5`
-- **Guards:** `--examples` requires the research flag; `/tmp`-only paths; research mode cannot combine with `--conflict-report`. Strict and census modes unchanged.
-- **Data flow:** raw → schema validation → conflict census over ALL valid rows → exclude every conflicting composite key (never choose a variant) → collapse exact duplicates among the remainder → strict price-free builder → readiness receipt → deterministic artifacts.
-- **Receipt:** status `RESEARCH_DATASET_READY_WITH_LIMITATIONS` (exit 0 only when accounting balances, no excluded-key leakage, prohibited example keys absent); fields status/mode/research_only/training_allowed/production_allowed/contract versions/accounting(+balanced)/outcomes/readiness/limitations codes/price_independence/input_digest/examples_digest.
-- **Accounting (verified by tests):** raw = schema + valid; valid = dups + conflict_rows + canonical; canonical = eligible + builder_excluded; malformed_empty_participant_rows ⊆ schema_excluded.
-- **Limitation codes:** RESEARCH_ONLY, LEGACY_PROVENANCE_ABSENT, CONFLICTING_KEYS_EXCLUDED, SCHEMA_INVALID_ROWS_EXCLUDED, SOURCE_CONFLICT_VISIBILITY_UNAVAILABLE, PERIOD_VALUES_PROHIBITED.
-- **Tests:** `tests/test_dataset_research_mode.py` — 21 focused tests (strict-mode regression, explicit-flag requirement, census-before-collapse ordering, whole-key exclusion, no-variant-survival, accounting balance, provenance visibility, exact-key price scan, odds invariance of digests, reorder determinism, research-only sample, deterministic gzip, ledger immutability, pipeline-unchanged).
-- **Docs updated:** docs/PRICE_FREE_DATASET_CONTRACT.md (6A section), docs/HISTORICAL_INTEGRITY_AUDIT.md (section 5), docs/STATE.md, HANDOFF.md, docs/README.md.
+The original 6A implementation was found not to scale (it materialized all examples in memory and rebuilt full history per example). The corrected implementation below is bounded-memory and linear-time. Full contract details live in docs/PRICE_FREE_DATASET_CONTRACT.md (6A section) — not repeated here.
+
+- **Modules:** `src/slumdog/research_dataset.py` (orchestration, streaming emitter, bounded views, safe finalization) + new `src/slumdog/research_builder.py` (v2 eligibility, duplicate normalization, incremental builder core). Both research-only; neither is imported by production pipeline modules (pipeline, training, backfill, depth_sweep, research, forebet, cli).
+- **`build_price_free_examples` (strict) is unchanged** and serves as the byte-level reference for equivalence tests.
+- **v2 feature contract:** `price-free-v2-incremental-valid-history` on every example/sample/receipt; label contract unchanged. The only semantic change vs legacy is history membership: `research_history_eligible` (coherent disposition/winner, known sport, distinct participants) replaces the implicit legacy `HistoryIndex` filter — intentional divergences: unknown-sport rows, `NO_CONTEST` aliases, and incoherent rows (e.g. `SETTLED_CUP` winner-0) no longer feed history.
+- **Data flow:** raw → schema validation → lightweight census (`census_conflicts_only`, O(rows)) → whole-key conflict exclusion → content/provenance-separated duplicate normalization (content equality, then deterministic provenance representative; no input-order selection) → incremental builder (one sport, one event-date batch at a time, same-date isolation, bounded participant/H2H state) → bounded readiness aggregates → streaming artifacts.
+- **Bounded by construction:** examples stream to the temp gzip as produced (never held as a list); sample = first `sample_size` emitted; ready receipts carry `research_ready: true`; internal inconsistencies produce a diagnostic receipt only (`RESEARCH_DATASET_NOT_READY`, never coexisting with final artifacts).
+- **Safe finalization:** no pre-existing output is ever overwritten (no `--force`); temps validated then renamed examples → sample → receipt last; failures before the receipt rename remove this run's temps and finals.
+- **Guards unchanged:** explicit `--research-exclude-conflicts` opt-in; `/tmp`-only examples path; no combination with `--conflict-report`.
+- **Tests:** `tests/test_dataset_research_mode.py` (21: flags, accounting, determinism, ledger immutability, pipeline behavior — the brittle import-state assertion was removed per review) + new `tests/test_research_incremental_builder.py` (25: strict-equivalence incl. same-date isolation, reordering, multi-sport ordering, provenance duplicates; intentional divergences; exact-byte v2 input digest; emitter/sample/digest; mid-stream and mid-commit failure leaving no finals; no-preexist refusal; diagnostic receipt; one-shot iterator; empty ledger; eligibility matrix; representative tie-breaks).
+- **Docs updated:** docs/PRICE_FREE_DATASET_CONTRACT.md (6A section), docs/STATE.md, HANDOFF.md.
 
 ## Next Milestone
 
 **Milestone 6A execution + review (current):**
 
-1. Run research-only mode against retained Codespace ledgers:
+1. Run the v2 research-only mode against retained Codespace ledgers:
    ```
    rm -rf /tmp/slumdog_research && mkdir -p /tmp/slumdog_research
    python -m slumdog.dataset_audit --root data --research-exclude-conflicts \
@@ -187,16 +189,15 @@ Temporary artifacts (not committed):
      --examples /tmp/slumdog_research/examples.jsonl.gz \
      --sample-size 5
    ```
-   Expected exit 0 with status `RESEARCH_DATASET_READY_WITH_LIMITATIONS`. Expected accounting (must be regenerated, not assumed): raw 655,394 → schema 6 → valid 655,388 → 279 dups + 2 conflict rows + 655,107 canonical → 654,029 eligible + 1,078 builder exclusions.
-2. Maintainer review of receipt + readiness statistics.
-3. Only after review: Milestone 6B (transparent non-trained walk-forward baselines) — requires explicit approval; training stays frozen.
+   Expected exit 0 with status `RESEARCH_DATASET_READY_WITH_LIMITATIONS` and `research_ready: true`. Strict-mode accounting is unchanged (raw 655,394 → schema 6 → valid 655,388 → 279 dups + 2 conflict rows + 655,107 canonical); the v2 history-membership change may shift the eligible/builder-exclusion split relative to the legacy 654,029 — regenerated and verified by the run, not assumed. Capture peak RSS (e.g. `resource.getrusage` after the run, or wrap the command in `/usr/bin/time -v` where available) as bounded-memory evidence.
+2. Open the replacement PR from `arena/01a03e7a-slumdog` (this branch) only after the run passes; then close PR #8 not-merged (superseded) and delete `arena/01a03dc4-slumdog`.
+3. Maintainer review of receipt + readiness statistics. Only after review: Milestone 6B (transparent non-trained walk-forward baselines) — requires explicit approval; training stays frozen.
 
 ## PR State
 
-- **Branch:** `arena/01a03dc4-slumdog`
-- **Base:** `main` @ `efb4c90`
-- **PR:** #8 https://github.com/6ixtyn9-sudo/Slumdog/pull/8 — OPEN, combined "Historical integrity evidence and research dataset readiness"
-- **Contents:** integrity-evidence docs (hockey mechanism, UNKNOWN origin layers, corrected provenance policy, docs index) + Milestone 6A research mode
+- **Active branch:** `arena/01a03e7a-slumdog` — corrected v2 implementation (base `main` @ `efb4c90`, built on PR #8 commits via HEAD `bc5dd3c`). Replacement PR opens from here after local + Codespace verification.
+- **PR #8 (superseded):** https://github.com/6ixtyn9-sudo/Slumdog/pull/8 — OPEN on `arena/01a03dc4-slumdog`; untouched. Close not-merged and delete that branch only after the replacement PR is accepted.
+- **Original #8 contents:** integrity-evidence docs (hockey mechanism, UNKNOWN origin layers, corrected provenance policy, docs index) + original Milestone 6A research mode (replaced by the v2 incremental builder).
 - **Merge approves only:** historical-integrity documentation; research-only dataset construction, receipt measurement, descriptive statistics, research artifact generation
 - **Merge does NOT approve:** model training, threshold optimization, calibrated probabilities, ranking, candidate shortlists, shadow picks, production integration, daily selections, legacy Robber removal, provenance fabrication
 

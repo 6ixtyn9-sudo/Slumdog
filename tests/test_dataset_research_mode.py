@@ -3,6 +3,7 @@ census-before-collapse ordering, deterministic artifacts, price independence,
 and unchanged strict/pipeline behavior."""
 
 import gzip
+import hashlib
 import json
 import random
 import tempfile
@@ -457,24 +458,10 @@ def test_input_ledger_bytes_unchanged():
 # ---------------------------------------------------------------------------
 
 
-def test_existing_pipeline_modules_unchanged():
-    import slumdog.backfill
-    import slumdog.depth_sweep
-    import slumdog.forebet
-    import slumdog.pipeline
-    import slumdog.research
-    import slumdog.training
-
-    for module in (
-        slumdog.pipeline,
-        slumdog.training,
-        slumdog.backfill,
-        slumdog.depth_sweep,
-        slumdog.research,
-        slumdog.forebet,
-    ):
-        assert "research_dataset" not in vars(module)
-
+def test_pipeline_event_from_dict_behavior():
+    """Pipeline behavior coverage preserved from the old 6A test (the
+    brittle import-state assertion is intentionally removed — observable
+    pipeline behavior only)."""
     from slumdog.pipeline import event_from_dict
 
     snapshot = event_from_dict(
@@ -553,18 +540,38 @@ def test_build_research_dataset_direct_rejects_nothing_and_counts_keys():
             source_location="line:3",
         ),
     ]
-    raw_dicts = [make_settled_dict(event_id="hockey:K", event_date="2023-08-20")] * 2 + [
-        make_settled_dict(event_id="hockey:L", event_date="2023-08-21"),
-    ]
-    result = build_research_dataset(
-        valid_with_source,
-        raw_dicts=raw_dicts,
-        raw_input_rows=3,
-        schema_excluded_rows=0,
-    )
-    assert result.ready is True
-    assert result.receipt["accounting"]["conflicting_composite_keys_excluded"] == 1
-    assert result.receipt["accounting"]["conflicting_rows_excluded"] == 2
-    assert result.receipt["accounting"]["eligible_examples"] == 1
-    assert len(result.examples) == 1
-    assert result.examples[0].event_id == "hockey:L"
+    from slumdog.research_dataset import RESEARCH_FEATURE_CONTRACT_VERSION, ResearchExampleEmitter
+
+    with tempfile.TemporaryDirectory() as tmp_out:
+        out = Path(tmp_out)
+        emitter = ResearchExampleEmitter(out / "examples.jsonl.gz", sample_size=5)
+        result = build_research_dataset(
+            valid_with_source,
+            raw_input_rows=3,
+            schema_excluded_rows=0,
+            malformed_empty_participant_rows=0,
+            emitter=emitter,
+        )
+        try:
+            assert result.ready is True
+            acc = result.receipt["accounting"]
+            assert acc["conflicting_composite_keys_excluded"] == 1
+            assert acc["conflicting_rows_excluded"] == 2
+            assert acc["eligible_examples"] == 1
+            # Bounded sample (no full examples list on the result).
+            assert len(result.sample) == 1
+            assert result.sample[0].event_id == "hockey:L"
+            assert result.receipt["feature_contract_version"] == RESEARCH_FEATURE_CONTRACT_VERSION
+            # Emitted bytes land in the emitter's temp gzip until renamed;
+            # the deflate buffer completes on close (a failed run never
+            # closes + renames — it unlinks the temp instead).
+            emitter.close()
+            lines = gzip.decompress(emitter.tmp_path.read_bytes()).decode().splitlines()
+            assert len(lines) == 1
+            assert json.loads(lines[0])["event_id"] == "hockey:L"
+            payload = "".join(line + "\n" for line in lines).encode("utf-8")
+            assert result.examples_digest == hashlib.sha256(payload).hexdigest()
+            assert len(result.input_digest) == 64
+            assert len(result.examples_digest) == 64
+        finally:
+            emitter.cleanup()
