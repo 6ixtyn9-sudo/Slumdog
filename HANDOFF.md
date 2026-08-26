@@ -1,13 +1,13 @@
 # Slumdog Living Handoff
 
-**Last updated:** 2026-08-24 (UTC) — Milestones 0–4F COMPLETE, real-data census executed, PR #6 MERGE READY
-**Branch:** `arena/01a034f6-slumdog`
-**HEAD SHA:** 2c0e0cf Milestone 5 Investigation Script added
-**Phase:** Milestones 0–4F COMPLETE, price-free foundation MERGE READY, historical dataset generation FAIL-CLOSED, real-data readiness BLOCKED by historical conflicts, training FROZEN, production NOT AUTHORIZED
+**Last updated:** 2026-08-26 (UTC) — Milestone 6A implemented, local verification complete (361 tests), real-data execution pending
+**Branch:** `arena/01a03dc4-slumdog`
+**HEAD SHA:** a7de11e Add Milestone 6A research-only dataset mode
+**Phase:** Milestones 0–5 COMPLETE; Milestone 6A (research dataset readiness) COMPLETE locally; price-free foundation in combined PR #8; training FROZEN; production NOT AUTHORIZED
 **Mission:** Slumdog identifies a small daily shortlist of participants that Forebet considers underdogs but whose available pre-event evidence indicates a credible outright-win upset.
-**PR:** #6 https://github.com/6ixtyn9-sudo/Slumdog/pull/6 — OPEN, MERGE READY after documentation commit
+**PR:** #8 https://github.com/6ixtyn9-sudo/Slumdog/pull/8 — OPEN, "Historical integrity evidence and research dataset readiness" (integrity evidence docs + Milestone 6A), merge awaits maintainer authorization
 **Training:** FROZEN (`feature_contracts.py: MODEL_TRAINING_ALLOWED=False`)
-**Tests:** 337 passed (verified 2026-08-24)
+**Tests:** 361 passed (verified 2026-08-26)
 
 ## Product Invariants (from AGENTS.md)
 
@@ -155,34 +155,50 @@ Temporary artifacts (not committed):
 
 - **Training:** FROZEN (`MODEL_TRAINING_ALLOWED=False`)
 - **Production:** NOT AUTHORIZED
-- **Price-free foundation:** MERGE READY
-- **Historical dataset generation:** FAIL-CLOSED (correctly refuses corrupted ledger)
-- **Real-data readiness:** BLOCKED by 1 outcome conflict and 6 schema exclusions + absent provenance (0 present)
-- **No conflict may be guessed, deleted, or silently quarantined**
-- **period_values remains UNKNOWN and PROHIBITED** per FEATURE_TIMING_CONTRACT.md 10-point investigation
+- **Research dataset measurement (Milestone 6A): AUTHORIZED** — dataset construction, receipt measurement, non-model descriptive statistics, research-only artifacts. Legacy provenance-free history may be used for these measurements only.
+- **Not authorized (6A boundary):** fitted models, threshold optimization, calibrated probabilities, ranking, daily shortlist, shadow picks, production, wagering
+- **Historical dataset generation (strict):** FAIL-CLOSED (correctly refuses corrupted ledger)
+- **Real-data research readiness:** run research mode in Codespace to regenerate accounting; 1 hockey conflict key + 6 schema exclusions are excluded explicitly and counted
+- **period_values** remains UNKNOWN and PROHIBITED per FEATURE_TIMING_CONTRACT.md
 - **Source-conflict visibility limitation:** SettledEvent contract does not represent source conflict; not in digest; builder assumes no conflict; receipt excluded_source_conflict=0 for current schemas; documented in _canonical_event_repr
+
+## Milestone 6A — Research Dataset Readiness (COMPLETE locally)
+
+- **New module:** `src/slumdog/research_dataset.py` — research-only dataset construction + readiness measurement. Imports only stdlib + slumdog.dataset; never imported by production pipeline modules (asserted in tests).
+- **Explicit opt-in:** `python -m slumdog.dataset_audit --root data --research-exclude-conflicts --receipt ... --sample ... --examples /tmp/.../examples.jsonl.gz --sample-size 5`
+- **Guards:** `--examples` requires the research flag; `/tmp`-only paths; research mode cannot combine with `--conflict-report`. Strict and census modes unchanged.
+- **Data flow:** raw → schema validation → conflict census over ALL valid rows → exclude every conflicting composite key (never choose a variant) → collapse exact duplicates among the remainder → strict price-free builder → readiness receipt → deterministic artifacts.
+- **Receipt:** status `RESEARCH_DATASET_READY_WITH_LIMITATIONS` (exit 0 only when accounting balances, no excluded-key leakage, prohibited example keys absent); fields status/mode/research_only/training_allowed/production_allowed/contract versions/accounting(+balanced)/outcomes/readiness/limitations codes/price_independence/input_digest/examples_digest.
+- **Accounting (verified by tests):** raw = schema + valid; valid = dups + conflict_rows + canonical; canonical = eligible + builder_excluded; malformed_empty_participant_rows ⊆ schema_excluded.
+- **Limitation codes:** RESEARCH_ONLY, LEGACY_PROVENANCE_ABSENT, CONFLICTING_KEYS_EXCLUDED, SCHEMA_INVALID_ROWS_EXCLUDED, SOURCE_CONFLICT_VISIBILITY_UNAVAILABLE, PERIOD_VALUES_PROHIBITED.
+- **Tests:** `tests/test_dataset_research_mode.py` — 21 focused tests (strict-mode regression, explicit-flag requirement, census-before-collapse ordering, whole-key exclusion, no-variant-survival, accounting balance, provenance visibility, exact-key price scan, odds invariance of digests, reorder determinism, research-only sample, deterministic gzip, ledger immutability, pipeline-unchanged).
+- **Docs updated:** docs/PRICE_FREE_DATASET_CONTRACT.md (6A section), docs/HISTORICAL_INTEGRITY_AUDIT.md (section 5), docs/STATE.md, HANDOFF.md, docs/README.md.
 
 ## Next Milestone
 
-**Milestone 5: historical integrity investigation**
+**Milestone 6A execution + review (current):**
 
-- *Action:* Extended `dataset_audit.py` with `--schema-exclusion-report` and added `docs/HISTORICAL_INTEGRITY_AUDIT.md` to safely document exclusions and provenance limits.
-- Investigate historical reconstruction conflicts (hockey 278977)
-- Provenance/reconstruction investigation: why same composite key has two settled scores in same file, no raw_sha256/captured_at
-- Establish provenance for historical ledgers (currently 0 present for 654,029 eligible)
-- Do not query Forebet until provenance established
-- Do not choose more plausible score, average, or infer correctness
-- No deletion/dedup of ledger rows
-- After provenance established, transparent baselines with walk-forward validation
+1. Run research-only mode against retained Codespace ledgers:
+   ```
+   rm -rf /tmp/slumdog_research && mkdir -p /tmp/slumdog_research
+   python -m slumdog.dataset_audit --root data --research-exclude-conflicts \
+     --receipt /tmp/slumdog_research/receipt.json \
+     --sample /tmp/slumdog_research/examples_sample.json \
+     --examples /tmp/slumdog_research/examples.jsonl.gz \
+     --sample-size 5
+   ```
+   Expected exit 0 with status `RESEARCH_DATASET_READY_WITH_LIMITATIONS`. Expected accounting (must be regenerated, not assumed): raw 655,394 → schema 6 → valid 655,388 → 279 dups + 2 conflict rows + 655,107 canonical → 654,029 eligible + 1,078 builder exclusions.
+2. Maintainer review of receipt + readiness statistics.
+3. Only after review: Milestone 6B (transparent non-trained walk-forward baselines) — requires explicit approval; training stays frozen.
 
 ## PR State
 
-- **Branch:** `arena/01a034f6-slumdog`
-- **Base:** `main` @ `c48d5dc`
-- **PR:** #7 https://github.com/6ixtyn9-sudo/Slumdog/pull/7 — OPEN
-- **Final head:** 2c0e0cf
-- **Merge approves only:** governance documentation; price-free identity and label contracts; safe historical example contracts; strict adapters and receipts; conflict detection and census tooling; tests
-- **Merge does NOT approve:** excluding the hockey conflict; training a model; ranking candidates; thresholds; production integration; daily selections; legacy Robber removal
+- **Branch:** `arena/01a03dc4-slumdog`
+- **Base:** `main` @ `efb4c90`
+- **PR:** #8 https://github.com/6ixtyn9-sudo/Slumdog/pull/8 — OPEN, combined "Historical integrity evidence and research dataset readiness"
+- **Contents:** integrity-evidence docs (hockey mechanism, UNKNOWN origin layers, corrected provenance policy, docs index) + Milestone 6A research mode
+- **Merge approves only:** historical-integrity documentation; research-only dataset construction, receipt measurement, descriptive statistics, research artifact generation
+- **Merge does NOT approve:** model training, threshold optimization, calibrated probabilities, ranking, candidate shortlists, shadow picks, production integration, daily selections, legacy Robber removal, provenance fabrication
 
 ## Evidence Language Compliance
 

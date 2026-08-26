@@ -1,10 +1,10 @@
 # Slumdog State — Canonical Current Truth
 
-**Last verified:** 2026-08-24 (UTC) — Real-data census executed
-**Branch:** `arena/01a034f6-slumdog` (delivery), `main` is only permanent branch
+**Last verified:** 2026-08-26 (UTC) — Milestone 6A implemented, local verification complete, real-data execution pending
+**Branch:** `arena/01a03dc4-slumdog` (delivery), `main` is only permanent branch
 **Doc canonical path:** `docs/STATE.md`
-**PR:** #7 OPEN — 337 tests passed
-**HEAD:** 2c0e0cf
+**PR:** #8 OPEN — "Historical integrity evidence and research dataset readiness" — 361 tests passed
+**HEAD:** a7de11e
 
 ## Permanent Product Mission
 
@@ -18,7 +18,7 @@ Invariants:
 
 ## Milestones
 
-**Milestones 0–4F: COMPLETE**
+**Milestones 0–5: COMPLETE, Milestone 6A: COMPLETE (local verification; real-data execution pending)**
 
 - Milestone 0: Governance — STATE.md → docs/STATE.md, AGENTS.md, README, 5 corrections
 - Milestone 1: Audit — docs/MILESTONE1_AUDIT.md REFERENCE, 10 gaps, 8 refinements
@@ -27,6 +27,8 @@ Invariants:
 - Milestone 4: Architecture — src/slumdog/dataset.py price-free examples, receipt with raw/canonical accounting, deterministic dedup composite key (sport,event_id,event_date), 30 tests
 - Milestone 4E: Hardening — no unsafe defaults, no silent swallowing, strengthened digest, provenance validation, disposition vocabulary SETTLED/SETTLED_CUP/SETTLED_DRAW/VOID/NO_CONTEST, winner_index strict bool/float/string rejected, deterministic provenance merge
 - Milestone 4F: Conflict census — ValidEventWithSource audit-only source tracking (file, line/index), ConflictGroup compact report, classification DOMAIN/OUTCOME/PROBABILITY/DISPOSITION/PROVENANCE/MULTIPLE, census mode --conflict-report, status DATA_CONFLICTS, nonzero exit, receipt with conflicting_composite_keys, conflicting_rows, conflicts_by_sport, conflicts_by_field, conflicts_with_valid_raw_sha256, conflicts_without_valid_raw_sha256, examples not emitted, normal builder still fail-closed
+- Milestone 5: Historical integrity — schema-exclusion diagnostics; six malformed American-football rows classified (origin layer UNKNOWN); hockey:278977 double-write mechanism resolved as far as retained evidence allows (one six-row parse/write batch by the pre-hardening writer; recurring first-row-repeated-at-end pattern; origin layer UNKNOWN); provenance policy recorded as unapproved for training/production
+- Milestone 6A: Research dataset readiness — src/slumdog/research_dataset.py; explicit `--research-exclude-conflicts` opt-in; census-before-collapse ordering; whole-key conflict exclusion; deterministic `/tmp`-only examples; simplified receipt `RESEARCH_DATASET_READY_WITH_LIMITATIONS`; focused tests (21 new); strict mode unchanged
 
 ## Real-Data Census (Codespace retained ledgers)
 
@@ -83,42 +85,42 @@ Temporary artifacts (not committed):
 ## Current Status
 
 ```
-Milestones 0–4F: COMPLETE
-Price-free foundation: MERGE READY
-Historical dataset generation: FAIL-CLOSED
-Real-data readiness: BLOCKED by 1 outcome conflict and 6 schema exclusions, provenance absent
+Milestones 0–5: COMPLETE
+Milestone 6A (research dataset readiness): COMPLETE locally (361 tests), real-data execution pending in Codespace
+Price-free foundation: MERGE READY (PR #8, combined with integrity evidence)
+Historical dataset generation: FAIL-CLOSED (strict); RESEARCH mode opt-in with whole-key conflict exclusion
+Real-data readiness: 1 outcome conflict + 6 schema exclusions excluded explicitly in research mode; provenance absent (visible)
 Training: FROZEN
 Production: NOT AUTHORIZED
-Next: historical conflict provenance/reconstruction investigation
+Next: real-data research-mode execution in Codespace, then maintainer review
 ```
 
 ## Training / Production
 
 - **Training:** FROZEN (MODEL_TRAINING_ALLOWED=False)
 - **Production:** NOT AUTHORIZED
-- **Dataset builder:** fail-closed, correctly refuses corrupted ledger, does not guess, delete, or silently quarantine
+- **Research dataset measurement (Milestone 6A): AUTHORIZED** — dataset construction, receipt measurement, non-model descriptive statistics, research-only artifacts. Not authorized: fitted models, threshold optimization, calibrated probabilities, ranking, daily shortlist, shadow picks, production, wagering.
+- **Dataset builder strict mode:** fail-closed, correctly refuses corrupted ledger, does not guess, delete, or silently quarantine
 - **period_values:** UNKNOWN and PROHIBITED per FEATURE_TIMING_CONTRACT.md
 - **Source-conflict limitation:** SettledEvent does not represent source conflict; not in digest; builder assumes no conflict; documented
 
 ## Next Milestone
 
-**Milestone 5: historical integrity investigation**
+**Milestone 6A execution + review (current)**
 
-- *Action:* Extended `dataset_audit.py` with `--schema-exclusion-report` and added `docs/HISTORICAL_INTEGRITY_AUDIT.md` to safely document exclusions and provenance limits.
-- Investigate why hockey:278977 has two settled scores in same file
-- Establish provenance for historical ledgers (currently 0 present)
-- Do not query Forebet until provenance established
-- No plausibility choice, no averaging, no deletion/dedup
-- After provenance, transparent baselines with walk-forward validation
+- Run research-only mode against retained Codespace ledgers (writes only under /tmp); expected accounting: 655,394 raw → 6 schema excluded → 655,388 valid → 279 exact duplicates + 2 conflict rows + 655,107 canonical → 654,029 eligible + 1,078 builder exclusions — regenerated and verified by the run, not assumed.
+- Maintainer review of the research receipt and readiness statistics.
+
+**Milestone 6B (after review only):** transparent non-trained walk-forward baselines. Not started, not planned in detail here. Requires explicit approval; training stays frozen.
 
 ## Verification
 
-- pytest -q → 337 passed
-- pyflakes scripts src/slumdog tests → clean
+- pytest → 361 passed (340 prior + 21 research-mode tests)
 - py_compile scripts/*.py src/slumdog/*.py tests/*.py → ok
 - git diff --check → ok
 - git status --short → clean after commit
-- Real-data census executed deterministically, conflict report emitted, no examples emitted, all rows accounted
+- Research-mode smoke test on synthetic ledger: census-before-collapse ordering verified, accounting balanced, deterministic gzip, price-independence passed, status RESEARCH_DATASET_READY_WITH_LIMITATIONS
+- Real-data census (historical, 2026-08-24): DATA_CONFLICTS, 1 conflicting key (hockey), 2 conflicting rows, 6 schema exclusions, 654,029 eligible before gate, 0 provenance present
 
 ## Links
 
