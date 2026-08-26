@@ -17,6 +17,7 @@ Requirements (from task):
 Usage:
 python -m slumdog.dataset_audit --root data --receipt /tmp/slumdog_price_free/receipt.json --sample /tmp/slumdog_price_free/examples_sample.json --sample-size 5
 python -m slumdog.dataset_audit --root data --conflict-report /tmp/slumdog_price_free/conflicts.json --receipt /tmp/slumdog_price_free/receipt.json --sample /tmp/slumdog_price_free/examples_sample.json --sample-size 5
+python -m slumdog.dataset_audit --root data --research-exclude-conflicts --receipt /tmp/slumdog_research/receipt.json --sample /tmp/slumdog_research/examples_sample.json --examples /tmp/slumdog_research/examples.jsonl.gz --sample-size 5
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from .dataset import (
     build_dataset_with_raw_accounting,
     _validate_settled_dict,
 )
+from .research_dataset import run_research_mode
 
 
 @dataclass
@@ -160,12 +162,15 @@ def audit_dataset(
     sample_size: int = 5,
     conflict_report_path: Path | None = None,
     schema_exclusion_report_path: Path | None = None,
+    research_exclude_conflicts: bool = False,
+    examples_path: Path | None = None,
 ) -> int:
     root = Path(root)
     receipt_path = Path(receipt_path)
     sample_path = Path(sample_path)
     conflict_path = Path(conflict_report_path) if conflict_report_path is not None else None
     schema_exclusion_path = Path(schema_exclusion_report_path) if schema_exclusion_report_path is not None else None
+    examples = Path(examples_path) if examples_path is not None else None
 
     # Safety checks for /tmp
     if not str(receipt_path).startswith("/tmp"):
@@ -179,6 +184,16 @@ def audit_dataset(
         return 1
     if schema_exclusion_path is not None and not str(schema_exclusion_path).startswith("/tmp"):
         print(f"ERROR: schema_exclusion_report_path must be under /tmp for safety, got {schema_exclusion_path}", file=sys.stderr)
+        return 1
+    # Research mode guards: explicit opt-in only; examples never mix with census.
+    if examples is not None and not research_exclude_conflicts:
+        print("ERROR: --examples is only available with --research-exclude-conflicts", file=sys.stderr)
+        return 1
+    if examples is not None and not str(examples).startswith("/tmp"):
+        print(f"ERROR: examples_path must be under /tmp for safety, got {examples}", file=sys.stderr)
+        return 1
+    if research_exclude_conflicts and conflict_path is not None:
+        print("ERROR: --research-exclude-conflicts cannot be combined with --conflict-report", file=sys.stderr)
         return 1
 
     # Discover supported ledger files
@@ -396,6 +411,26 @@ def audit_dataset(
             if "UNKNOWN_SCHEMA" in k:
                 print(f"  {k}: {v}", file=sys.stderr)
         return 1
+
+    # Research-only mode (Milestone 6A): explicit opt-in; every conflicting
+    # composite key is excluded before any duplicate collapse or building.
+    # Strict and census modes below are unchanged.
+    if research_exclude_conflicts:
+        return run_research_mode(
+            valid_with_source=valid_with_source,
+            raw_dicts=[rws.raw_dict for rws in candidates_with_source],
+            raw_input_rows=raw_input_rows,
+            schema_excluded_rows=schema_excluded_rows,
+            schema_exclusion_reasons=schema_reasons,
+            receipt_path=receipt_path,
+            sample_path=sample_path,
+            examples_path=examples,
+            sample_size=sample_size,
+            files_found=files_found,
+            files_empty=files_empty,
+            files_unreadable=files_unreadable,
+            file_errors=all_file_errors,
+        )
 
     # If conflict-report mode, do census
     if conflict_path is not None:
@@ -636,6 +671,10 @@ def main():
     parser.add_argument("--sample-size", type=int, default=5, help="number of examples in sample")
     parser.add_argument("--conflict-report", default=None, help="conflict report output path (must be under /tmp) — enables census mode")
     parser.add_argument("--schema-exclusion-report", default=None, help="schema exclusion report path (must be under /tmp)")
+    parser.add_argument("--research-exclude-conflicts", action="store_true",
+                        help="research-only mode (Milestone 6A): exclude every conflicting composite key, emit research receipt and artifacts")
+    parser.add_argument("--examples", default=None,
+                        help="research examples output path (jsonl.gz, must be under /tmp, requires --research-exclude-conflicts)")
     args = parser.parse_args()
 
     code = audit_dataset(
@@ -645,6 +684,8 @@ def main():
         args.sample_size,
         Path(args.conflict_report) if args.conflict_report else None,
         Path(args.schema_exclusion_report) if args.schema_exclusion_report else None,
+        args.research_exclude_conflicts,
+        Path(args.examples) if args.examples else None,
     )
     sys.exit(code)
 
