@@ -67,3 +67,10 @@ construction remains fail-closed.
 
 ## 4. Next Steps
 Transparent walk-forward baselines remain deferred until historical integrity and provenance policy are reviewed by the maintainer. Whether provenance-free ledgers may be used for research (and under what exclusions) is a user-level policy decision that has not been made; no training or baseline evaluation may proceed without it.
+
+## 5. Research-Only Dataset Mode (Milestone 6A)
+
+- `dataset_audit.py` gains an explicit `--research-exclude-conflicts` opt-in (plus research-only `--examples`, `/tmp`-enforced). Strict mode is unchanged: conflicts still fail loudly with no examples.
+- Research-mode data flow: conflict census over all valid rows → exclude every conflicting composite key → collapse exact duplicates among the remainder → strict price-free builder → readiness receipt. A conflicting key never reaches a "pick one variant" path.
+- Research mode is authorized for dataset construction and descriptive measurement only. It is **not** authorized for training, calibrated probabilities, ranking, shortlists, shadow picks, production, or wagering. `MODEL_TRAINING_ALLOWED` remains `False`.
+- The policy decision on wider provenance-free use (walk-forward baselines, then models) remains open and belongs to the maintainer.

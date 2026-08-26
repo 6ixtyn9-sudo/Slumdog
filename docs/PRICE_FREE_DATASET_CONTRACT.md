@@ -1,9 +1,10 @@
-# Price-Free Dataset Contract — Milestone 4 COMPLETE (4E + Final Integrity Hardened)
+# Price-Free Dataset Contract — Milestone 4 COMPLETE (4E + Final Integrity Hardened), Milestone 6A Research Mode
 
-**Last verified:** 2026-08-24 (UTC)
-**Branch:** arena/01a033af-slumdog
-**Status:** CURRENT — Milestone 4 COMPLETE (4E + final integrity hardened, 323 tests), pending real-data receipt execution in Codespace with actual ledgers
+**Last verified:** 2026-08-26 (UTC)
+**Branch:** arena/01a03dc4-slumdog
+**Status:** CURRENT — Milestone 4 COMPLETE (4E + final integrity hardened), real-data census executed (DATA_CONFLICTS), Milestone 6A research-only mode added
 **Training:** FROZEN
+**Production:** NOT AUTHORIZED
 **Feature contract version:** `price-free-v1-minimal-2026-08-24`
 **Label contract version:** `price-free-v1`
 
@@ -188,5 +189,27 @@ python -m slumdog.dataset_audit --root data --receipt /tmp/slumdog_price_free/re
 - Prints summary counts, not all examples
 - If no supported ledger files → prints `NO_SUPPORTED_INPUT_FILES`, exits 0, full receipt with zeros
 - If files exist but cannot be parsed → fails non-zero
+
+## Milestone 6A — Research-Only Mode (Explicit Opt-In)
+
+**Authorized:** dataset construction, receipt measurement, non-model descriptive statistics, research-only artifact generation.
+**Not authorized:** fitted models, threshold optimization, calibrated probabilities, ranking, daily shortlist, shadow picks, production, wagering. `MODEL_TRAINING_ALLOWED` remains `False`.
+
+```bash
+python -m slumdog.dataset_audit --root data \
+  --research-exclude-conflicts \
+  --receipt /tmp/slumdog_research/receipt.json \
+  --sample /tmp/slumdog_research/examples_sample.json \
+  --examples /tmp/slumdog_research/examples.jsonl.gz \
+  --sample-size 5
+```
+
+- Strict mode unchanged: conflicts → `DATA_CONFLICTS`, exit 1, no examples. Census mode unchanged. Research mode is an explicit opt-in and cannot be combined with `--conflict-report`.
+- `--examples` requires the research flag and a `/tmp` path; deterministic gzip (mtime=0), one JSON object per line, sorted keys, stable composite-key order. Emitted only when the build is internally consistent.
+- Data flow order (tested): raw → schema validation → **conflict census over all valid rows** → exclude every conflicting composite key (never choose a variant) → collapse exact duplicates among the remainder → strict price-free builder → readiness report → artifacts.
+- Receipt: `RESEARCH_DATASET_READY_WITH_LIMITATIONS` (exit 0) only when accounting balances, all conflicting keys are fully excluded, no example comes from an excluded key, and prohibited example keys are absent. Fields: `status`, `mode`, `research_only`, `training_allowed`, `production_allowed`, contract versions, `accounting` (raw/schema/malformed-empty-participant/valid/duplicates/conflict-keys/conflict-rows/canonical/eligible/builder + `accounting_balanced`), `outcomes`, `readiness` (global + per-sport stats, feature missingness for the 17 allowed fields, history coverage derived from prior-only features, provenance present/missing/invalid), machine-readable `limitations` codes, `price_independence` (exact prohibited-key scan of emitted examples), `input_digest`, `examples_digest`.
+- Accounting equations (verified as `accounting_balanced`): `raw = schema_excluded + valid`; `valid = exact_duplicates_collapsed + conflicting_rows_excluded + canonical_non_conflicting`; `canonical_non_conflicting = eligible + builder_excluded`. `malformed_empty_participant_rows` is a subset of `schema_excluded_rows`.
+- Limitation codes: `RESEARCH_ONLY`, `LEGACY_PROVENANCE_ABSENT`, `CONFLICTING_KEYS_EXCLUDED`, `SCHEMA_INVALID_ROWS_EXCLUDED`, `SOURCE_CONFLICT_VISIBILITY_UNAVAILABLE`, `PERIOD_VALUES_PROHIBITED`.
+- Provenance-free legacy history is authorized **only** for research dataset measurement (Milestone 6A policy). It is not authorized for training, calibrated probabilities, ranking, wagering, or model approval. Every conflict, malformed row, and missing-provenance observation stays visible in the receipt.
 ```
 
