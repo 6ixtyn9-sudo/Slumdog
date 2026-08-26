@@ -86,14 +86,15 @@ Temporary artifacts (not committed):
 
 ```
 Milestones 0–5: COMPLETE
-Milestone 6A (research dataset readiness): COMPLETE locally (386 tests), real-data execution pending in Codespace
-Price-free foundation: corrected v2 incremental implementation on arena/01a03e7a-slumdog; replacement PR after local + Codespace verification (PR #8 stays open until then)
+Milestone 6A (research dataset readiness): COMPLETE — implementation + real-data verification (head 3898103, 396 tests)
+Price-free foundation: v2 implementation on arena/01a03e7a-slumdog; replacement PR open against main (supersedes PR #8, closed not-merged)
 Historical dataset generation: FAIL-CLOSED (strict); RESEARCH mode opt-in with whole-key conflict exclusion
 Research builder: v2 incremental — bounded-memory, linear-time, bit-identical to strict on valid canonical events
-Real-data readiness: 1 outcome conflict + 6 schema exclusions excluded explicitly in research mode; provenance absent (visible)
+Real-data verification: exit 0 in 192.61 s, peak RSS 2,284.2 MiB, 654,011 eligible, 1,096 builder exclusions (fully explicit reasons)
 Training: FROZEN
 Production: NOT AUTHORIZED
-Next: real-data research-mode execution in Codespace (v2), then maintainer review
+Milestone 6B: NOT STARTED / NOT AUTHORIZED
+Next: maintainer scope review of the replacement PR
 ```
 
 ## Training / Production
@@ -107,24 +108,28 @@ Next: real-data research-mode execution in Codespace (v2), then maintainer revie
 
 ## Next Milestone
 
-**Milestone 6A execution + review (current)**
+**Milestone 6A — COMPLETE (final real-data verification at head `3898103`)**
 
-- Run the corrected v2 research-only mode against retained Codespace ledgers (writes only under /tmp). Strict-mode accounting is unchanged (655,394 raw → 6 schema excluded → 655,388 valid → 279 exact duplicates + 2 conflict rows + 655,107 canonical), but v2 history membership may shift the eligible/builder-exclusion split relative to the legacy 654,029 eligible — regenerated and verified by the run, not assumed. Record peak RSS as bounded-memory evidence.
-- Maintainer review of the research receipt and readiness statistics; then replacement PR from `arena/01a03e7a-slumdog`.
+Final Codespace run passed every gate: audit exit 0, elapsed 192.61 s, peak RSS 2,284.2 MiB. Accounting: 655,394 raw → 6 schema excluded → 655,388 valid → 279 exact duplicates + 2 conflicting rows (1 key) + 655,107 canonical → **654,011 eligible + 1,096 builder exclusions** (equal-probability 180, out-of-range 7, self-pair 18, unexpected two-way draw 588, void 303). Outcomes: 191,238 underdog wins / 380,212 favorite wins / 82,561 draw negatives; positive rate 0.29240792586057424. Provenance 0/654,011/0; 17-field feature missingness; price independence, global + per-sport outcome accounting, and exclusion accounting all passed; input digest `30cb96ffd2ee8193ecf0786df1b6a45aca3a26a8c8457d85c0135c512685c1c7`; examples digest `ac84325d281c1808765fbcb18028efb193dbbdd2affc806ba459bb9d8a09a228` (deterministic; unchanged by the receipt-only correction); compressed artifact 45,439,763 bytes; source ledger hashes unchanged.
 
-**Milestone 6B (after review only):** transparent non-trained walk-forward baselines. Not started, not planned in detail here. Requires explicit approval; training stays frozen.
+**Next:** maintainer scope review of the replacement PR ("Add bounded research-only price-free dataset generation") → merge decision.
+
+**Milestone 6B (not started, not authorized):** transparent non-trained walk-forward baselines. Requires explicit approval; training stays frozen.
 
 ## Verification
 
-- pytest → 386 passed (340 prior + 21 research-mode + 25 incremental-builder tests)
+- pytest → 396 passed (340 prior + 21 research-mode + 35 incremental-builder tests)
 - pyflakes src/slumdog → clean
 - py_compile scripts/*.py src/slumdog/*.py tests/*.py → ok
 - git diff --check → ok
 - git status --short → clean after commit
 - Research-mode smoke test on synthetic ledger: census-before-normalization ordering verified, accounting balanced, deterministic gzip, price-independence passed, status RESEARCH_DATASET_READY_WITH_LIMITATIONS
-- v2 equivalence: bit-identical examples + matching counters to the strict builder on valid canonical settled events (single-sport, multi-sport, same-date isolation, input reordering, provenance duplicates); intentional v2-vs-legacy divergences (NO_CONTEST alias, SETTLED_CUP winner-0) covered as separate tests
+- v2 equivalence: bit-identical examples + matching counters to the strict builder on valid canonical settled events (single-sport, multi-sport, same-date isolation, input reordering, provenance duplicates); intentional v2-vs-legacy divergences (NO_CONTEST alias, SETTLED_CUP winner-0, self-pair) covered as separate tests
 - Streaming: mid-stream gzip failure and mid-commit rename failure leave no final artifacts (verified by injected faults); sample bounded to first N emitted; no-preexist refusal; diagnostic receipt only on internal inconsistency
-- Real-data census (historical, 2026-08-24): DATA_CONFLICTS, 1 conflicting key (hockey), 2 conflicting rows, 6 schema exclusions, 654,029 eligible before gate (legacy membership; v2 may differ), 0 provenance present
+- Outcome subtypes: global readiness == top-level outcomes; per-sport `eligible = positive + favorite_wins + draws`; draws never collapsed into favorite wins
+- Receipt auditability: `accounting.builder_exclusion_reasons` (all builder reason keys, sorted; sum == builder_excluded_rows; stable serialization for READY and NOT_READY receipts)
+- Real-data census (historical, 2026-08-24): DATA_CONFLICTS, 1 conflicting key (hockey), 2 conflicting rows, 6 schema exclusions, 654,029 eligible before gate (legacy membership; v2 differs by design), 0 provenance present
+- Real-data final run (2026-08-26, head 3898103): exit 0, 192.61 s, peak RSS 2,284.2 MiB, 654,011 eligible, 1,096 builder exclusions with fully explicit reasons, positive rate 0.29240792586057424, deterministic examples digest unchanged by receipt-only correction, ledger hashes unchanged
 
 ## Links
 
