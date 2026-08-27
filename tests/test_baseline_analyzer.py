@@ -532,6 +532,11 @@ def test_end_to_end_baseline_analysis_and_outputs():
         )
 
         assert payload["status"] == "SUCCESS"
+        assert payload["shortlist_policy_authorized"] is False
+        assert (
+            payload["shortlist_policy_authorized"]
+            == payload["config"]["shortlist_policy_authorized"]
+        )
         assert payload["pass1_integrity"]["row_count"] == 4
         assert payload["config_sha256"] == CANONICAL_CONFIG_SHA256
         assert payload["anti_tuning"]["recomputed_from_embedded_config_matches"] is True
@@ -543,6 +548,11 @@ def test_end_to_end_baseline_analysis_and_outputs():
         # Check JSON payload structure
         loaded_json = json.loads(out_json.read_text(encoding="utf-8"))
         assert loaded_json["status"] == "SUCCESS"
+        assert loaded_json["shortlist_policy_authorized"] is False
+        assert (
+            loaded_json["shortlist_policy_authorized"]
+            == loaded_json["config"]["shortlist_policy_authorized"]
+        )
         assert "periods" in loaded_json
         assert "P1" in loaded_json["periods"]
         assert "P2" in loaded_json["periods"]
@@ -560,13 +570,135 @@ def test_end_to_end_baseline_analysis_and_outputs():
         assert r0_global["selected_sport_days"] == 2  # quota-forced: selected both days
         assert r0_global["no_pick_sport_days"] == 0
 
-        # Check summary markdown content
+        # Verify JSON rates remain decimal rates (not percentages or strings)
+        assert isinstance(r0_global["top1_hit_rate_selected_days"], float)
+        assert 0.0 <= r0_global["top1_hit_rate_selected_days"] <= 1.0
+        assert isinstance(r0_global["top1_hit_rate_all_opportunity_days"], float)
+        assert 0.0 <= r0_global["top1_hit_rate_all_opportunity_days"] <= 1.0
+        assert isinstance(r0_global["top3_any_hit_rate_selected_days"], float)
+        assert isinstance(r0_global["top3_any_hit_rate_all_opportunity_days"], float)
+
+        # Check summary markdown content: hit-rate columns are percentage-formatted
         summary_text = out_summary.read_text(encoding="utf-8")
         assert "Milestone 6B — Non-Trained Baseline Analysis" in summary_text
         assert CANONICAL_CONFIG_SHA256 in summary_text
         assert "R0_FOREBET_ONLY_COMPARATOR" or "R0" in summary_text
         assert "R1_ALWAYS_RANK_COMPARATOR" or "R1" in summary_text
         assert "R2_CONSERVATIVE_FIXED_RULE" or "R2" in summary_text
+
+        # Verify hit-rate columns are formatted with '%' in the table
+        # 1 hit out of 2 selected days = 50.00%
+        assert "50.00%" in summary_text
+        assert "0.0%" in summary_text or "0.00%" in summary_text
+
+
+def test_top_level_shortlist_policy_authorization_matches_embedded_config():
+    """Verify shortlist_policy_authorized exists at top level, is false, and matches config."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        td = Path(tmp_dir)
+        rows = [make_example_row()]
+        ex_gz, rc_json = write_test_dataset(td, rows)
+        out_json = td / "baselines.json"
+        out_summary = td / "summary.md"
+
+        payload = run_baseline_analysis(
+            config_path=FROZEN_CONFIG_PATH,
+            examples_path=ex_gz,
+            receipt_path=rc_json,
+            out_json_path=out_json,
+            out_summary_path=out_summary,
+            verify_canonical_hash=True,
+        )
+
+        assert payload["shortlist_policy_authorized"] is False
+        assert (
+            payload["shortlist_policy_authorized"]
+            == payload["config"]["shortlist_policy_authorized"]
+        )
+
+        loaded = json.loads(out_json.read_text(encoding="utf-8"))
+        assert loaded["shortlist_policy_authorized"] is False
+        assert (
+            loaded["shortlist_policy_authorized"]
+            == loaded["config"]["shortlist_policy_authorized"]
+        )
+
+
+def test_analyzer_rejects_config_authorizing_shortlist_policy():
+    """Analyzer must reject any config attempting to authorize shortlist policy."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        td = Path(tmp_dir)
+        rows = [make_example_row()]
+        ex_gz, rc_json = write_test_dataset(td, rows)
+        out_json = td / "baselines.json"
+        out_summary = td / "summary.md"
+
+        # Create custom config with shortlist_policy_authorized = True
+        cfg_dict = json.loads(FROZEN_CONFIG_PATH.read_text(encoding="utf-8"))
+        cfg_dict["shortlist_policy_authorized"] = True
+        custom_cfg = td / "custom_config.json"
+        custom_cfg.write_text(json.dumps(cfg_dict))
+
+        # Rejection must happen even if hash verification is bypassed
+        with pytest.raises(BaselineIntegrityError, match="shortlist_policy_authorized must be false"):
+            run_baseline_analysis(
+                config_path=custom_cfg,
+                examples_path=ex_gz,
+                receipt_path=rc_json,
+                out_json_path=out_json,
+                out_summary_path=out_summary,
+                verify_canonical_hash=False,
+            )
+
+
+def test_markdown_hit_rates_are_percentages_and_json_rates_are_decimals():
+    """Verify Markdown comparator headers say Hit% and render actual percentages, while JSON remains decimal."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        td = Path(tmp_dir)
+        # Create dataset where day 1 has hit (label=1) and day 2 has miss (label=0)
+        rows = [
+            make_example_row(event_id="e1", event_date="2023-08-20", label=1),
+            make_example_row(event_id="e2", event_date="2023-08-21", label=0),
+        ]
+        ex_gz, rc_json = write_test_dataset(td, rows)
+        out_json = td / "baselines.json"
+        out_summary = td / "summary.md"
+
+        payload = run_baseline_analysis(
+            config_path=FROZEN_CONFIG_PATH,
+            examples_path=ex_gz,
+            receipt_path=rc_json,
+            out_json_path=out_json,
+            out_summary_path=out_summary,
+            verify_canonical_hash=True,
+        )
+
+        # 1. Check JSON rates remain decimal floats
+        p1_r0 = payload["periods"]["P1"]["rules"]["R0_FOREBET_ONLY_COMPARATOR"]["global"]
+        assert p1_r0["top1_hit_rate_selected_days"] == 0.5
+        assert p1_r0["top1_hit_rate_all_opportunity_days"] == 0.5
+        assert p1_r0["top3_any_hit_rate_selected_days"] == 0.5
+        assert p1_r0["top3_any_hit_rate_all_opportunity_days"] == 0.5
+        assert p1_r0["no_pick_rate"] == 0.0
+
+        # 2. Check Markdown renders formatted percentages
+        md_text = out_summary.read_text(encoding="utf-8")
+        table_lines = [line for line in md_text.splitlines() if line.startswith("| **R0**")]
+        assert len(table_lines) >= 1
+        p1_line = [l for l in table_lines if "P1" in l][0]
+        # Columns: Rule | Period | Opp Days | Sel Days | No-Pick % | Top-1 Sel Hit% | Top-1 Opp Hit% | Top-3 Sel Hit% | Top-3 Opp Hit% | Mean Top-1 | Top-1 Streak
+        cols = [c.strip() for c in p1_line.split("|")[1:-1]]
+        no_pick_col = cols[4]
+        t1_sel_col = cols[5]
+        t1_opp_col = cols[6]
+        t3_sel_col = cols[7]
+        t3_opp_col = cols[8]
+
+        assert no_pick_col == "0.0%"
+        assert t1_sel_col == "50.00%"
+        assert t1_opp_col == "50.00%"
+        assert t3_sel_col == "50.00%"
+        assert t3_opp_col == "50.00%"
 
 
 # ---------------------------------------------------------------------------

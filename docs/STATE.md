@@ -1,9 +1,9 @@
 # Slumdog State — Canonical Current Truth
 
-**Last verified:** 2026-08-27 (UTC) — Milestone 6B two-pass non-trained baseline analyzer implemented; canonical config SHA-256 verified; all 423 tests passed
+**Last verified:** 2026-08-27 (UTC) — Milestone 6B two-pass non-trained baseline analyzer implemented; canonical config SHA-256 verified; all 426 tests passed
 **Branch:** `arena/01a04198-slumdog` (delivery), `main` is only permanent branch
 **Doc canonical path:** `docs/STATE.md`
-**PR:** #10 OPEN — "Implement two-pass non-trained baseline analyzer (Milestone 6B)" — 423 tests passed
+**PR:** #10 OPEN — "Implement two-pass non-trained baseline analyzer (Milestone 6B)" — 426 tests passed
 **Base commit:** `09a56dcae4daff4014f79beca220cefb67edfe9d` (PR #9 merged)
 
 ## Permanent Product Mission
@@ -89,7 +89,7 @@ Temporary artifacts (not committed):
 Milestones 0–6A: COMPLETE AND MERGED (PR #9 merged at 09a56dc, 396 tests)
 Milestone 6B (baseline analyzer): IMPLEMENTED — two-pass non-trained baseline analyzer
 Canonical config SHA-256: 666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1 (VERIFIED)
-Tests: 423 passed (396 prior + 27 Milestone 6B tests)
+Tests: 426 passed (396 prior + 30 Milestone 6B tests)
 Training: FROZEN
 Production: NOT AUTHORIZED
 Shortlist policy: NOT AUTHORIZED
@@ -123,7 +123,7 @@ Next: Codespace execution of baseline analyzer on real 654,011 dataset
 
 ## Verification
 
-- pytest → 423 passed (396 prior + 27 baseline analyzer tests)
+- pytest → 426 passed (396 prior + 30 baseline analyzer tests)
 - pyflakes src/slumdog → clean
 - py_compile scripts/*.py src/slumdog/*.py tests/*.py → ok
 - git diff --check → ok

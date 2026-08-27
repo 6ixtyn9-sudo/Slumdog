@@ -1055,17 +1055,17 @@ def render_summary_markdown(
             p_id = p["id"]
             r_data = periods_report[p_id]["rules"][rule_name]["global"]
             t1_sel = (
-                f"{r_data['top1_hit_rate_selected_days']:.4f}"
+                f"{r_data['top1_hit_rate_selected_days'] * 100:.2f}%"
                 if r_data["top1_hit_rate_selected_days"] is not None
                 else "N/A"
             )
-            t1_opp = f"{r_data['top1_hit_rate_all_opportunity_days']:.4f}"
+            t1_opp = f"{r_data['top1_hit_rate_all_opportunity_days'] * 100:.2f}%"
             t3_sel = (
-                f"{r_data['top3_any_hit_rate_selected_days']:.4f}"
+                f"{r_data['top3_any_hit_rate_selected_days'] * 100:.2f}%"
                 if r_data["top3_any_hit_rate_selected_days"] is not None
                 else "N/A"
             )
-            t3_opp = f"{r_data['top3_any_hit_rate_all_opportunity_days']:.4f}"
+            t3_opp = f"{r_data['top3_any_hit_rate_all_opportunity_days'] * 100:.2f}%"
             np_rate = f"{r_data['no_pick_rate'] * 100:.1f}%"
             m_t1 = f"{r_data['mean_top1_selections_per_opportunity_day']:.2f}"
             streak = r_data["daily_top1_longest_losing_streak"]
@@ -1190,6 +1190,13 @@ def run_baseline_analysis(
 
     periods = config_dict["periods"]
 
+    # Validate shortlist_policy_authorized is explicitly False
+    shortlist_policy_authorized = config_dict.get("shortlist_policy_authorized")
+    if shortlist_policy_authorized is not False:
+        raise BaselineIntegrityError(
+            f"shortlist_policy_authorized must be false, got {shortlist_policy_authorized}"
+        )
+
     # 3. Pass 1: Streaming integrity checks
     pass1_res = run_pass1(ex_path, rc_path, periods)
 
@@ -1201,6 +1208,7 @@ def run_baseline_analysis(
         "analysis": config_dict.get("analysis", "research-baselines"),
         "version": config_dict.get("version", "3.0.0"),
         "status": "SUCCESS",
+        "shortlist_policy_authorized": shortlist_policy_authorized,
         "anti_tuning": {
             "config_sha256": config_sha256,
             "recomputed_from_embedded_config_matches": (
