@@ -177,11 +177,11 @@ The original 6A implementation was found not to scale (it materialized all examp
 - **Final real-data verification (Codespace, head `3898103`, 2026-08-26):** audit exit 0, `RESEARCH_DATASET_READY_WITH_LIMITATIONS`, elapsed 192.61 s, peak RSS 2,284.2 MiB. Accounting: raw 655,394 → schema exclusions 6 → valid 655,388 → exact duplicates 279 + conflicting rows 2 (1 conflicting key) + canonical 655,107 → eligible 654,011 + builder exclusions 1,096. Exclusion reasons (fully explicit): equal probability 180, out-of-range probability 7, self-pair 18, unexpected two-way draw 588, void 303. Outcomes: underdog wins 191,238 / favorite wins 380,212 / draw negatives 82,561; positive rate 0.29240792586057424. Provenance present/missing/invalid = 0 / 654,011 / 0; 17-field feature missingness; price independence passed; global + per-sport outcome accounting passed; exclusion accounting passed; input digest `30cb96ffd2ee8193ecf0786df1b6a45aca3a26a8c8457d85c0135c512685c1c7`; examples digest `ac84325d281c1808765fbcb18028efb193dbbdd2affc806ba459bb9d8a09a228` (deterministic, unchanged by the receipt-only correction); compressed artifact 45,439,763 bytes; source ledger hashes unchanged; training FROZEN; production NOT AUTHORIZED.
 - **Docs updated:** docs/PRICE_FREE_DATASET_CONTRACT.md (6A section), docs/STATE.md, HANDOFF.md.
 
-## Milestone 6B — Non-Trained Baseline Analyzer (IMPLEMENTED, 426 tests passed)
+## Milestone 6B — Non-Trained Baseline Analyzer (COMPLETE, 426 tests passed, Real Run Verified)
 
 - **Frozen Pre-declaration:** `config/research_baselines_v1.json` verified against canonical SHA-256 `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1`. Anti-tuning guarantees preserved: tuning periods empty, result-driven amendments prohibited, shortlist policy not authorized, training frozen.
 - **Two-Pass Architecture:**
-  - `src/slumdog/baseline_analyzer.py` and `src/slumdog/research_baselines.py`.
+  - `src/slumdog/baseline_analyzer.py` (implementation) and `src/slumdog/research_baselines.py` (re-export/CLI shim only, zero logic).
   - **Pass 1 (Streaming integrity):** SHA-256 over decompressed JSONL bytes verified against `receipt.examples_digest`; row count verified against `receipt.accounting.eligible_examples`; every row's `event_date` must fall within P1..P4 union; non-finite floats (NaN/Inf/-Inf) fail closed; prohibited keys fail closed; any failure exits nonzero immediately with no outputs written.
   - **Pass 2 (Streaming analysis & aggregation):**
     - Missingness reporting for every analyzed feature (global and per sport per period).
@@ -192,24 +192,48 @@ The original 6A implementation was found not to scale (it materialized all examp
     - Selected-day vs all-opportunity-day hit rates (no-pick days count as no hit in all-opportunity rates).
     - Losing streaks: candidate-level within sport (global = max across sports; sports never concatenated); daily top-1 within sport (global = max across sports; no-pick days neither increment nor reset streak).
   - **Safe Atomic Outputs:** `/tmp/slumdog_6b/baselines.json` (embedded config with recomputed hash match) and `/tmp/slumdog_6b/summary.md` (Markdown summary tables). Atomic write via `.tmp-{uuid}` rename.
+- **Reporting Corrections (Verified):**
+  1. Top-level `shortlist_policy_authorized: false` sourced and validated from embedded config.
+  2. Markdown comparator table renders actual formatted percentages (`46.63%`, `80.05%`, `9.8%`) while JSON metric values remain decimal rates.
+- **Real-Data Execution Evidence (Codespace retained dataset):**
+  - Rows analyzed: 654,011
+  - Input examples digest: `ac84325d281c1808765fbcb18028efb193dbbdd2affc806ba459bb9d8a09a228`
+  - Frozen config hash: `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1` (verified)
+  - Ledger hashes: unchanged
+  - Analyzer exit: 0
+  - Period totals balance:
+    - P1: 24,203
+    - P2: 230,129
+    - P3: 250,700
+    - P4: 148,979
+    - Total: 654,011
+- **Descriptive P4 Results (Non-Trained Baselines):**
+  - Comparators:
+    - R0 Forebet-only top-1: 46.63%
+    - R1 evidence-order top-1: 42.84% (R1 underperformed R0 in every period; evidence order alone does not improve on Forebet probability)
+    - R2 conservative selected-day top-1: 46.10% (with 9.8% no-pick days; does not beat R0)
+  - Strong descriptive signals:
+    - Underdog probability 0.40–0.50: precision 44.07%, lift 1.4802
+    - Probability gap 0–0.05: precision 39.44%, lift 1.3247
+    - Recent win-rate gap >= +0.30: precision 38.17%, lift 1.2822
+    - Scoring-rate gap >= +2: precision 42.22%, lift 1.4180
+    - Conceding-rate gap < -2: precision 40.81%, lift 1.3709
+    - H2H underdog win rate (0.50, 1): precision 38.09%, lift 1.2794
+  - Weak descriptive signals:
+    - Evidence quantity alone is weak: 3–4 components precision 33.32% (lift 1.1190); 5–6 components precision 28.91% (lift 0.9709)
+- **Policy Invariants:**
+  - Training: FROZEN (`MODEL_TRAINING_ALLOWED=False`).
+  - Production: NOT AUTHORIZED.
+  - Shortlist policy: NOT AUTHORIZED.
+  - Do not derive or implement a shortlist threshold from these results. Next milestone requires separate design discussion and explicit authorization.
 - **Tests:** `tests/test_baseline_analyzer.py` (30 focused tests). Total suite: 426 passed.
-- **Codespace execution command:**
-  ```bash
-  python -m slumdog.baseline_analyzer \
-    --config config/research_baselines_v1.json \
-    --examples /tmp/slumdog_research/examples.jsonl.gz \
-    --receipt /tmp/slumdog_research/receipt.json \
-    --baselines-json /tmp/slumdog_6b/baselines.json \
-    --summary-md /tmp/slumdog_6b/summary.md
-  ```
-
-## Next Milestone
-
-**Milestone 6B — Real-Data Codespace Execution:**
-
-Run `python -m slumdog.baseline_analyzer` against the Codespace retained 654,011 research dataset to generate the canonical Milestone 6B baseline results. Model training remains FROZEN; production remains NOT AUTHORIZED.
 
 ## PR State
+
+- **Active branch:** `arena/01a04198-slumdog` — head `8977cab` (and handoff commit).
+- **Pull Request:** #10 https://github.com/6ixtyn9-sudo/Slumdog/pull/10 — "Implement two-pass non-trained baseline analyzer (Milestone 6B)" (OPEN, mergeable, against `main`).
+- **Merge approves only:** two-pass non-trained baseline analyzer, anti-tuning verification, descriptive baseline evaluation reporting.
+- **Merge does NOT approve:** model training, threshold optimization, calibrated probabilities, ranking for production, shortlist policy activation, shadow picks, production integration, wagering.
 
 - **Active branch:** `arena/01a03e7a-slumdog` — v2 implementation, final tested head `3898103` (base `main` @ `efb4c90`, built on the preserved PR #8 commits via `bc5dd3c`). Replacement PR opened from here against `main`.
 - **Replacement PR:** #9 https://github.com/6ixtyn9-sudo/Slumdog/pull/9 — "Add bounded research-only price-free dataset generation" (OPEN, mergeable/CLEAN, against `main` from `arena/01a03e7a-slumdog`) — supersedes PR #8.
