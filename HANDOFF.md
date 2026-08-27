@@ -1,13 +1,12 @@
 # Slumdog Living Handoff
 
-**Last updated:** 2026-08-26 (UTC) — Milestone 6A v2: ALL GATES PASSED (local + real-data verification at head `3898103`); replacement PR opened against `main`
-**Branch:** `arena/01a03e7a-slumdog` (v2 implementation; final tested head `3898103`)
-**Superseded branch:** `arena/01a03dc4-slumdog` (PR #8; untouched; closed not-merged as superseded once the replacement PR is verified — branch NOT deleted from this Arena session)
-**Phase:** Milestones 0–5 COMPLETE; Milestone 6A COMPLETE (implementation + real-data verification); awaiting maintainer review of the replacement PR; training FROZEN; production NOT AUTHORIZED; Milestone 6B NOT STARTED / NOT AUTHORIZED
+**Last updated:** 2026-08-27 (UTC) — Milestone 6B: IMPLEMENTED and locally verified (423 tests passed); canonical config SHA-256 verified; real-data Codespace run pending
+**Branch:** `arena/01a04198-slumdog`
+**Base commit:** `09a56dcae4daff4014f79beca220cefb67edfe9d` (`main` after PR #9 merge)
+**Phase:** Milestones 0–6A COMPLETE AND MERGED; Milestone 6B IMPLEMENTED; training FROZEN; production NOT AUTHORIZED; shortlist policy NOT AUTHORIZED
 **Mission:** Slumdog identifies a small daily shortlist of participants that Forebet considers underdogs but whose available pre-event evidence indicates a credible outright-win upset.
-**PR:** #9 https://github.com/6ixtyn9-sudo/Slumdog/pull/9 — "Add bounded research-only price-free dataset generation" (OPEN, mergeable, against `main`); supersedes #8 (https://github.com/6ixtyn9-sudo/Slumdog/pull/8), closed not-merged as superseded
 **Training:** FROZEN (`feature_contracts.py: MODEL_TRAINING_ALLOWED=False`)
-**Tests:** 396 passed (verified 2026-08-26)
+**Tests:** 423 passed (verified 2026-08-27)
 
 ## Product Invariants (from AGENTS.md)
 
@@ -177,13 +176,37 @@ The original 6A implementation was found not to scale (it materialized all examp
 - **Final real-data verification (Codespace, head `3898103`, 2026-08-26):** audit exit 0, `RESEARCH_DATASET_READY_WITH_LIMITATIONS`, elapsed 192.61 s, peak RSS 2,284.2 MiB. Accounting: raw 655,394 → schema exclusions 6 → valid 655,388 → exact duplicates 279 + conflicting rows 2 (1 conflicting key) + canonical 655,107 → eligible 654,011 + builder exclusions 1,096. Exclusion reasons (fully explicit): equal probability 180, out-of-range probability 7, self-pair 18, unexpected two-way draw 588, void 303. Outcomes: underdog wins 191,238 / favorite wins 380,212 / draw negatives 82,561; positive rate 0.29240792586057424. Provenance present/missing/invalid = 0 / 654,011 / 0; 17-field feature missingness; price independence passed; global + per-sport outcome accounting passed; exclusion accounting passed; input digest `30cb96ffd2ee8193ecf0786df1b6a45aca3a26a8c8457d85c0135c512685c1c7`; examples digest `ac84325d281c1808765fbcb18028efb193dbbdd2affc806ba459bb9d8a09a228` (deterministic, unchanged by the receipt-only correction); compressed artifact 45,439,763 bytes; source ledger hashes unchanged; training FROZEN; production NOT AUTHORIZED.
 - **Docs updated:** docs/PRICE_FREE_DATASET_CONTRACT.md (6A section), docs/STATE.md, HANDOFF.md.
 
+## Milestone 6B — Non-Trained Baseline Analyzer (IMPLEMENTED, 423 tests passed)
+
+- **Frozen Pre-declaration:** `config/research_baselines_v1.json` verified against canonical SHA-256 `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1`. Anti-tuning guarantees preserved: tuning periods empty, result-driven amendments prohibited, shortlist policy not authorized, training frozen.
+- **Two-Pass Architecture:**
+  - `src/slumdog/baseline_analyzer.py` and `src/slumdog/research_baselines.py`.
+  - **Pass 1 (Streaming integrity):** SHA-256 over decompressed JSONL bytes verified against `receipt.examples_digest`; row count verified against `receipt.accounting.eligible_examples`; every row's `event_date` must fall within P1..P4 union; non-finite floats (NaN/Inf/-Inf) fail closed; prohibited keys fail closed; any failure exits nonzero immediately with no outputs written.
+  - **Pass 2 (Streaming analysis & aggregation):**
+    - Missingness reporting for every analyzed feature (global and per sport per period).
+    - 7 pre-declared signal bucket tables with exact precedence rules: `conceding_rate_gap`, `evidence_availability`, `h2h_underdog_win_rate`, `probability_gap`, `recent_win_rate_gap`, `scoring_rate_gap`, `underdog_probability`.
+    - Empty buckets reported as empty, never omitted.
+    - Insufficient threshold = 30 examples.
+    - Rule comparators: R0 (Forebet-only, quota-forced), R1 (Always-rank, quota-forced), R2 (Conservative fixed rule, eligibility-gated, non-quota-forced).
+    - Selected-day vs all-opportunity-day hit rates (no-pick days count as no hit in all-opportunity rates).
+    - Losing streaks: candidate-level within sport (global = max across sports; sports never concatenated); daily top-1 within sport (global = max across sports; no-pick days neither increment nor reset streak).
+  - **Safe Atomic Outputs:** `/tmp/slumdog_6b/baselines.json` (embedded config with recomputed hash match) and `/tmp/slumdog_6b/summary.md` (Markdown summary tables). Atomic write via `.tmp-{uuid}` rename.
+- **Tests:** `tests/test_baseline_analyzer.py` (27 focused tests). Total suite: 423 passed.
+- **Codespace execution command:**
+  ```bash
+  python -m slumdog.baseline_analyzer \
+    --config config/research_baselines_v1.json \
+    --examples /tmp/slumdog_research/examples.jsonl.gz \
+    --receipt /tmp/slumdog_research/receipt.json \
+    --baselines-json /tmp/slumdog_6b/baselines.json \
+    --summary-md /tmp/slumdog_6b/summary.md
+  ```
+
 ## Next Milestone
 
-**Milestone 6A — COMPLETE (implementation + real-data verification at head `3898103`):**
+**Milestone 6B — Real-Data Codespace Execution:**
 
-Final real-data run passed every gate: audit exit 0, elapsed 192.61 s, peak RSS 2,284.2 MiB; full accounting and exclusion-reason breakdown in the 6A section above; deterministic examples digest `ac84325d…a228` unchanged by the receipt-only correction; source ledger hashes unchanged. Full receipt lives in `/tmp/slumdog_research` (Codespace, outside Git — discardable once the PR evidence is finalized).
-
-**Next (after replacement-PR verification):** maintainer scope review of the replacement PR → merge decision. Milestone 6B (transparent non-trained walk-forward baselines) is NOT STARTED and NOT AUTHORIZED — requires explicit approval; training stays frozen.
+Run `python -m slumdog.baseline_analyzer` against the Codespace retained 654,011 research dataset to generate the canonical Milestone 6B baseline results. Model training remains FROZEN; production remains NOT AUTHORIZED.
 
 ## PR State
 

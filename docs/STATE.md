@@ -1,10 +1,9 @@
 # Slumdog State — Canonical Current Truth
 
-**Last verified:** 2026-08-26 (UTC) — Milestone 6A implemented, local verification complete, real-data execution pending
-**Branch:** `arena/01a03dc4-slumdog` (delivery), `main` is only permanent branch
+**Last verified:** 2026-08-27 (UTC) — Milestone 6B two-pass non-trained baseline analyzer implemented; canonical config SHA-256 verified; all 423 tests passed
+**Branch:** `arena/01a04198-slumdog` (delivery), `main` is only permanent branch
 **Doc canonical path:** `docs/STATE.md`
-**PR:** #8 OPEN — "Historical integrity evidence and research dataset readiness" — 361 tests passed
-**HEAD:** a7de11e
+**Base commit:** `09a56dcae4daff4014f79beca220cefb67edfe9d` (PR #9 merged)
 
 ## Permanent Product Mission
 
@@ -18,7 +17,7 @@ Invariants:
 
 ## Milestones
 
-**Milestones 0–5: COMPLETE, Milestone 6A: COMPLETE (local verification; real-data execution pending)**
+**Milestones 0–6A: COMPLETE AND MERGED, Milestone 6B: IMPLEMENTED (local verification complete; real-data execution pending in Codespace)**
 
 - Milestone 0: Governance — STATE.md → docs/STATE.md, AGENTS.md, README, 5 corrections
 - Milestone 1: Audit — docs/MILESTONE1_AUDIT.md REFERENCE, 10 gaps, 8 refinements
@@ -28,7 +27,8 @@ Invariants:
 - Milestone 4E: Hardening — no unsafe defaults, no silent swallowing, strengthened digest, provenance validation, disposition vocabulary SETTLED/SETTLED_CUP/SETTLED_DRAW/VOID/NO_CONTEST, winner_index strict bool/float/string rejected, deterministic provenance merge
 - Milestone 4F: Conflict census — ValidEventWithSource audit-only source tracking (file, line/index), ConflictGroup compact report, classification DOMAIN/OUTCOME/PROBABILITY/DISPOSITION/PROVENANCE/MULTIPLE, census mode --conflict-report, status DATA_CONFLICTS, nonzero exit, receipt with conflicting_composite_keys, conflicting_rows, conflicts_by_sport, conflicts_by_field, conflicts_with_valid_raw_sha256, conflicts_without_valid_raw_sha256, examples not emitted, normal builder still fail-closed
 - Milestone 5: Historical integrity — schema-exclusion diagnostics; six malformed American-football rows classified (origin layer UNKNOWN); hockey:278977 double-write mechanism resolved as far as retained evidence allows (one six-row parse/write batch by the pre-hardening writer; recurring first-row-repeated-at-end pattern; origin layer UNKNOWN); provenance policy recorded as unapproved for training/production
-- Milestone 6A: Research dataset readiness — src/slumdog/research_dataset.py; explicit `--research-exclude-conflicts` opt-in; census-before-collapse ordering; whole-key conflict exclusion; deterministic `/tmp`-only examples; simplified receipt `RESEARCH_DATASET_READY_WITH_LIMITATIONS`; focused tests (21 new); strict mode unchanged
+- Milestone 6A: Research dataset readiness — bounded-memory v2 incremental builder (`src/slumdog/research_dataset.py`, `src/slumdog/research_builder.py`); explicit `--research-exclude-conflicts` opt-in; census-before-collapse ordering; whole-key conflict exclusion; deterministic `/tmp`-only examples; simplified receipt `RESEARCH_DATASET_READY_WITH_LIMITATIONS`; COMPLETE AND MERGED in PR #9
+- Milestone 6B: Transparent non-trained walk-forward baselines — `src/slumdog/baseline_analyzer.py` and `src/slumdog/research_baselines.py`; two-pass architecture; frozen configuration verification against canonical SHA-256 `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1`; Pass 1 streaming integrity checks; Pass 2 missingness, 7 pre-declared signals with precedence, rules R0/R1/R2, streaks, quota vs non-quota selections, hit rates; atomic `/tmp` output writing; 27 focused tests; training remains frozen; production unauthorized
 
 ## Real-Data Census (Codespace retained ledgers)
 
@@ -85,51 +85,47 @@ Temporary artifacts (not committed):
 ## Current Status
 
 ```
-Milestones 0–5: COMPLETE
-Milestone 6A (research dataset readiness): COMPLETE — implementation + real-data verification (head 3898103, 396 tests)
-Price-free foundation: v2 implementation on arena/01a03e7a-slumdog; replacement PR open against main (supersedes PR #8, closed not-merged)
-Historical dataset generation: FAIL-CLOSED (strict); RESEARCH mode opt-in with whole-key conflict exclusion
-Research builder: v2 incremental — bounded-memory, linear-time, bit-identical to strict on valid canonical events
-Real-data verification: exit 0 in 192.61 s, peak RSS 2,284.2 MiB, 654,011 eligible, 1,096 builder exclusions (fully explicit reasons)
+Milestones 0–6A: COMPLETE AND MERGED (PR #9 merged at 09a56dc, 396 tests)
+Milestone 6B (baseline analyzer): IMPLEMENTED — two-pass non-trained baseline analyzer
+Canonical config SHA-256: 666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1 (VERIFIED)
+Tests: 423 passed (396 prior + 27 Milestone 6B tests)
 Training: FROZEN
 Production: NOT AUTHORIZED
-Milestone 6B: NOT STARTED / NOT AUTHORIZED
-Next: maintainer scope review of the replacement PR
+Shortlist policy: NOT AUTHORIZED
+Next: Codespace execution of baseline analyzer on real 654,011 dataset
 ```
 
 ## Training / Production
 
 - **Training:** FROZEN (MODEL_TRAINING_ALLOWED=False)
 - **Production:** NOT AUTHORIZED
-- **Research dataset measurement (Milestone 6A): AUTHORIZED** — dataset construction, receipt measurement, non-model descriptive statistics, research-only artifacts. Not authorized: fitted models, threshold optimization, calibrated probabilities, ranking, daily shortlist, shadow picks, production, wagering.
+- **Research dataset measurement (Milestone 6A): COMPLETE**
+- **Research baseline evaluation (Milestone 6B): IMPLEMENTED** — non-model descriptive statistics, non-trained comparator rules (R0, R1, R2), pre-declared signal buckets. Not authorized: fitted models, threshold optimization, calibrated probabilities, ranking, daily shortlist, shadow picks, production, wagering.
 - **Dataset builder strict mode:** fail-closed, correctly refuses corrupted ledger, does not guess, delete, or silently quarantine
 - **period_values:** UNKNOWN and PROHIBITED per FEATURE_TIMING_CONTRACT.md
 - **Source-conflict limitation:** SettledEvent does not represent source conflict; not in digest; builder assumes no conflict; documented
 
 ## Next Milestone
 
-**Milestone 6A — COMPLETE (final real-data verification at head `3898103`)**
+**Milestone 6B — IMPLEMENTED (local verification complete with 27 focused tests; real-data Codespace run pending)**
 
-Final Codespace run passed every gate: audit exit 0, elapsed 192.61 s, peak RSS 2,284.2 MiB. Accounting: 655,394 raw → 6 schema excluded → 655,388 valid → 279 exact duplicates + 2 conflicting rows (1 key) + 655,107 canonical → **654,011 eligible + 1,096 builder exclusions** (equal-probability 180, out-of-range 7, self-pair 18, unexpected two-way draw 588, void 303). Outcomes: 191,238 underdog wins / 380,212 favorite wins / 82,561 draw negatives; positive rate 0.29240792586057424. Provenance 0/654,011/0; 17-field feature missingness; price independence, global + per-sport outcome accounting, and exclusion accounting all passed; input digest `30cb96ffd2ee8193ecf0786df1b6a45aca3a26a8c8457d85c0135c512685c1c7`; examples digest `ac84325d281c1808765fbcb18028efb193dbbdd2affc806ba459bb9d8a09a228` (deterministic; unchanged by the receipt-only correction); compressed artifact 45,439,763 bytes; source ledger hashes unchanged.
-
-**Next:** maintainer scope review of the replacement PR ("Add bounded research-only price-free dataset generation") → merge decision.
-
-**Milestone 6B (not started, not authorized):** transparent non-trained walk-forward baselines. Requires explicit approval; training stays frozen.
+- Frozen configuration verified: `config/research_baselines_v1.json` with canonical SHA-256 `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1`
+- Pass 1: streaming integrity checks over decompressed JSONL bytes, row count matching `receipt.accounting.eligible_examples`, date coverage within P1..P4 union, fail-closed on non-finite values and prohibited keys
+- Pass 2: streaming metrics computation:
+  - Missingness reporting for every analyzed feature (global & per sport per period)
+  - 7 pre-declared signal bucket tables with precedence rules (conceding_rate_gap, evidence_availability, h2h_underdog_win_rate, probability_gap, recent_win_rate_gap, scoring_rate_gap, underdog_probability)
+  - Rule ranking and evaluation for R0 (Forebet-only, quota-forced), R1 (Always-rank, quota-forced), R2 (Conservative fixed rule, eligibility-gated, non-quota-forced)
+  - Selected-day vs all-opportunity-day hit rates (no-pick days count as no hit on all-opportunity days)
+  - Candidate-level and daily top-1 losing streaks (per sport; global is max; no-pick days neither increment nor reset streak)
+- Safe atomic output finalization under `/tmp` (`baselines.json` with embedded config and recomputation match, `summary.md` human-readable summary)
+- Real-data 6B execution pending Codespace run against the 654,011 research dataset.
 
 ## Verification
 
-- pytest → 396 passed (340 prior + 21 research-mode + 35 incremental-builder tests)
+- pytest → 423 passed (396 prior + 27 baseline analyzer tests)
 - pyflakes src/slumdog → clean
 - py_compile scripts/*.py src/slumdog/*.py tests/*.py → ok
 - git diff --check → ok
-- git status --short → clean after commit
-- Research-mode smoke test on synthetic ledger: census-before-normalization ordering verified, accounting balanced, deterministic gzip, price-independence passed, status RESEARCH_DATASET_READY_WITH_LIMITATIONS
-- v2 equivalence: bit-identical examples + matching counters to the strict builder on valid canonical settled events (single-sport, multi-sport, same-date isolation, input reordering, provenance duplicates); intentional v2-vs-legacy divergences (NO_CONTEST alias, SETTLED_CUP winner-0, self-pair) covered as separate tests
-- Streaming: mid-stream gzip failure and mid-commit rename failure leave no final artifacts (verified by injected faults); sample bounded to first N emitted; no-preexist refusal; diagnostic receipt only on internal inconsistency
-- Outcome subtypes: global readiness == top-level outcomes; per-sport `eligible = positive + favorite_wins + draws`; draws never collapsed into favorite wins
-- Receipt auditability: `accounting.builder_exclusion_reasons` (all builder reason keys, sorted; sum == builder_excluded_rows; stable serialization for READY and NOT_READY receipts)
-- Real-data census (historical, 2026-08-24): DATA_CONFLICTS, 1 conflicting key (hockey), 2 conflicting rows, 6 schema exclusions, 654,029 eligible before gate (legacy membership; v2 differs by design), 0 provenance present
-- Real-data final run (2026-08-26, head 3898103): exit 0, 192.61 s, peak RSS 2,284.2 MiB, 654,011 eligible, 1,096 builder exclusions with fully explicit reasons, positive rate 0.29240792586057424, deterministic examples digest unchanged by receipt-only correction, ledger hashes unchanged
 
 ## Links
 
