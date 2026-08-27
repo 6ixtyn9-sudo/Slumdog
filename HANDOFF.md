@@ -1,13 +1,13 @@
 # Slumdog Living Handoff
 
-**Last updated:** 2026-08-24 (UTC) — Milestones 0–4F COMPLETE, real-data census executed, PR #6 MERGE READY
-**Branch:** `arena/01a034f6-slumdog`
-**HEAD SHA:** 2c0e0cf Milestone 5 Investigation Script added
-**Phase:** Milestones 0–4F COMPLETE, price-free foundation MERGE READY, historical dataset generation FAIL-CLOSED, real-data readiness BLOCKED by historical conflicts, training FROZEN, production NOT AUTHORIZED
+**Last updated:** 2026-08-26 (UTC) — Milestone 6A v2: ALL GATES PASSED (local + real-data verification at head `3898103`); replacement PR opened against `main`
+**Branch:** `arena/01a03e7a-slumdog` (v2 implementation; final tested head `3898103`)
+**Superseded branch:** `arena/01a03dc4-slumdog` (PR #8; untouched; closed not-merged as superseded once the replacement PR is verified — branch NOT deleted from this Arena session)
+**Phase:** Milestones 0–5 COMPLETE; Milestone 6A COMPLETE (implementation + real-data verification); awaiting maintainer review of the replacement PR; training FROZEN; production NOT AUTHORIZED; Milestone 6B NOT STARTED / NOT AUTHORIZED
 **Mission:** Slumdog identifies a small daily shortlist of participants that Forebet considers underdogs but whose available pre-event evidence indicates a credible outright-win upset.
-**PR:** #6 https://github.com/6ixtyn9-sudo/Slumdog/pull/6 — OPEN, MERGE READY after documentation commit
+**PR:** #9 https://github.com/6ixtyn9-sudo/Slumdog/pull/9 — "Add bounded research-only price-free dataset generation" (OPEN, mergeable, against `main`); supersedes #8 (https://github.com/6ixtyn9-sudo/Slumdog/pull/8), closed not-merged as superseded
 **Training:** FROZEN (`feature_contracts.py: MODEL_TRAINING_ALLOWED=False`)
-**Tests:** 337 passed (verified 2026-08-24)
+**Tests:** 396 passed (verified 2026-08-26)
 
 ## Product Invariants (from AGENTS.md)
 
@@ -155,39 +155,50 @@ Temporary artifacts (not committed):
 
 - **Training:** FROZEN (`MODEL_TRAINING_ALLOWED=False`)
 - **Production:** NOT AUTHORIZED
-- **Price-free foundation:** MERGE READY
-- **Historical dataset generation:** FAIL-CLOSED (correctly refuses corrupted ledger)
-- **Real-data readiness:** BLOCKED by 1 outcome conflict and 6 schema exclusions + absent provenance (0 present)
-- **No conflict may be guessed, deleted, or silently quarantined**
-- **period_values remains UNKNOWN and PROHIBITED** per FEATURE_TIMING_CONTRACT.md 10-point investigation
+- **Research dataset measurement (Milestone 6A): AUTHORIZED** — dataset construction, receipt measurement, non-model descriptive statistics, research-only artifacts. Legacy provenance-free history may be used for these measurements only.
+- **Not authorized (6A boundary):** fitted models, threshold optimization, calibrated probabilities, ranking, daily shortlist, shadow picks, production, wagering
+- **Historical dataset generation (strict):** FAIL-CLOSED (correctly refuses corrupted ledger)
+- **Real-data research readiness:** run research mode in Codespace to regenerate accounting; 1 hockey conflict key + 6 schema exclusions are excluded explicitly and counted
+- **period_values** remains UNKNOWN and PROHIBITED per FEATURE_TIMING_CONTRACT.md
 - **Source-conflict visibility limitation:** SettledEvent contract does not represent source conflict; not in digest; builder assumes no conflict; receipt excluded_source_conflict=0 for current schemas; documented in _canonical_event_repr
+
+## Milestone 6A — Research Dataset Readiness (v2 implementation — COMPLETE, real-data verified)
+
+The original 6A implementation was found not to scale (it materialized all examples in memory and rebuilt full history per example). The corrected implementation below is bounded-memory and linear-time. Full contract details live in docs/PRICE_FREE_DATASET_CONTRACT.md (6A section) — not repeated here.
+
+- **Modules:** `src/slumdog/research_dataset.py` (orchestration, streaming emitter, bounded views, safe finalization) + new `src/slumdog/research_builder.py` (v2 eligibility, duplicate normalization, incremental builder core). Both research-only; neither is imported by production pipeline modules (pipeline, training, backfill, depth_sweep, research, forebet, cli).
+- **`build_price_free_examples` (strict) is unchanged** and serves as the byte-level reference for equivalence tests.
+- **v2 feature contract:** `price-free-v2-incremental-valid-history` on every example/sample/receipt; label contract unchanged. The only semantic change vs legacy is history membership: `research_history_eligible` (coherent disposition/winner, known sport, distinct participants) replaces the implicit legacy `HistoryIndex` filter — intentional divergences: unknown-sport rows, `NO_CONTEST` aliases, and incoherent rows (e.g. `SETTLED_CUP` winner-0) no longer feed history.
+- **Data flow:** raw → schema validation → lightweight census (`census_conflicts_only`, O(rows)) → whole-key conflict exclusion → content/provenance-separated duplicate normalization (content equality, then deterministic provenance representative; no input-order selection) → incremental builder (one sport, one event-date batch at a time, same-date isolation, bounded participant/H2H state) → bounded readiness aggregates → streaming artifacts.
+- **Bounded by construction:** examples stream to the temp gzip as produced (never held as a list); sample = first `sample_size` emitted; ready receipts carry `research_ready: true`; internal inconsistencies produce a diagnostic receipt only (`RESEARCH_DATASET_NOT_READY`, never coexisting with final artifacts).
+- **Safe finalization:** no pre-existing output is ever overwritten (no `--force`); temps validated then renamed examples → sample → receipt last; failures before the receipt rename remove this run's temps and finals.
+- **Guards unchanged:** explicit `--research-exclude-conflicts` opt-in; `/tmp`-only examples path; no combination with `--conflict-report`.
+- **Tests:** `tests/test_dataset_research_mode.py` (21: flags, accounting, determinism, ledger immutability, pipeline behavior — the brittle import-state assertion was removed per review) + `tests/test_research_incremental_builder.py` (36: strict-equivalence incl. same-date isolation, reordering, multi-sport ordering, provenance duplicates; intentional divergences; exact-byte v2 input digest; emitter/sample/digest; mid-stream and mid-commit failure leaving no finals; no-preexist refusal; diagnostic receipt; one-shot iterator; empty ledger; eligibility matrix; representative tie-breaks; outcome-subtype aggregation incl. per-sport invariants; self-pair no-emit/no-history/explicit reason; `builder_exclusion_reasons` receipt exposure + serialization stability). Suite total: 396.
+- **Final real-data verification (Codespace, head `3898103`, 2026-08-26):** audit exit 0, `RESEARCH_DATASET_READY_WITH_LIMITATIONS`, elapsed 192.61 s, peak RSS 2,284.2 MiB. Accounting: raw 655,394 → schema exclusions 6 → valid 655,388 → exact duplicates 279 + conflicting rows 2 (1 conflicting key) + canonical 655,107 → eligible 654,011 + builder exclusions 1,096. Exclusion reasons (fully explicit): equal probability 180, out-of-range probability 7, self-pair 18, unexpected two-way draw 588, void 303. Outcomes: underdog wins 191,238 / favorite wins 380,212 / draw negatives 82,561; positive rate 0.29240792586057424. Provenance present/missing/invalid = 0 / 654,011 / 0; 17-field feature missingness; price independence passed; global + per-sport outcome accounting passed; exclusion accounting passed; input digest `30cb96ffd2ee8193ecf0786df1b6a45aca3a26a8c8457d85c0135c512685c1c7`; examples digest `ac84325d281c1808765fbcb18028efb193dbbdd2affc806ba459bb9d8a09a228` (deterministic, unchanged by the receipt-only correction); compressed artifact 45,439,763 bytes; source ledger hashes unchanged; training FROZEN; production NOT AUTHORIZED.
+- **Docs updated:** docs/PRICE_FREE_DATASET_CONTRACT.md (6A section), docs/STATE.md, HANDOFF.md.
 
 ## Next Milestone
 
-**Milestone 5: historical integrity investigation**
+**Milestone 6A — COMPLETE (implementation + real-data verification at head `3898103`):**
 
-- *Action:* Extended `dataset_audit.py` with `--schema-exclusion-report` and added `docs/HISTORICAL_INTEGRITY_AUDIT.md` to safely document exclusions and provenance limits.
-- Investigate historical reconstruction conflicts (hockey 278977)
-- Provenance/reconstruction investigation: why same composite key has two settled scores in same file, no raw_sha256/captured_at
-- Establish provenance for historical ledgers (currently 0 present for 654,029 eligible)
-- Do not query Forebet until provenance established
-- Do not choose more plausible score, average, or infer correctness
-- No deletion/dedup of ledger rows
-- After provenance established, transparent baselines with walk-forward validation
+Final real-data run passed every gate: audit exit 0, elapsed 192.61 s, peak RSS 2,284.2 MiB; full accounting and exclusion-reason breakdown in the 6A section above; deterministic examples digest `ac84325d…a228` unchanged by the receipt-only correction; source ledger hashes unchanged. Full receipt lives in `/tmp/slumdog_research` (Codespace, outside Git — discardable once the PR evidence is finalized).
+
+**Next (after replacement-PR verification):** maintainer scope review of the replacement PR → merge decision. Milestone 6B (transparent non-trained walk-forward baselines) is NOT STARTED and NOT AUTHORIZED — requires explicit approval; training stays frozen.
 
 ## PR State
 
-- **Branch:** `arena/01a034f6-slumdog`
-- **Base:** `main` @ `c48d5dc`
-- **PR:** #7 https://github.com/6ixtyn9-sudo/Slumdog/pull/7 — OPEN
-- **Final head:** 2c0e0cf
-- **Merge approves only:** governance documentation; price-free identity and label contracts; safe historical example contracts; strict adapters and receipts; conflict detection and census tooling; tests
-- **Merge does NOT approve:** excluding the hockey conflict; training a model; ranking candidates; thresholds; production integration; daily selections; legacy Robber removal
+- **Active branch:** `arena/01a03e7a-slumdog` — v2 implementation, final tested head `3898103` (base `main` @ `efb4c90`, built on the preserved PR #8 commits via `bc5dd3c`). Replacement PR opened from here against `main`.
+- **Replacement PR:** #9 https://github.com/6ixtyn9-sudo/Slumdog/pull/9 — "Add bounded research-only price-free dataset generation" (OPEN, mergeable/CLEAN, against `main` from `arena/01a03e7a-slumdog`) — supersedes PR #8.
+- **PR #8 (superseded):** https://github.com/6ixtyn9-sudo/Slumdog/pull/8 — closed **not-merged** as superseded once the replacement PR was verified. Original `arena/01a03dc4-slumdog` branch is NOT deleted from this Arena session.
+- **Original #8 contents:** integrity-evidence docs (hockey mechanism, UNKNOWN origin layers, corrected provenance policy, docs index) + original Milestone 6A research mode (replaced by the v2 incremental builder).
+- **Merge approves only:** historical-integrity documentation; research-only dataset construction, receipt measurement, descriptive statistics, research artifact generation
+- **Merge does NOT approve:** model training, threshold optimization, calibrated probabilities, ranking, candidate shortlists, shadow picks, production integration, daily selections, legacy Robber removal, provenance fabrication
 
 ## Evidence Language Compliance
 
 - Verified from code: file paths, function names, disposition vocabulary SETTLED/SETTLED_CUP/SETTLED_DRAW/VOID/NO_CONTEST, winner_index strict, provenance merge deterministic, composite key (sport,event_id,event_date), conflict classification, receipt fields, accounting equations
-- Verified from executed census: 11 files, 655,394 raw, 6 schema excluded SCHEMA_MISSING_PARTICIPANT_1, 279 exact duplicates, 1 conflicting key hockey 278977 OUTCOME_CONFLICT, 2 conflicting rows, 0 valid SHA, 1 missing SHA, 654,029 eligible, 1,078 builder exclusions, 0 provenance present
-- Verified from tests: 337 passed, pyflakes clean, py_compile ok, diff-check ok
+- Verified from executed census (historical, 2026-08-24): 11 files, 655,394 raw, 6 schema excluded SCHEMA_MISSING_PARTICIPANT_1, 279 exact duplicates, 1 conflicting key hockey 278977 OUTCOME_CONFLICT, 2 conflicting rows, 0 valid SHA, 1 missing SHA, 654,029 eligible (legacy v1 membership), 1,078 builder exclusions, 0 provenance present
+- Verified from final real-data run (2026-08-26, head 3898103): audit exit 0, 192.61 s, peak RSS 2,284.2 MiB, eligible 654,011, builder exclusions 1,096 (equal-probability 180, out-of-range 7, self-pair 18, unexpected two-way draw 588, void 303), underdog wins 191,238 / favorite wins 380,212 / draw negatives 82,561, positive rate 0.29240792586057424, provenance 0/654,011/0, input digest 30cb96ff…c1c7, examples digest ac84325d…a228, artifact 45,439,763 bytes, ledger hashes unchanged
+- Verified from tests: 396 passed, pyflakes clean, py_compile ok, diff-check ok
 - Unresolved: hockey 278977 conflicting scores — retained both, no selection
 - Parked: period_values UNKNOWN PROHIBITED, detail facets UNKNOWN/PARKED, American football odds probe, esoccer audit

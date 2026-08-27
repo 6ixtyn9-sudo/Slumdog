@@ -1,0 +1,550 @@
+{
+  "analysis": "research-baselines",
+  "anti_tuning": {
+    "config_hash": "sha256 over UTF-8 bytes of canonical JSON: keys sorted recursively, compact separators",
+    "receipt_embeds": [
+      "config",
+      "config_sha256"
+    ],
+    "recompute_from_embedded_config_must_match": true,
+    "result_driven_amendments": "prohibited",
+    "tuning_periods": []
+  },
+  "bucket_convention": "every numeric bucket specifies lo, lo_inclusive, hi, hi_inclusive; null denotes an unbounded side (and null inclusivity for that side); missing-value buckets carry an explicit when rule and are never imputed",
+  "draws": "a draw is never a selectable outcome; the selected object is always the Forebet-defined participant underdog; a later draw settles label 0 as a failed underdog-win selection; outcome labels never affect ranking",
+  "inputs": {
+    "examples_gz": "/tmp/slumdog_research/examples.jsonl.gz",
+    "receipt": "/tmp/slumdog_research/receipt.json"
+  },
+  "integrity": {
+    "non_finite_values": "fail_closed: NaN/Infinity/-Infinity exit nonzero; never routed into a missing bucket",
+    "on_mismatch": "exit_nonzero_no_output",
+    "out_of_period_row": "integrity_failure: exit nonzero, write no baseline results (no silent other period)",
+    "pass1_checks": [
+      "decompressed_jsonl_sha256 == receipt.examples_digest",
+      "row_count == receipt.accounting.eligible_examples",
+      "every row event_date within P1..P4 union"
+    ],
+    "passes": 2
+  },
+  "metrics": {
+    "bucket": [
+      "examples",
+      "underdog_wins",
+      "base_rate",
+      "candidate_precision",
+      "lift",
+      "coverage",
+      "sport_days_represented",
+      "candidate_level_longest_losing_streak"
+    ],
+    "bucket_base_rate": "all rows of that sport and period; missing rows keep their denominator seat",
+    "insufficient_action": "reported as insufficient, never pooled",
+    "insufficient_bucket_threshold": 30,
+    "no_pick_days": "excluded from selected-day rates; counted as no hit in all-opportunity-day rates",
+    "quota_forced_selections": {
+      "top1": "1 per non-empty sport_day",
+      "top3": "min(3, available_events)"
+    },
+    "ranking": [
+      "opportunity_sport_days",
+      "selected_sport_days",
+      "no_pick_sport_days",
+      "no_pick_rate",
+      "top1_hits_on_selected_days",
+      "top1_hit_rate_selected_days",
+      "top1_hit_rate_all_opportunity_days",
+      "top3_any_hits_on_selected_days",
+      "top3_any_hit_rate_selected_days",
+      "top3_any_hit_rate_all_opportunity_days",
+      "mean_top1_selections_per_opportunity_day",
+      "mean_top3_selections_per_opportunity_day",
+      "available_events_per_sport_day",
+      "daily_top1_longest_losing_streak"
+    ],
+    "ranking_granularity": "sport x event_date (sport_days)",
+    "streak_aggregation": {
+      "candidate_level": "computed within each sport; global is the maximum of per-sport values; sports are never concatenated into one streak",
+      "candidate_level_order": [
+        "sport",
+        "event_date",
+        "event_id"
+      ],
+      "daily_top1": "one result per selected sport_day, computed per sport; global is the maximum of per-sport values",
+      "no_pick_days_effect": "neither increment nor reset the selected-day streak"
+    }
+  },
+  "missingness": {
+    "R1": "missing ranks last",
+    "R2": "missingness disqualifies",
+    "buckets": "explicit missing bucket, never imputed or dropped"
+  },
+  "missingness_reporting": {
+    "constraint": "no complete missingness table repeated inside signal bucket tables",
+    "features": "every analyzed feature",
+    "scope": [
+      "global per period",
+      "per sport per period"
+    ]
+  },
+  "outputs": {
+    "baselines_json": "/tmp/slumdog_6b/baselines.json",
+    "summary_md": "/tmp/slumdog_6b/summary.md"
+  },
+  "periods": [
+    {
+      "end": "2023-12-31",
+      "id": "P1",
+      "name": "historical_reference",
+      "start": "2023-02-12"
+    },
+    {
+      "end": "2024-12-31",
+      "id": "P2",
+      "name": "retrospective_evaluation",
+      "start": "2024-01-01"
+    },
+    {
+      "end": "2025-12-31",
+      "id": "P3",
+      "name": "retrospective_evaluation",
+      "start": "2025-01-01"
+    },
+    {
+      "end": "2026-08-21",
+      "id": "P4",
+      "name": "final_held_out_validation",
+      "start": "2026-01-01"
+    }
+  ],
+  "prior_games_semantics": "underdog_prior_games and favorite_prior_games are the sizes of the bounded last-5 recent-form windows, capped at 5; a value of 5 means a complete five-appearance window, not that five total historical appearances exhaust all available history",
+  "prohibited": [
+    "odds",
+    "fitted_estimators",
+    "threshold_optimization",
+    "random_splits",
+    "roi",
+    "period_values",
+    "unknown_timing_facets",
+    "calibrated_probability_claims",
+    "production_picks",
+    "daily_shortlist_activation"
+  ],
+  "reporting": {
+    "empty_buckets": "reported as empty, never omitted",
+    "grouping": [
+      "global",
+      "per_sport"
+    ],
+    "per": [
+      "period",
+      "signal_bucket_table",
+      "rule"
+    ]
+  },
+  "rules": {
+    "R0_FOREBET_ONLY_COMPARATOR": {
+      "eligibility": "all_available_rows",
+      "policy_candidate": false,
+      "quota_forced": true,
+      "rank": [
+        {
+          "feature": "forebet_underdog_probability",
+          "order": "desc"
+        },
+        {
+          "feature": "forebet_probability_gap",
+          "order": "asc"
+        },
+        {
+          "feature": "event_id",
+          "order": "asc"
+        }
+      ]
+    },
+    "R1_ALWAYS_RANK_COMPARATOR": {
+      "eligibility": "all_available_rows",
+      "policy_candidate": false,
+      "quota_forced": true,
+      "rank": [
+        {
+          "feature": "recent_win_rate_gap",
+          "missing": "last",
+          "order": "desc"
+        },
+        {
+          "feature": "h2h_underdog_win_rate",
+          "missing_or_no_h2h": "last",
+          "order": "desc"
+        },
+        {
+          "feature": "forebet_probability_gap",
+          "order": "asc"
+        },
+        {
+          "feature": "event_id",
+          "order": "asc"
+        }
+      ]
+    },
+    "R2_CONSERVATIVE_FIXED_RULE": {
+      "eligibility": [
+        {
+          "feature": "underdog_prior_games",
+          "op": "gte",
+          "value": 5
+        },
+        {
+          "feature": "favorite_prior_games",
+          "op": "gte",
+          "value": 5
+        },
+        {
+          "feature": "h2h_prior_games",
+          "op": "gte",
+          "value": 1
+        },
+        {
+          "feature": "forebet_probability_gap",
+          "op": "lte",
+          "value": 0.2
+        }
+      ],
+      "eligibility_note": "prior_games >= 5 means a complete five-appearance bounded recent-form window (see prior_games_semantics)",
+      "policy_candidate": false,
+      "quota_forced": false,
+      "rank": "R1_ALWAYS_RANK_COMPARATOR"
+    }
+  },
+  "shortlist_policy_authorized": false,
+  "signals": {
+    "conceding_rate_gap": {
+      "buckets": [
+        {
+          "hi": -2.0,
+          "hi_inclusive": false,
+          "lo": null,
+          "lo_inclusive": null,
+          "name": "<-2"
+        },
+        {
+          "hi": -1.0,
+          "hi_inclusive": false,
+          "lo": -2.0,
+          "lo_inclusive": true,
+          "name": "[-2,-1)"
+        },
+        {
+          "hi": 0.0,
+          "hi_inclusive": false,
+          "lo": -1.0,
+          "lo_inclusive": true,
+          "name": "[-1,0)"
+        },
+        {
+          "hi": 1.0,
+          "hi_inclusive": false,
+          "lo": 0.0,
+          "lo_inclusive": true,
+          "name": "[0,+1)"
+        },
+        {
+          "hi": null,
+          "hi_inclusive": null,
+          "lo": 1.0,
+          "lo_inclusive": true,
+          "name": ">=+1"
+        },
+        {
+          "name": "missing",
+          "when": {
+            "op": "missing"
+          }
+        }
+      ],
+      "feature": "prior_conceding_rate_gap"
+    },
+    "evidence_availability": {
+      "buckets": [
+        {
+          "max_present": 0,
+          "min_present": 0,
+          "name": "0"
+        },
+        {
+          "max_present": 2,
+          "min_present": 1,
+          "name": "1-2"
+        },
+        {
+          "max_present": 4,
+          "min_present": 3,
+          "name": "3-4"
+        },
+        {
+          "max_present": 6,
+          "min_present": 5,
+          "name": "5-6"
+        }
+      ],
+      "components": [
+        "underdog_prior_win_rate",
+        "favorite_prior_win_rate",
+        "h2h_underdog_win_rate",
+        "h2h_draw_rate",
+        "prior_scoring_rate_gap",
+        "prior_conceding_rate_gap"
+      ],
+      "note": "recent_win_rate_gap is derived from the first two components and is not counted as a component"
+    },
+    "h2h_underdog_win_rate": {
+      "buckets": [
+        {
+          "name": "no-h2h",
+          "when": {
+            "feature": "h2h_prior_games",
+            "op": "eq",
+            "value": 0
+          }
+        },
+        {
+          "hi": 0.0,
+          "hi_inclusive": true,
+          "lo": 0.0,
+          "lo_inclusive": true,
+          "name": "0"
+        },
+        {
+          "hi": 0.5,
+          "hi_inclusive": false,
+          "lo": 0.0,
+          "lo_inclusive": false,
+          "name": "(0,0.50)"
+        },
+        {
+          "hi": 0.5,
+          "hi_inclusive": true,
+          "lo": 0.5,
+          "lo_inclusive": true,
+          "name": "0.50"
+        },
+        {
+          "hi": 1.0,
+          "hi_inclusive": false,
+          "lo": 0.5,
+          "lo_inclusive": false,
+          "name": "(0.50,1)"
+        },
+        {
+          "hi": 1.0,
+          "hi_inclusive": true,
+          "lo": 1.0,
+          "lo_inclusive": true,
+          "name": "1"
+        },
+        {
+          "name": "missing/inconsistent",
+          "when": {
+            "op": "missing_or_inconsistent"
+          }
+        }
+      ],
+      "feature": "h2h_underdog_win_rate",
+      "precedence": [
+        "no-h2h",
+        "numeric_buckets",
+        "missing/inconsistent"
+      ]
+    },
+    "probability_gap": {
+      "buckets": [
+        {
+          "hi": 0.05,
+          "hi_inclusive": true,
+          "lo": 0.0,
+          "lo_inclusive": false,
+          "name": "(0,0.05]"
+        },
+        {
+          "hi": 0.15,
+          "hi_inclusive": true,
+          "lo": 0.05,
+          "lo_inclusive": false,
+          "name": "(0.05,0.15]"
+        },
+        {
+          "hi": 0.3,
+          "hi_inclusive": true,
+          "lo": 0.15,
+          "lo_inclusive": false,
+          "name": "(0.15,0.30]"
+        },
+        {
+          "hi": 1.0,
+          "hi_inclusive": true,
+          "lo": 0.3,
+          "lo_inclusive": false,
+          "name": "(0.30,1.0]"
+        },
+        {
+          "name": "missing",
+          "when": {
+            "op": "missing"
+          }
+        }
+      ],
+      "feature": "forebet_probability_gap"
+    },
+    "recent_win_rate_gap": {
+      "buckets": [
+        {
+          "hi": -0.3,
+          "hi_inclusive": true,
+          "lo": null,
+          "lo_inclusive": null,
+          "name": "<=-0.30"
+        },
+        {
+          "hi": -0.1,
+          "hi_inclusive": false,
+          "lo": -0.3,
+          "lo_inclusive": false,
+          "name": "(-0.30,-0.10)"
+        },
+        {
+          "hi": 0.1,
+          "hi_inclusive": false,
+          "lo": -0.1,
+          "lo_inclusive": true,
+          "name": "[-0.10,+0.10)"
+        },
+        {
+          "hi": 0.3,
+          "hi_inclusive": false,
+          "lo": 0.1,
+          "lo_inclusive": true,
+          "name": "[+0.10,+0.30)"
+        },
+        {
+          "hi": null,
+          "hi_inclusive": null,
+          "lo": 0.3,
+          "lo_inclusive": true,
+          "name": ">=+0.30"
+        },
+        {
+          "name": "missing",
+          "when": {
+            "op": "missing"
+          }
+        }
+      ],
+      "defined_when": "both components present",
+      "derived": "underdog_prior_win_rate - favorite_prior_win_rate",
+      "derived_from": [
+        "underdog_prior_win_rate",
+        "favorite_prior_win_rate"
+      ]
+    },
+    "scoring_rate_gap": {
+      "buckets": [
+        {
+          "hi": -1.0,
+          "hi_inclusive": false,
+          "lo": null,
+          "lo_inclusive": null,
+          "name": "<-1"
+        },
+        {
+          "hi": 0.0,
+          "hi_inclusive": false,
+          "lo": -1.0,
+          "lo_inclusive": true,
+          "name": "[-1,0)"
+        },
+        {
+          "hi": 1.0,
+          "hi_inclusive": false,
+          "lo": 0.0,
+          "lo_inclusive": true,
+          "name": "[0,+1)"
+        },
+        {
+          "hi": 2.0,
+          "hi_inclusive": false,
+          "lo": 1.0,
+          "lo_inclusive": true,
+          "name": "[+1,+2)"
+        },
+        {
+          "hi": null,
+          "hi_inclusive": null,
+          "lo": 2.0,
+          "lo_inclusive": true,
+          "name": ">=+2"
+        },
+        {
+          "name": "missing",
+          "when": {
+            "op": "missing"
+          }
+        }
+      ],
+      "feature": "prior_scoring_rate_gap"
+    },
+    "underdog_probability": {
+      "buckets": [
+        {
+          "hi": 0.2,
+          "hi_inclusive": false,
+          "lo": 0.0,
+          "lo_inclusive": true,
+          "name": "[0.00,0.20)"
+        },
+        {
+          "hi": 0.3,
+          "hi_inclusive": false,
+          "lo": 0.2,
+          "lo_inclusive": true,
+          "name": "[0.20,0.30)"
+        },
+        {
+          "hi": 0.4,
+          "hi_inclusive": false,
+          "lo": 0.3,
+          "lo_inclusive": true,
+          "name": "[0.30,0.40)"
+        },
+        {
+          "hi": 0.5,
+          "hi_inclusive": false,
+          "lo": 0.4,
+          "lo_inclusive": true,
+          "name": "[0.40,0.50)"
+        },
+        {
+          "hi": 0.6,
+          "hi_inclusive": false,
+          "lo": 0.5,
+          "lo_inclusive": true,
+          "name": "[0.50,0.60)"
+        },
+        {
+          "hi": 1.0,
+          "hi_inclusive": true,
+          "lo": 0.6,
+          "lo_inclusive": true,
+          "name": "[0.60,1.00]"
+        },
+        {
+          "name": "missing",
+          "when": {
+            "op": "missing"
+          }
+        }
+      ],
+      "feature": "forebet_underdog_probability"
+    }
+  },
+  "version": "3.0.0"
+}
