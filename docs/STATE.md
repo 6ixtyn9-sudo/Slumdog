@@ -3,6 +3,7 @@
 **Last verified:** 2026-08-27 (UTC) — Milestone 6B two-pass non-trained baseline analyzer implemented; canonical config SHA-256 verified; all 423 tests passed
 **Branch:** `arena/01a04198-slumdog` (delivery), `main` is only permanent branch
 **Doc canonical path:** `docs/STATE.md`
+**PR:** #10 OPEN — "Implement two-pass non-trained baseline analyzer (Milestone 6B)" — 423 tests passed
 **Base commit:** `09a56dcae4daff4014f79beca220cefb67edfe9d` (PR #9 merged)
 
 ## Permanent Product Mission

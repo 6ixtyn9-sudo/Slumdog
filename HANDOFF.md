@@ -5,6 +5,7 @@
 **Base commit:** `09a56dcae4daff4014f79beca220cefb67edfe9d` (`main` after PR #9 merge)
 **Phase:** Milestones 0–6A COMPLETE AND MERGED; Milestone 6B IMPLEMENTED; training FROZEN; production NOT AUTHORIZED; shortlist policy NOT AUTHORIZED
 **Mission:** Slumdog identifies a small daily shortlist of participants that Forebet considers underdogs but whose available pre-event evidence indicates a credible outright-win upset.
+**PR:** #10 https://github.com/6ixtyn9-sudo/Slumdog/pull/10 — "Implement two-pass non-trained baseline analyzer (Milestone 6B)" (OPEN, against `main`)
 **Training:** FROZEN (`feature_contracts.py: MODEL_TRAINING_ALLOWED=False`)
 **Tests:** 423 passed (verified 2026-08-27)
 
