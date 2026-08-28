@@ -290,6 +290,21 @@ exact R2 thresholds read from the frozen config:
 feature keys and applies no other logic. Boundary tests assert the exact
 behavior at 4 vs 5, 0 vs 1, 0.2 vs 0.200001, None vs 0.
 
+### Floating-point boundary observation (recorded limitation)
+
+The frozen R2 implementation compares binary floats directly. Some
+decimal source combinations that are mathematically equal to `0.20`
+can parse to a float slightly above `0.20` and therefore be
+ineligible. For example, the synthetic value `0.55 - 0.35` evaluates
+to `0.20000000000000007`, which fails the `gap <= 0.2` test by one
+ULP even though the source probabilities were `55%` and `35%`
+exactly. **Milestone 7 preserves the frozen implementation
+unchanged; no tolerance or rounding adjustment is authorized.** The
+synthetic fixtures in `tests/test_shadow_evaluator.py` use an
+interior gap (e.g. `0.18` from `0.54` vs `0.36`) when the test
+needs the third event to be R2-eligible. This is a documentation
+note, not a threshold change.
+
 ---
 
 ## 9. R1 Ranking (frozen comparator)

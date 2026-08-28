@@ -257,8 +257,19 @@ The original 6A implementation was found not to scale (it materialized all examp
 approved recovery plan (Option A: reduce, then complete local
 ingestion vertical slice). All required modules and the CLI exist.
 No commit, push, PR, network access, or real shadow run has been
-performed. Tests are green. Documentation updated to "IN PROGRESS"
-status.
+performed. Tests are green. Documentation updated to "IMPLEMENTED
+LOCALLY" status.
+
+**Floating-point boundary observation (recorded limitation, not a
+fix):** The frozen R2 implementation compares binary floats
+directly. Some decimal source combinations mathematically equal to
+`0.20` can parse to a float slightly above `0.20` and therefore
+be ineligible (e.g. `0.55 - 0.35 == 0.20000000000000007`). The
+frozen implementation is preserved unchanged; no tolerance or
+rounding adjustment is authorized. Synthetic test fixtures use an
+interior gap (e.g. `0.18` from `0.54` vs `0.36`) when the test
+needs the third event to be R2-eligible. See
+`docs/MILESTONE7_SHADOW_PICKS_PLAN.md` §8 for the full note.
 
 **Scope:** A pre-event forward shadow evaluator that consumes an
 already-captured Forebet snapshot, applies the **frozen R2 eligibility
@@ -285,14 +296,18 @@ under `data/reports/shadow/<target_date>/<run_id>/`.
   `snapshot_accounting`.
 - `src/slumdog/history_loader.py` — NEW (~270 lines).
   `load_valid_history(target_date, repo_root, history_paths=None,
-  max_interim_bytes=1GiB) -> HistoryLoadResult`. Supports both formats
+  max_interim_bytes=256MiB) -> HistoryLoadResult`. Supports both formats
   actually used in the repo:
   `data/interim/settled_history.json` and
   `data/reports/history_<sport>.jsonl.gz`. Streams gzipped JSONL
   without decompressing-into-memory. Uses
   `dataset._validate_settled_dict` and `dataset._census_grouping`.
   Asserts two non-overlap equations in the function body. Uses
-  `RESEARCH_FEATURE_CONTRACT_VERSION` from `research_builder`.
+  `RESEARCH_FEATURE_CONTRACT_VERSION` from `research_builder`. The
+  in-memory bound for non-gz interim ledgers was tightened from
+  1 GiB to 256 MiB; gz inputs are still streamed with no
+  whole-file in-memory bound. The CLI exposes
+  `--history-max-interim-bytes` for tests.
 - `src/slumdog/shadow_evaluator.py` — REWRITTEN (~640 lines, down
   from 1109). Three layers: `_evaluate_record` (pure per-record),
   `_emit_run` / `_blocked_run` (decision engine), `evaluate_from_disk`

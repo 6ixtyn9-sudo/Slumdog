@@ -1587,12 +1587,15 @@ def test_cli_main_successful_run_produces_selections(tmp_root, capsys, monkeypat
     football events on one sport-day produce:
 
     - run_status = SHADOW_SELECTIONS_EMITTED
-    - one PRIMARY_SHADOW_SELECTION
-    - up to two TOP3_EVALUATION_COHORT records
-    - correct R1 rank order
+    - one PRIMARY_SHADOW_SELECTION (rank 1)
+    - two TOP3_EVALUATION_COHORT records (ranks 2 and 3)
+    - correct R1 rank order [1, 2, 3]
     - balanced capture, history, and decision accounting
     - complete payload and manifest
     - matching input, decision, and payload hashes
+    - all three events from the parsed raw body
+    - all three also in considered_pool[] with their ranks
+    - no rank above 3 in selections[]
     - input files unchanged
     """
     from slumdog import shadow_evaluator as se
@@ -1701,7 +1704,7 @@ def test_cli_main_successful_run_produces_selections(tmp_root, capsys, monkeypat
         },
         {
             "id": "1003", "HOST_NAME": "Arsenal", "GUEST_NAME": "ManU",
-            "Pred_1": "55", "Pred_X": "10", "Pred_2": "35",
+            "Pred_1": "54", "Pred_X": "10", "Pred_2": "36",
             "best_odd_1": "1.80", "best_odd_2": "3.00", "best_odd_X": "10.00",
             "short_tag": "EPL", "DATE_BAH": f"{target_date} 20:00",
             "host_sc_pr": "1", "guest_sc_pr": "1", "goalsavg": "2.5",
@@ -1763,33 +1766,56 @@ def test_cli_main_successful_run_produces_selections(tmp_root, capsys, monkeypat
     )
     assert payload["run_status"] == "SHADOW_SELECTIONS_EMITTED"
 
-    # Exactly one PRIMARY_SHADOW_SELECTION
+    # Complete top-three path: 1 primary + 2 cohort = 3 selections.
+    # The third event uses an interior gap of 0.18 (Pred_1=54 /
+    # Pred_2=36) so it is unambiguously below the R2 boundary of
+    # 0.2 and produces a third selection. (See MILESTONE7 plan:
+    # "frozen R2 implementation compares binary floats directly;
+    # some decimal source combinations mathematically equal to 0.20
+    # can parse to a float slightly above 0.20 and therefore be
+    # ineligible. The frozen implementation is preserved unchanged;
+    # no tolerance or rounding adjustment is authorized.")
     primary = [s for s in payload["selections"] if s["status"] == "PRIMARY_SHADOW_SELECTION"]
-    assert len(primary) == 1, f"expected 1 primary, got {len(primary)}"
-
-    # Up to two TOP3_EVALUATION_COHORT
     cohort = [s for s in payload["selections"] if s["status"] == "TOP3_EVALUATION_COHORT"]
-    assert len(cohort) <= 2, f"expected <=2 cohort, got {len(cohort)}"
+    assert len(primary) == 1, f"expected 1 primary, got {len(primary)}: {payload['selections']}"
+    assert len(cohort) == 2, f"expected 2 cohort, got {len(cohort)}: {payload['selections']}"
+    assert len(payload["selections"]) == 3, (
+        f"expected 3 selections (1 primary + 2 cohort), got {len(payload['selections'])}: "
+        f"{[(s['event_id'], s['rank_within_sport_day'], s['status']) for s in payload['selections']]}"
+    )
 
     # No rank-4+ in selections[]
     r4plus = [s for s in payload["selections"] if s["status"] == "ELIGIBLE_RANKED_BEYOND_TOP3"]
     assert r4plus == [], f"selections[] should not contain rank-4+; got {r4plus}"
 
-    # Total selections: 1 primary + up to 2 cohort
-    assert len(payload["selections"]) == 1 + len(cohort)
-
-    # Correct R1 rank order (selections are sorted by event_id in the
-    # payload, so we sort by rank first to check the set)
+    # R1 rank order is exactly [1, 2, 3]
     by_rank = sorted(payload["selections"], key=lambda s: s["rank_within_sport_day"])
     ranks = [s["rank_within_sport_day"] for s in by_rank]
-    assert ranks == [1, 2, 3][:1 + len(cohort)]
+    assert ranks == [1, 2, 3], f"expected ranks [1,2,3], got {ranks}"
 
-    # selected events came from PARSED raw body, not hand-built PreEventRecord
+    # All three originate from the parsed raw body (not hand-built).
     body_event_ids = {"football:1001", "football:1002", "football:1003"}
     selection_event_ids = {s["event_id"] for s in payload["selections"]}
-    assert selection_event_ids.issubset(body_event_ids), (
-        f"selections contain event_ids not from the parsed body: "
-        f"{selection_event_ids - body_event_ids}"
+    assert selection_event_ids == body_event_ids, (
+        f"selections must equal parsed-body event_ids: "
+        f"selected={selection_event_ids} body={body_event_ids}"
+    )
+
+    # All three also appear in considered_pool[] with their ranks
+    pool = manifest["considered_pool"]
+    pool_event_ids = {p["event_id"] for p in pool}
+    assert pool_event_ids == body_event_ids, (
+        f"considered_pool[] must include all 3 events: pool={pool_event_ids}"
+    )
+    pool_ranks = {p["event_id"]: p["rank_within_sport_day"] for p in pool}
+    for eid in body_event_ids:
+        assert pool_ranks[eid] in (1, 2, 3), (
+            f"event {eid} in considered_pool must have rank in [1,3]: {pool_ranks[eid]}"
+        )
+    # No rank above 3 in selections
+    selection_ranks_set = {s["rank_within_sport_day"] for s in payload["selections"]}
+    assert all(r <= 3 for r in selection_ranks_set), (
+        f"no rank above 3 may appear in selections[]: {selection_ranks_set}"
     )
 
     # Balanced capture accounting
