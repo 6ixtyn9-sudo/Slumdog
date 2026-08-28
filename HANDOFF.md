@@ -271,6 +271,33 @@ interior gap (e.g. `0.18` from `0.54` vs `0.36`) when the test
 needs the third event to be R2-eligible. See
 `docs/MILESTONE7_SHADOW_PICKS_PLAN.md` §8 for the full note.
 
+**Decision content vs source provenance (dedup semantics):**
+The shadow evaluator's across-capture dedup uses a
+**decision fingerprint** that contains ONLY price-free decision
+content (sport, event_date, event_id, participants, and the three
+forebet probabilities). Provenance fields — `raw_sha256`,
+`sidecar_sha256`, `captured_at`, `source_url`, `route`, body
+paths — are EXCLUDED from the fingerprint. Two observations of
+the same event that differ only in odds/provenance are
+**decision-equivalent duplicate observations**: one is admitted
+as the canonical record, the extras are counted in
+`exact_decision_duplicate_extra_rows`, and all source
+observations are preserved as provenance. Two observations
+whose decision fingerprints differ are a **genuine decision
+conflict**: the entire group is excluded from decision
+evaluation (`conflict_groups` / `conflicting_rows`), both
+fingerprints are retained in the manifest's `decision_conflicts`
+list for forensic review, and no arbitrary winner is chosen. The
+previous implementation that included `source_url`, `raw_sha256`,
+and `captured_at` in the fingerprint was an integrity blocker
+(reviewed and corrected in the post-PR integrity pass). The
+decision_digest is independent of per-snapshot source fields so
+odds-only differences (whether between separate runs or between
+observations in the same run) do not affect decision
+reproducibility. See
+`docs/MILESTONE7_SHADOW_PICKS_PLAN.md` §10 for the full
+semantics.
+
 **Scope:** A pre-event forward shadow evaluator that consumes an
 already-captured Forebet snapshot, applies the **frozen R2 eligibility
 rule** read from `config/research_baselines_v1.json` (never

@@ -2254,3 +2254,552 @@ def test_odds_only_differences_produce_same_decision_digest(tmp_root, monkeypatc
                 f"forbidden field {forbidden!r} leaked into selection: "
                 f"{s}"
             )
+
+
+def _build_two_capture_entries_for_same_event(
+    tmp_root,
+    target_date: str,
+    *,
+    rows_a: list[dict],
+    rows_b: list[dict],
+    captured_at_a: str,
+    captured_at_b: str,
+    source_url_a: str,
+    source_url_b: str,
+    route_a: str = "direct",
+    route_b: str = "relay",
+    sport: str = "football",
+) -> tuple[Path, list[dict]]:
+    """Build a single capture receipt containing TWO capture entries
+    for the same event, where the two raw bodies differ (e.g. in
+    odds) and therefore have different ``raw_sha256``, different
+    sidecar SHA-256, different ``captured_at``, and different
+    ``source_url`` / ``route``. Used by Test A and Test B.
+    """
+    body_a = ("<html><body>" + json.dumps([rows_a, {}]) +
+              "</body></html>").encode("utf-8")
+    body_b = ("<html><body>" + json.dumps([rows_b, {}]) +
+              "</body></html>").encode("utf-8")
+    body_sha_a = hashlib.sha256(body_a).hexdigest()
+    body_sha_b = hashlib.sha256(body_b).hexdigest()
+    # Different bodies must have different hashes
+    assert body_sha_a != body_sha_b
+    body_dir = tmp_root / "data" / "raw" / sport / target_date
+    body_dir.mkdir(parents=True, exist_ok=True)
+    # Use distinct stamps so the two entries have separate files.
+    body_path_a = body_dir / f"20260826T100000Z_{body_sha_a[:12]}.txt"
+    sidecar_path_a = body_dir / f"20260826T100000Z_{body_sha_a[:12]}.json"
+    body_path_b = body_dir / f"20260826T110000Z_{body_sha_b[:12]}.txt"
+    sidecar_path_b = body_dir / f"20260826T110000Z_{body_sha_b[:12]}.json"
+    body_path_a.write_bytes(body_a)
+    body_path_b.write_bytes(body_b)
+    sidecar_a = {
+        "sport": sport, "target_date": target_date,
+        "captured_at": captured_at_a, "source_url": source_url_a,
+        "relay_url": source_url_a,
+        "body_format": "json", "sha256": body_sha_a, "bytes": len(body_a),
+        "body_path": str(body_path_a.relative_to(tmp_root)),
+        "metadata_path": str(sidecar_path_a.relative_to(tmp_root)),
+        "route": route_a,
+    }
+    sidecar_b = {
+        "sport": sport, "target_date": target_date,
+        "captured_at": captured_at_b, "source_url": source_url_b,
+        "relay_url": source_url_b,
+        "body_format": "json", "sha256": body_sha_b, "bytes": len(body_b),
+        "body_path": str(body_path_b.relative_to(tmp_root)),
+        "metadata_path": str(sidecar_path_b.relative_to(tmp_root)),
+        "route": route_b,
+    }
+    sidecar_path_a.write_text(json.dumps(sidecar_a, indent=2, sort_keys=True))
+    sidecar_path_b.write_text(json.dumps(sidecar_b, indent=2, sort_keys=True))
+    receipt = {
+        "target_date": target_date,
+        "generated_at": "2026-08-26T10:00:01+00:00",
+        "captured": [sidecar_a, sidecar_b],
+        "failures": [], "reused": 0, "football_markets": None,
+    }
+    reports = tmp_root / "data" / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    receipt_path = reports / f"capture_{target_date}_twocap.json"
+    receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True))
+    return receipt_path, [sidecar_a, sidecar_b]
+
+
+def test_same_run_odds_provenance_only_observation_is_not_a_conflict(
+    tmp_root, monkeypatch,
+):
+    """Owner integrity review: two observations of the same event
+    that differ ONLY in odds (or other prohibited display metadata)
+    must collapse to ONE admitted decision record with N-1 extras
+    counted as decision-equivalent duplicate observations — NOT as
+    conflicts. All source observations are preserved as provenance.
+
+    Two observations necessarily have different ``raw_sha256``
+    (different body bytes) and different ``captured_at`` (the
+    snapshot was taken at a different time). The previous dedup
+    included those provenance fields in the comparison fingerprint
+    and therefore mis-classified odds-only-different observations
+    as conflicts. The corrected dedup uses ONLY price-free
+    decision content in the fingerprint.
+
+    Fixture: one event (1001), captured twice with different odds
+    in each body. The two bodies have different SHA-256, the two
+    sidecars have different SHA-256, and the two ``captured_at``
+    values are different. Decision fingerprint (sport, event_id,
+    event_date, participants, probabilities) is identical.
+
+    Required outcomes (per owner spec, Test A):
+    - exactly one accepted decision record
+    - zero conflicts
+    - exactly one exact_decision_duplicate_extra_row
+    - both provenance observations retained
+    - identical features
+    - identical R2 eligibility
+    - identical R1 key
+    - one resulting selection/cohort membership
+    - no odds in typed decision record, features, or
+      decision_digest
+    """
+    from slumdog import shadow_evaluator as se
+    fixed_clock = datetime(2026, 8, 26, 10, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(se, "_now_utc", lambda: fixed_clock)
+
+    # Build history sufficient for R2 on the pairing.
+    reports = tmp_root / "data" / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    hist_rows: list[dict] = []
+    for i in range(6):
+        hist_rows.append({
+            "event_id": f"a_a_{i}", "sport": "football",
+            "event_date": f"2024-01-{(i % 28) + 1:02d}",
+            "participant_1": "Arsenal", "participant_2": "Chelsea",
+            "winner_index": 1, "score_1": 2.0, "score_2": 1.0,
+            "probability_1": 0.55, "probability_2": 0.30,
+            "draw_probability": 0.15, "forebet_pick": None,
+            "disposition": "SETTLED",
+        })
+    for i in range(2):
+        hist_rows.append({
+            "event_id": f"h2h_ac_{i}", "sport": "football",
+            "event_date": f"2024-05-{(i % 28) + 1:02d}",
+            "participant_1": "Arsenal", "participant_2": "Chelsea",
+            "winner_index": 1, "score_1": 1.0, "score_2": 0.0,
+            "probability_1": 0.55, "probability_2": 0.30,
+            "draw_probability": 0.15, "forebet_pick": None,
+            "disposition": "SETTLED",
+        })
+    gz_path = reports / "history_football.jsonl.gz"
+    _make_history_gz(gz_path, hist_rows)
+
+    # Two raw bodies for the same event. The probabilities are
+    # identical (50/10/40) — what differs is the odds metadata
+    # (which is stripped from the typed record anyway) and the
+    # captured_at / source_url / route on the sidecar.
+    target_date = "2026-08-28"
+    rows_a = [{
+        "id": "1001", "HOST_NAME": "Arsenal", "GUEST_NAME": "Chelsea",
+        "Pred_1": "50", "Pred_X": "10", "Pred_2": "40",
+        "best_odd_1": "2.00", "best_odd_2": "2.50", "best_odd_X": "10.00",
+        "short_tag": "EPL", "DATE_BAH": f"{target_date} 15:00",
+        "host_sc_pr": "1", "guest_sc_pr": "1", "goalsavg": "2.5",
+        "Host_SC": None, "Guest_SC": None, "comment": "",
+    }]
+    rows_b = [{
+        "id": "1001", "HOST_NAME": "Arsenal", "GUEST_NAME": "Chelsea",
+        "Pred_1": "50", "Pred_X": "10", "Pred_2": "40",
+        "best_odd_1": "1.85", "best_odd_2": "2.80", "best_odd_X": "9.50",
+        "short_tag": "EPL", "DATE_BAH": f"{target_date} 15:00",
+        "host_sc_pr": "1", "guest_sc_pr": "1", "goalsavg": "2.5",
+        "Host_SC": None, "Guest_SC": None, "comment": "different odds",
+    }]
+    receipt_path, sidecars = _build_two_capture_entries_for_same_event(
+        tmp_root, target_date,
+        rows_a=rows_a, rows_b=rows_b,
+        captured_at_a="2026-08-26T10:00:00+00:00",
+        captured_at_b="2026-08-26T11:00:00+00:00",
+        source_url_a="https://example.invalid/football/2026-08-28",
+        source_url_b="https://example.invalid/football/2026-08-28?v=2",
+    )
+    cfg = tmp_root / "config"
+    cfg.mkdir(parents=True, exist_ok=True)
+    import shutil
+    shutil.copy("config/research_baselines_v1.json",
+                cfg / "research_baselines_v1.json")
+    shutil.copy("config/shadow_evaluator_v1.json",
+                cfg / "shadow_evaluator_v1.json")
+
+    rc = main([
+        "--date", target_date, "--capture-receipt", str(receipt_path),
+        "--history", str(gz_path),
+        "--config", str(cfg / "shadow_evaluator_v1.json"),
+        "--root", str(tmp_root),
+    ])
+    assert rc == 0
+
+    date_dir = tmp_root / "data" / "reports" / "shadow" / target_date
+    run_dirs = [d for d in date_dir.iterdir()
+                if d.is_dir() and d.name != "BLOCKED"]
+    assert len(run_dirs) == 1
+    manifest = json.loads((run_dirs[0] / "manifest.json").read_text())
+    payload = json.loads((run_dirs[0] / "shadow_selections.json").read_text())
+
+    # Test A: exactly one admitted decision record, zero conflicts.
+    acc = manifest["decision_accounting"]
+    assert acc["unique_decision_records_admitted"] == 1, (
+        f"expected 1 admitted, got {acc['unique_decision_records_admitted']}; "
+        f"acc={acc}"
+    )
+    assert acc["conflict_groups"] == 0, (
+        f"expected 0 conflict groups, got {acc['conflict_groups']}; "
+        f"acc={acc}"
+    )
+    assert acc["conflicting_rows"] == 0, (
+        f"expected 0 conflicting rows, got {acc['conflicting_rows']}; "
+        f"acc={acc}"
+    )
+    assert acc["exact_decision_duplicate_extra_rows"] == 1, (
+        f"expected 1 extra duplicate, got "
+        f"{acc['exact_decision_duplicate_extra_rows']}; acc={acc}"
+    )
+    assert acc["exact_decision_duplicate_groups"] == 1, (
+        f"expected 1 duplicate group, got "
+        f"{acc['exact_decision_duplicate_groups']}; acc={acc}"
+    )
+
+    # The considered pool has TWO entries for the same composite
+    # key: one PRIMARY (or COHORT, depending on ranking) and one
+    # EXACT_DECISION_DUPLICATE_OBSERVATION.
+    pool = manifest["considered_pool"]
+    pool_for_event = [p for p in pool if p["event_id"] == "football:1001"]
+    assert len(pool_for_event) == 2, (
+        f"considered_pool must have 2 entries for the one event "
+        f"(both observations), got {len(pool_for_event)}: {pool_for_event}"
+    )
+    statuses = sorted(p["considered_status"] for p in pool_for_event)
+    # One is a rank status (PRIMARY or COHORT or R4+), the other
+    # is the exact-decision-duplicate marker.
+    assert "EXACT_DECISION_DUPLICATE_OBSERVATION" in statuses, (
+        f"expected one EXACT_DECISION_DUPLICATE_OBSERVATION, got {statuses}"
+    )
+
+    # Both provenance observations are preserved. We verify
+    # that the canonical eval record carries _provenance_observations
+    # (we read it via the manifest's decision_conflicts list, which
+    # is empty here, and the eval record itself isn't in the
+    # manifest; but the input_digest commits to the per-sidecar
+    # body digests, so both observations are accounted for).
+    sidecar_digests = manifest["input_provenance"]["sidecar_digests"]
+    body_digests = manifest["input_provenance"]["raw_body_digests"]
+    assert len(sidecar_digests) == 2, (
+        f"both sidecar observations must be retained, got "
+        f"{len(sidecar_digests)}"
+    )
+    assert len(body_digests) == 2, (
+        f"both body observations must be retained, got {len(body_digests)}"
+    )
+
+    # One resulting selection/cohort membership.
+    assert len(payload["selections"]) == 1, (
+        f"expected 1 selection (the one admitted record), got "
+        f"{len(payload['selections'])}: {payload['selections']}"
+    )
+    selection = payload["selections"][0]
+    assert selection["event_id"] == "football:1001"
+    assert selection["status"] in ("PRIMARY_SHADOW_SELECTION",
+                                    "TOP3_EVALUATION_COHORT")
+
+    # Identical features (the duplicate observation collapsed to
+    # the same canonical record; only one selection with one set
+    # of features exists).
+    assert isinstance(selection["features"], dict)
+    assert len(selection["features"]) > 0
+
+    # No odds in the typed decision record, features, or
+    # decision_digest. (The selection record has no odds fields
+    # at all; ``selection`` is a dict and none of the keys below
+    # appear.)
+    for forbidden in ("best_odd_1", "best_odd_2", "best_odd_X",
+                       "odds_1", "odds_2", "score_1", "score_2",
+                       "winner_index", "disposition"):
+        assert forbidden not in selection, (
+            f"forbidden field {forbidden!r} leaked into selection: "
+            f"{selection}"
+        )
+    # And not in the decision_digest payload either.
+    dp = manifest["decision_provenance"]
+    dp_serialized = json.dumps(dp, sort_keys=True)
+    for forbidden in ("best_odd_1", "best_odd_2", "best_odd_X",
+                       "odds_1", "odds_2", "score_1", "score_2",
+                       "winner_index", "disposition"):
+        assert forbidden not in dp_serialized, (
+            f"forbidden field {forbidden!r} leaked into decision_digest: "
+            f"{dp_serialized[:200]}"
+        )
+
+    # decision_digest is still produced; it is committed to the
+    # record-level decision content (one record, PRIMARY/COHORT)
+    # plus the decision_accounting. The duplicate-extras marker
+    # is part of the accounting, so the decision_digest depends
+    # on it (this is intentional: the accounting IS the
+    # reproducible record of how many observations were
+    # collapsed; the decision content itself is identical
+    # regardless of N-1 extras).
+    assert isinstance(manifest["decision_digest"], str)
+    assert len(manifest["decision_digest"]) == 64
+
+    # Run the same fixture with a SINGLE observation to compare.
+    # With one observation, the dedup accounting is all zeros
+    # (no duplicates, no conflicts) but the decision_digest
+    # should be IDENTICAL to the two-observation run (because the
+    # decision content is one record either way and the
+    # accounting counters for duplicates/conflicts are zero in
+    # both cases — wait, with one observation the
+    # exact_decision_duplicate_extra_rows is 0; with two it is
+    # 1. So decision_digest will DIFFER. This is intentional:
+    # the decision_digest commits to the accounting, and the
+    # accounting records how many observations were collapsed.
+    # The decision-relevant content (one record, one set of
+    # features, one selection) is identical between the two
+    # runs. We assert that here by comparing the canonical
+    # selection record.
+    receipt_path_single = reports / f"capture_{target_date}_singlecap.json"
+    sidecar_a = sidecars[0]
+    single_receipt = {
+        "target_date": target_date,
+        "generated_at": "2026-08-26T10:00:01+00:00",
+        "captured": [sidecar_a],
+        "failures": [], "reused": 0, "football_markets": None,
+    }
+    receipt_path_single.write_text(
+        json.dumps(single_receipt, indent=2, sort_keys=True)
+    )
+    rc2 = main([
+        "--date", target_date, "--capture-receipt", str(receipt_path_single),
+        "--history", str(gz_path),
+        "--config", str(cfg / "shadow_evaluator_v1.json"),
+        "--root", str(tmp_root),
+    ])
+    assert rc2 == 0
+    run_dirs_single = sorted(
+        d for d in date_dir.iterdir() if d.is_dir() and d.name != "BLOCKED"
+    )
+    # Two runs total: the first was the 2-cap run, the second is
+    # the 1-cap run. They have different run_ids because the
+    # body digests differ.
+    assert len(run_dirs_single) == 2
+    manifest_single = json.loads(
+        (run_dirs_single[1] / "manifest.json").read_text()
+    )
+    payload_single = json.loads(
+        (run_dirs_single[1] / "shadow_selections.json").read_text()
+    )
+    # input_digest differs (the body digests differ; the single
+    # run has 1 body, the two-cap run has 2).
+    assert manifest["input_digest"] != manifest_single["input_digest"]
+    # selection set is the same: one record, football:1001.
+    assert len(payload_single["selections"]) == 1
+    assert payload_single["selections"][0]["event_id"] == "football:1001"
+    # The features of the single-observation selection match
+    # the features of the two-observation selection exactly
+    # (the canonical record in the two-observation run is the
+    # same decision as the single observation).
+    single_sel = payload_single["selections"][0]
+    assert single_sel["features"] == selection["features"]
+    assert single_sel["missingness"] == selection["missingness"]
+    assert single_sel["favorite_index"] == selection["favorite_index"]
+    assert single_sel["underdog_index"] == selection["underdog_index"]
+    assert single_sel["probability_gap"] == selection["probability_gap"]
+
+
+def test_same_run_genuine_decision_conflict_excludes_all_members(
+    tmp_root, monkeypatch,
+):
+    """Owner integrity review Test B: two observations of the same
+    event that differ in price-free decision content (different
+    probabilities or different participants) are a genuine
+    decision conflict. The entire group is excluded from
+    decision evaluation; no arbitrary winner is chosen.
+
+    Required outcomes (per owner spec, Test B):
+    - zero accepted decision records for the conflicting event
+    - all conflicting observations excluded
+    - conflict_groups = 1, conflicting_rows = 2
+    - both fingerprints retained in decision_conflicts
+    - all provenance observations retained
+    - the event is absent from primary and top-three cohort output
+    """
+    from slumdog import shadow_evaluator as se
+    fixed_clock = datetime(2026, 8, 26, 10, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(se, "_now_utc", lambda: fixed_clock)
+
+    # Build history sufficient for R2 on the pairings.
+    reports = tmp_root / "data" / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    hist_rows: list[dict] = []
+    for i in range(6):
+        hist_rows.append({
+            "event_id": f"a_a_{i}", "sport": "football",
+            "event_date": f"2024-01-{(i % 28) + 1:02d}",
+            "participant_1": "Arsenal", "participant_2": "Chelsea",
+            "winner_index": 1, "score_1": 2.0, "score_2": 1.0,
+            "probability_1": 0.55, "probability_2": 0.30,
+            "draw_probability": 0.15, "forebet_pick": None,
+            "disposition": "SETTLED",
+        })
+    for i in range(2):
+        hist_rows.append({
+            "event_id": f"h2h_ac_{i}", "sport": "football",
+            "event_date": f"2024-05-{(i % 28) + 1:02d}",
+            "participant_1": "Arsenal", "participant_2": "Chelsea",
+            "winner_index": 1, "score_1": 1.0, "score_2": 0.0,
+            "probability_1": 0.55, "probability_2": 0.30,
+            "draw_probability": 0.15, "forebet_pick": None,
+            "disposition": "SETTLED",
+        })
+    gz_path = reports / "history_football.jsonl.gz"
+    _make_history_gz(gz_path, hist_rows)
+
+    # Two observations of the same event with DIFFERENT
+    # probability_1 (50 vs 52) but both R2-eligible (gap 0.10
+    # and 0.14, both well below the 0.2 threshold). Same
+    # participants, same event_id/date; the decision fingerprint
+    # differs because probabilities differ.
+    target_date = "2026-08-28"
+    rows_a = [{
+        "id": "1001", "HOST_NAME": "Arsenal", "GUEST_NAME": "Chelsea",
+        "Pred_1": "50", "Pred_X": "10", "Pred_2": "40",
+        "best_odd_1": "2.00", "best_odd_2": "2.50", "best_odd_X": "10.00",
+        "short_tag": "EPL", "DATE_BAH": f"{target_date} 15:00",
+        "host_sc_pr": "1", "guest_sc_pr": "1", "goalsavg": "2.5",
+        "Host_SC": None, "Guest_SC": None, "comment": "",
+    }]
+    rows_b = [{
+        "id": "1001", "HOST_NAME": "Arsenal", "GUEST_NAME": "Chelsea",
+        "Pred_1": "52", "Pred_X": "10", "Pred_2": "38",
+        "best_odd_1": "1.80", "best_odd_2": "3.00", "best_odd_X": "10.00",
+        "short_tag": "EPL", "DATE_BAH": f"{target_date} 15:00",
+        "host_sc_pr": "1", "guest_sc_pr": "1", "goalsavg": "2.5",
+        "Host_SC": None, "Guest_SC": None, "comment": "conflict",
+    }]
+    receipt_path, sidecars = _build_two_capture_entries_for_same_event(
+        tmp_root, target_date,
+        rows_a=rows_a, rows_b=rows_b,
+        captured_at_a="2026-08-26T10:00:00+00:00",
+        captured_at_b="2026-08-26T11:00:00+00:00",
+        source_url_a="https://example.invalid/football/2026-08-28",
+        source_url_b="https://example.invalid/football/2026-08-28?v=2",
+    )
+    cfg = tmp_root / "config"
+    cfg.mkdir(parents=True, exist_ok=True)
+    import shutil
+    shutil.copy("config/research_baselines_v1.json",
+                cfg / "research_baselines_v1.json")
+    shutil.copy("config/shadow_evaluator_v1.json",
+                cfg / "shadow_evaluator_v1.json")
+
+    rc = main([
+        "--date", target_date, "--capture-receipt", str(receipt_path),
+        "--history", str(gz_path),
+        "--config", str(cfg / "shadow_evaluator_v1.json"),
+        "--root", str(tmp_root),
+    ])
+    assert rc == 0
+
+    date_dir = tmp_root / "data" / "reports" / "shadow" / target_date
+    run_dirs = [d for d in date_dir.iterdir()
+                if d.is_dir() and d.name != "BLOCKED"]
+    assert len(run_dirs) == 1
+    manifest = json.loads((run_dirs[0] / "manifest.json").read_text())
+    payload = json.loads((run_dirs[0] / "shadow_selections.json").read_text())
+
+    # Test B: zero admitted for the conflicting event.
+    acc = manifest["decision_accounting"]
+    assert acc["conflict_groups"] == 1, (
+        f"expected 1 conflict group, got {acc['conflict_groups']}; "
+        f"acc={acc}"
+    )
+    assert acc["conflicting_rows"] == 2, (
+        f"expected 2 conflicting rows, got {acc['conflicting_rows']}; "
+        f"acc={acc}"
+    )
+    assert acc["unique_decision_records_admitted"] == 0, (
+        f"expected 0 admitted (the only event is in conflict), got "
+        f"{acc['unique_decision_records_admitted']}; acc={acc}"
+    )
+    assert acc["exact_decision_duplicate_groups"] == 0
+    assert acc["exact_decision_duplicate_extra_rows"] == 0
+
+    # The conflicting event is absent from the selection list.
+    selection_event_ids = [s["event_id"] for s in payload["selections"]]
+    assert "football:1001" not in selection_event_ids, (
+        f"conflicting event must NOT be in selections[]: "
+        f"{selection_event_ids}"
+    )
+    # primary = 0, cohort = 0
+    assert acc["primary_selected"] == 0
+    assert acc["top3_cohort_selected"] == 0
+    # run_status should be SHADOW_NO_SELECTION (no primary).
+    assert manifest["run_status"] == "SHADOW_NO_SELECTION", (
+        f"expected SHADOW_NO_SELECTION, got {manifest['run_status']}"
+    )
+
+    # Both fingerprints are retained in decision_conflicts.
+    decision_conflicts = manifest["decision_conflicts"]
+    assert len(decision_conflicts) == 1, (
+        f"expected 1 conflict group in decision_conflicts, got "
+        f"{len(decision_conflicts)}"
+    )
+    conflict_group = decision_conflicts[0]
+    assert conflict_group["sport"] == "football"
+    assert conflict_group["event_id"] == "football:1001"
+    assert conflict_group["event_date"] == target_date
+    fps = conflict_group["decision_fingerprints"]
+    assert len(fps) == 2, (
+        f"both fingerprints must be retained, got {len(fps)}: {fps}"
+    )
+    # Both fingerprints have observation_count = 1 (one per body)
+    for fp in fps:
+        assert fp["observation_count"] == 1, (
+            f"each fingerprint has 1 observation: {fp}"
+        )
+    # The two fingerprints must differ in probability_1
+    fp_p1s = sorted(fp["probability_1"] for fp in fps)
+    assert fp_p1s == [0.5, 0.52] or fp_p1s == [0.50, 0.52], (
+        f"fingerprints must show the two distinct probability_1 "
+        f"values: {fp_p1s}"
+    )
+
+    # All provenance observations retained (both sidecars and
+    # both bodies are in the input_provenance digests).
+    sidecar_digests = manifest["input_provenance"]["sidecar_digests"]
+    body_digests = manifest["input_provenance"]["raw_body_digests"]
+    assert len(sidecar_digests) == 2
+    assert len(body_digests) == 2
+
+    # The considered pool has 2 entries for the conflicting
+    # event, both with DECISION_CONFLICT_EXCLUDED status.
+    # ``eligible`` reflects R2 eligibility (each individual
+    # observation passed R2 in this fixture); ``considered_status``
+    # reflects the final decision classification (the conflict
+    # excludes the entire group from the decision path).
+    pool = manifest["considered_pool"]
+    pool_for_event = [p for p in pool if p["event_id"] == "football:1001"]
+    assert len(pool_for_event) == 2
+    for p in pool_for_event:
+        assert p["considered_status"] == "DECISION_CONFLICT_EXCLUDED", (
+            f"conflict pool entry status wrong: {p}"
+        )
+        assert p["rank_within_sport_day"] is None, (
+            f"conflict pool entry must have no rank: {p}"
+        )
+
+    # Staged equation balances with the new accounting.
+    total_in = acc["decision_total_records"]
+    assert (acc["timing_rejected"]
+            + acc["identity_ineligible"]
+            + acc["feature_incomplete_or_r2_ineligible"]
+            + acc["unique_decision_records_admitted"]
+            + acc["conflicting_rows"]) == total_in, (
+        f"staged equation imbalance: {acc}"
+    )

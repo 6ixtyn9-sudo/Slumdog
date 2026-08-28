@@ -341,6 +341,76 @@ get `status = "SHADOW_RULE_QUALIFIED"`.
 No global cap. Multiple sport-days, each with its own primary + cohort,
 are allowed and tested.
 
+### Decision content vs source provenance (dedup)
+
+The shadow evaluator receives every capture entry that survived
+verification. The same event may appear in multiple capture entries
+(because the source can be re-snapshotted, the body can be re-fetched,
+odds can update between snapshots, etc.). Across-capture dedup
+classifies these observations as follows, using a **decision
+fingerprint** that contains ONLY price-free decision content:
+
+```text
+decision fingerprint = (
+  sport, event_date, event_id,
+  participant_1, participant_2,
+  probability_1, probability_2, draw_probability,
+)
+```
+
+The decision fingerprint deliberately EXCLUDES provenance fields:
+`source_url`, `raw_sha256`, `sidecar_sha256`, `captured_at`, `route`,
+`body_path`, `sidecar_path`, `capture_receipt_path`. Two observations
+of the same event that differ only in odds or other display metadata
+necessarily have different `raw_sha256` and probably different
+`captured_at`; including those in the fingerprint would mis-classify
+odds-only-different observations as genuine conflicts, which would
+violate the permanent rule that odds cannot affect the price-free
+decision.
+
+For a single composite key `(sport, event_id, event_date)`:
+
+- **One decision fingerprint, N observations** → 1 admitted
+  decision record (the canonical); N-1 counted as
+  `exact_decision_duplicate_extra_rows`; all N source
+  observations preserved on the canonical record as
+  `provenance_observations`.
+- **Multiple decision fingerprints, any number of
+  observations** → entire group excluded from decision
+  evaluation; `conflict_groups` += 1; `conflicting_rows` +=
+  total observations; both fingerprints retained in the
+  manifest's `decision_conflicts` list (per-conflict-group
+  fingerprint trail) for forensic review; no arbitrary winner
+  chosen; all source observations preserved in
+  `capture_provenance` / `input_provenance`.
+
+The accounting fields are:
+
+```text
+unique_decision_records_admitted      (one per non-conflict composite key)
+exact_decision_duplicate_groups       (groups with N>1 observations collapsed)
+exact_decision_duplicate_extra_rows   (sum of (N-1) over collapsed groups)
+conflict_groups                       (composite keys with multiple fingerprints)
+conflicting_rows                      (total observations in conflict groups)
+```
+
+The staged equation remains balanced:
+
+```text
+total_in == timing_rejected
+           + identity_ineligible
+           + feature_incomplete_or_r2_ineligible
+           + unique_decision_records_admitted
+           + exact_decision_duplicate_extra_rows
+           + conflicting_rows
+```
+
+`decision_digest` is independent of per-snapshot source fields
+(odds-only differences, whether between separate runs or between
+observations in the same run, do not change the decision content).
+The `decision_conflicts` list is published in the manifest for
+forensic review but is NOT in the `decision_digest`.
+
 ---
 
 ## 11. 4-ID Split and Atomic Write
@@ -402,16 +472,27 @@ unique_rows + exact_duplicate_rows + conflicting_rows
     + malformed_rows = parsed_rows_total
 ```
 
-**Decision-level** (sums to `unique_nonconflicting_rows`):
+**Decision-level** (sums to `decision_total_records`):
 
 ```
-timing_rejected + identity_ineligible
+timing_rejected
+    + identity_ineligible
     + feature_incomplete_or_r2_ineligible
-    + primary_selected
-    + top3_cohort_selected
-    + eligible_ranked_beyond_top3
-    = unique_nonconflicting_rows
+    + unique_decision_records_admitted
+    + exact_decision_duplicate_extra_rows
+    + conflicting_rows
+    = decision_total_records
 ```
+
+`unique_decision_records_admitted` is the number of composite-key
+groups that have exactly one decision fingerprint; these flow
+into ranking as `primary_selected` + `top3_cohort_selected` +
+`eligible_ranked_beyond_top3`.
+`exact_decision_duplicate_extra_rows` is the sum of (N-1) over
+groups with N>1 observations collapsed into the canonical record.
+`conflicting_rows` is the total observations in groups with
+multiple distinct decision fingerprints; these are excluded from
+the decision path.
 
 In the forward-only path, `captures_verified = unique_rows = 1× record
 count` because the upstream capture / parse boundary is the operator's

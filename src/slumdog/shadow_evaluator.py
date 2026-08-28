@@ -319,53 +319,199 @@ def _timing_classify(
     return ok, rejected
 
 
-def _snapshot_dedup(evaluations: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int, int]:
-    """Composite-key dedup across the entire record set. The first
-    record per (sport, event_id, event_date) is kept; additional
-    observations are counted as exact-duplicate snapshots. Conflicting
-    snapshots (any non-provenance field differing) are dropped entirely
-    and counted.
+def _snapshot_dedup(
+    evaluations: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, int], list[dict[str, Any]]]:
+    """Across-capture composite-key dedup with strict separation
+    of decision content from source provenance (owner integrity
+    review).
+
+    The composite key is ``(sport, event_id, event_date)``. Within
+    one composite-key group, the **decision fingerprint** is the
+    price-free decision content. Two observations with the same
+    composite key and the same decision fingerprint are
+    **decision-equivalent duplicate observations**: one is admitted
+    as the canonical decision record, the others are counted as
+    exact decision duplicates. All source observations are
+    preserved as provenance observations attached to the admitted
+    record.
+
+    Two observations with the same composite key but different
+    decision fingerprints are a **genuine decision conflict**: the
+    group is excluded from decision evaluation, all members are
+    counted in conflict accounting, and no arbitrary winner is
+    chosen. All provenance observations are still preserved.
+
+    The decision fingerprint deliberately contains ONLY fields that
+    must match for the price-free decision to be identical:
+
+    - ``sport, event_date, event_id``
+    - ``participant_1, participant_2`` (the parser has already
+      normalized the strings; the captured form is what reaches
+      the decision)
+    - ``probability_1, probability_2, draw_probability``
+
+    The decision fingerprint deliberately EXCLUDES provenance
+    fields whose values necessarily differ between two observations
+    of the same event that differ only in odds or display metadata:
+
+    - ``source_url`` (may change across captures)
+    - ``raw_sha256`` (the body bytes differ if odds differ)
+    - ``sidecar_sha256`` (mirror of body hash for verification)
+    - ``captured_at`` (the capture timestamp changes)
+    - ``route`` (direct / relay / etc.)
+    - ``body_path, sidecar_path, capture_receipt_path``
+
+    These are PROVENANCE, not decision content. Including them in
+    the fingerprint would cause the runner to mis-classify
+    two observations of the same event with different odds as
+    "conflicting" and drop the entire group from decision
+    evaluation, which violates the permanent rule that odds
+    cannot affect the price-free decision.
+
+    Returns ``(kept_evaluations, accounting, conflict_fingerprints)``
+    where:
+
+    - ``accounting`` is a dict with the keys
+      ``unique_decision_records_admitted``,
+      ``exact_decision_duplicate_groups``,
+      ``exact_decision_duplicate_extra_rows``,
+      ``conflict_groups``,
+      ``conflicting_rows``.
+    - ``conflict_fingerprints`` is a list of dicts (one per
+      conflicting composite-key group), each containing the
+      composite key and the list of distinct decision fingerprints
+      observed. This is published in the manifest for forensic
+      review; it is NOT in the decision_digest.
+
+    The returned ``kept_evaluations`` are REFERENCES to the
+    original eval dicts (not copies). The per-sport-day ranking
+    loop later mutates these same dicts to set
+    ``considered_status`` and ``rank_within_sport_day``; the
+    ``considered_pool`` manifest view is built from the same
+    ``raw_evals`` list and therefore sees those mutations.
+    Provenance observations are stashed on a side-table
+    ``_provenance_observations`` attribute of each kept eval so
+    they are visible in the manifest without polluting the eval
+    dict's main key surface.
     """
-    # Comparison fields: identity, ranking, eligibility, history lookup.
-    # Odds are deliberately NOT in the comparison set; if odds differ
-    # while all price-free decision fields are identical, that is NOT a
-    # conflict.
     from .shadow_contracts import PreEventRecord as _PER
-    def _frozen(r: _PER) -> tuple:
+    def _decision_fingerprint(r: _PER) -> tuple:
+        # Price-free decision content only. See docstring.
         return (
             r.sport, r.event_id, r.event_date,
             r.participant_1, r.participant_2,
             r.probability_1, r.probability_2, r.draw_probability,
-            r.source_url, r.raw_sha256, r.captured_at,
         )
     groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for ev in evaluations:
         key = (ev["record"].sport, ev["record"].event_id, ev["record"].event_date)
         groups.setdefault(key, []).append(ev)
     kept: list[dict[str, Any]] = []
-    exact_dup = 0
-    conflicts = 0
+    accounting = {
+        "unique_decision_records_admitted": 0,
+        "exact_decision_duplicate_groups": 0,
+        "exact_decision_duplicate_extra_rows": 0,
+        "conflict_groups": 0,
+        "conflicting_rows": 0,
+    }
+    # Per-conflict-group fingerprint trail. Each entry is a dict
+    # with the composite key plus the list of distinct decision
+    # fingerprints observed. This is for forensic review of the
+    # manifest; it is NOT included in the decision_digest.
+    conflict_fingerprints: list[dict[str, Any]] = []
     for key, members in groups.items():
-        seen_frozen: set[tuple] = set()
-        canonical: dict[str, Any] | None = None
-        group_conflict = False
+        # Group by decision fingerprint. If more than one distinct
+        # fingerprint appears under one composite key, that is a
+        # genuine decision conflict and the entire group is excluded
+        # from decision evaluation. If only one fingerprint appears,
+        # the first observation is admitted as the canonical record
+        # and any extras are decision-equivalent duplicate
+        # observations (counted but not in the decision path).
+        by_fingerprint: dict[tuple, list[dict[str, Any]]] = {}
         for ev in members:
-            fr = _frozen(ev["record"])
-            if fr in seen_frozen:
-                exact_dup += 1
-                continue
-            seen_frozen.add(fr)
-            if canonical is None:
-                canonical = ev
-            else:
-                group_conflict = True
-                # do not add to kept
-        if group_conflict:
-            conflicts += len(seen_frozen)
+            fp = _decision_fingerprint(ev["record"])
+            by_fingerprint.setdefault(fp, []).append(ev)
+        if len(by_fingerprint) > 1:
+            # Genuine decision conflict: two or more distinct
+            # decision fingerprints under one composite key.
+            # No winner is chosen; the entire group is excluded
+            # from decision evaluation. The conflict is fully
+            # recorded in the accounting below AND the distinct
+            # fingerprints are preserved in
+            # ``conflict_fingerprints`` (published in the
+            # manifest). The individual observations' provenance
+            # is already published in ``capture_provenance`` /
+            # ``input_provenance`` (per sidecar/body digests and
+            # the capture_record_tuples committed to by
+            # ``input_digest``), so no source observation is
+            # silently lost.
+            conflict_count = sum(len(v) for v in by_fingerprint.values())
+            accounting["conflict_groups"] += 1
+            accounting["conflicting_rows"] += conflict_count
+            # Record the distinct fingerprints (no odds, no
+            # provenance) so the conflict is auditable from the
+            # manifest alone.
+            fingerprints_serialized = []
+            for fp, evs in by_fingerprint.items():
+                fingerprints_serialized.append({
+                    "sport": fp[0],
+                    "event_id": fp[1],
+                    "event_date": fp[2],
+                    "participant_1": fp[3],
+                    "participant_2": fp[4],
+                    "probability_1": fp[5],
+                    "probability_2": fp[6],
+                    "draw_probability": fp[7],
+                    "observation_count": len(evs),
+                })
+            conflict_fingerprints.append({
+                "sport": key[0], "event_id": key[1], "event_date": key[2],
+                "decision_fingerprints": sorted(
+                    fingerprints_serialized,
+                    key=lambda d: (
+                        d["participant_1"], d["participant_2"],
+                        d["probability_1"], d["probability_2"],
+                    ),
+                ),
+            })
             continue
-        if canonical is not None:
-            kept.append(canonical)
-    return kept, exact_dup, conflicts
+        # Single fingerprint under this composite key: admit one
+        # canonical record (reference to the original eval dict),
+        # count any extras as decision-equivalent duplicates, and
+        # preserve all observations' provenance on the canonical
+        # record's ``_provenance_observations`` list.
+        members_in_bucket = by_fingerprint[next(iter(by_fingerprint))]
+        canonical = members_in_bucket[0]
+        provenance_observations: list[dict[str, Any]] = []
+        for ev in members_in_bucket:
+            r = ev["record"]
+            provenance_observations.append({
+                "capture_receipt_path": r.capture_receipt_path or "",
+                "sidecar_path": r.sidecar_path or "",
+                "body_path": r.body_path or "",
+                "raw_sha256": r.raw_sha256 or "",
+                "captured_at": r.captured_at or "",
+                "source_url": r.source_url or "",
+                "route": r.route or "",
+            })
+        # Stash provenance observations and observation count on
+        # the canonical eval dict itself (underscore-prefixed to
+        # avoid collision with the public eval interface). The
+        # downstream ranking loop mutates this same dict to set
+        # ``considered_status`` and ``rank_within_sport_day``;
+        # those mutations are visible to the
+        # ``considered_pool_dicts`` builder which walks the
+        # original ``raw_evals`` list.
+        canonical["_provenance_observations"] = provenance_observations
+        canonical["_observation_count"] = len(members_in_bucket)
+        kept.append(canonical)
+        accounting["unique_decision_records_admitted"] += 1
+        extra = len(members_in_bucket) - 1
+        if extra > 0:
+            accounting["exact_decision_duplicate_groups"] += 1
+            accounting["exact_decision_duplicate_extra_rows"] += extra
+    return kept, accounting, conflict_fingerprints
 
 
 def _emit_run(
@@ -391,7 +537,21 @@ def _emit_run(
 
     # Per-record evaluation
     raw_evals = [_evaluate_record(r, history_result) for r in capture_result.records]
+    # Initialize every raw_eval's considered_status. The final
+    # considered_status is set by one of: timing gate, identity
+    # check, feature check, dedup, or the per-sport-day rank loop.
+    # The considered_pool manifest view walks raw_evals at the end
+    # and reads the final considered_status / rank_within_sport_day.
+    for ev in raw_evals:
+        ev.setdefault("considered_status", "PENDING")
+        ev.setdefault("rank_within_sport_day", None)
     timing_ok, timing_rejected = _timing_classify(raw_evals, safe_cutoff=safe_cutoff)
+    # Mark timing-rejected records so they show up correctly in
+    # considered_pool.
+    timing_rejected_evals = [ev for ev in raw_evals if ev not in timing_ok]
+    for ev in timing_rejected_evals:
+        ev["considered_status"] = "TIMING_REJECTED"
+        ev["rank_within_sport_day"] = None
 
     # Identity and feature splits
     identity_ineligible: list[dict[str, Any]] = []
@@ -401,14 +561,84 @@ def _emit_run(
         if not ev["eligible"]:
             if ev["status"] == "FEATURE_INCOMPLETE_OR_R2_INELIGIBLE":
                 feature_incomplete.append(ev)
+                ev["considered_status"] = "FEATURE_INCOMPLETE_OR_R2_INELIGIBLE"
             else:
                 identity_ineligible.append(ev)
+                ev["considered_status"] = ev["status"] or "IDENTITY_INELIGIBLE"
+            ev["rank_within_sport_day"] = None
         else:
             eligible.append(ev)
 
     # Cross-record snapshot dedup (executed on eligible only, since
-    # duplicate of an ineligible record doesn't matter for cohort)
-    eligible_kept, snap_exact_dup, snap_conflicts = _snapshot_dedup(eligible)
+    # duplicate of an ineligible record doesn't matter for cohort).
+    # Returns ``(eligible_kept, dedup_accounting, conflict_fps)``
+    # where ``dedup_accounting`` has the per-composite-key
+    # decision duplicate / conflict accounting and
+    # ``conflict_fps`` records the distinct decision fingerprints
+    # for each conflicting composite-key group.
+    eligible_kept, dedup_accounting, conflict_fingerprints = _snapshot_dedup(eligible)
+    # Mark the extras (decision-equivalent duplicates) so they
+    # show up correctly in considered_pool. The canonical record
+    # for each group is in ``eligible_kept`` and will receive its
+    # final considered_status (PRIMARY / COHORT / R4+) from the
+    # per-sport-day rank loop below. The extras in the same
+    # fingerprint bucket are still in the original ``eligible``
+    # list but not in ``eligible_kept``; mark them now.
+    kept_ids = {id(ev) for ev in eligible_kept}
+    # Re-walk the dedup to mark extras: group by composite key
+    # and fingerprint, mark all-but-first in each fingerprint
+    # bucket as EXACT_DECISION_DUPLICATE_OBSERVATION.
+    from .shadow_contracts import PreEventRecord as _PER
+    def _decision_fingerprint(r: _PER) -> tuple:
+        return (
+            r.sport, r.event_id, r.event_date,
+            r.participant_1, r.participant_2,
+            r.probability_1, r.probability_2, r.draw_probability,
+        )
+    extras_by_fp: dict[tuple[str, str, str], set[int]] = {}
+    for ev in eligible:
+        if id(ev) in kept_ids:
+            continue
+        r = ev["record"]
+        fp = _decision_fingerprint(r)
+        extras_by_fp.setdefault(fp, set()).add(id(ev))
+    # An extra is "not kept" because it's a decision-equivalent
+    # duplicate OR a member of a conflict group. We can tell
+    # which by checking whether the composite key has a conflict
+    # recorded in conflict_fingerprints.
+    conflict_keys: set[tuple[str, str, str]] = {
+        (c["sport"], c["event_id"], c["event_date"])
+        for c in conflict_fingerprints
+    }
+    for fp, extra_ids in extras_by_fp.items():
+        composite_key = (fp[0], fp[1], fp[2])
+        if composite_key in conflict_keys:
+            # Conflict group: every member is
+            # DECISION_CONFLICT_EXCLUDED, not just the extras.
+            # We need to mark all members of this composite key
+            # (kept + extras) as DECISION_CONFLICT_EXCLUDED.
+            # The canonical is the one that was admitted; it
+            # needs to be re-marked to DECISION_CONFLICT_EXCLUDED
+            # so the per-sport-day rank loop does not classify it.
+            for ev in eligible:
+                r = ev["record"]
+                if (r.sport, r.event_id, r.event_date) == composite_key:
+                    ev["considered_status"] = "DECISION_CONFLICT_EXCLUDED"
+                    ev["rank_within_sport_day"] = None
+            continue
+        # Decision-equivalent duplicate extras: mark them.
+        for ev in eligible:
+            if id(ev) in extra_ids:
+                ev["considered_status"] = "EXACT_DECISION_DUPLICATE_OBSERVATION"
+                ev["rank_within_sport_day"] = None
+    # If any canonical of a conflict group is still in
+    # eligible_kept, the per-sport-day rank loop below will run on
+    # it and overwrite considered_status. We must remove conflict
+    # group members from eligible_kept.
+    eligible_kept = [
+        ev for ev in eligible_kept
+        if ev.get("considered_status") != "DECISION_CONFLICT_EXCLUDED"
+    ]
 
     # Per-sport-day ranking
     by_sport_day: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -504,11 +734,35 @@ def _emit_run(
             "eligible_r4_plus_event_ids": r4plus_ids,
         })
 
-    # Decision-level accounting (mutually exclusive)
+    # Decision-level accounting (mutually exclusive staged equation):
+    #
+    #   total_in
+    #     = timing_rejected
+    #     + identity_ineligible
+    #     + feature_incomplete_or_r2_ineligible
+    #     + unique_decision_records_admitted      (one per non-conflict composite key)
+    #     + exact_decision_duplicate_extra_rows   (extras collapsed into the canonical record)
+    #     + conflicting_rows                      (all observations in conflict groups)
+    #
+    # ``unique_decision_records_admitted`` is the number of
+    # composite-key groups that have exactly one decision fingerprint
+    # (the same groups that flow into ranking as
+    # primary + cohort + rank-4+).
+    # ``exact_decision_duplicate_extra_rows`` is the number of
+    # additional observations in single-fingerprint groups that
+    # were collapsed into the canonical record; they are not in
+    # the decision path but they ARE counted as a separate
+    # mutually exclusive bucket so the staged equation balances.
+    # ``conflicting_rows`` is the number of observations that were
+    # excluded because the composite key had multiple decision
+    # fingerprints (no arbitrary winner chosen; the conflict is
+    # recorded in the accounting).
     total_in = len(capture_result.records)
     assert (
         timing_rejected + len(identity_ineligible) + len(feature_incomplete)
-        + primary_count + cohort_count + r4plus_count
+        + dedup_accounting["unique_decision_records_admitted"]
+        + dedup_accounting["exact_decision_duplicate_extra_rows"]
+        + dedup_accounting["conflicting_rows"]
     ) == total_in, "decision-level staging imbalance"
 
     decision_accounting = {
@@ -519,8 +773,22 @@ def _emit_run(
         "primary_selected": primary_count,
         "top3_cohort_selected": cohort_count,
         "eligible_ranked_beyond_top3": r4plus_count,
-        "snapshot_exact_duplicate": snap_exact_dup,
-        "snapshot_conflicting": snap_conflicts,
+        # Decision-equivalent duplicate observations (same composite
+        # key, same decision fingerprint, different provenance).
+        # The provenance observations are preserved on the canonical
+        # decision record and published in the manifest; the
+        # accounting below counts the GROUPS and EXTRA ROWS so the
+        # staging equation remains balanced.
+        "exact_decision_duplicate_groups": dedup_accounting["exact_decision_duplicate_groups"],
+        "exact_decision_duplicate_extra_rows": dedup_accounting["exact_decision_duplicate_extra_rows"],
+        "unique_decision_records_admitted": dedup_accounting["unique_decision_records_admitted"],
+        # Genuine decision conflicts: same composite key, different
+        # decision fingerprint. Excluded from decision evaluation.
+        # All conflicting observations are preserved in
+        # ``capture_provenance`` / ``input_provenance`` for forensic
+        # review; no source observation is silently lost.
+        "conflict_groups": dedup_accounting["conflict_groups"],
+        "conflicting_rows": dedup_accounting["conflicting_rows"],
     }
 
     # Compute input_digest (canonical over capture, history, declaration)
@@ -720,6 +988,14 @@ def _emit_run(
         # ELIGIBLE_RANKED_BEYOND_TOP3`` and MUST NOT appear in
         # ``selections[]``.
         "considered_pool": considered_pool_dicts,
+        # Per-conflict-group fingerprint trail (manifest only; NOT
+        # in the decision_digest). For every composite-key group
+        # classified as a genuine decision conflict (i.e. multiple
+        # distinct decision fingerprints under one composite key),
+        # we record the distinct fingerprints. This makes the
+        # conflict auditable from the manifest alone, without
+        # touching the decision_digest.
+        "decision_conflicts": conflict_fingerprints,
         "capture_provenance": {
             "receipt_path": capture_result.receipt_path,
             "receipt_sha256": capture_result.receipt_sha256,
