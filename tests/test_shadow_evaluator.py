@@ -3876,3 +3876,105 @@ def test_e2e_receipt_order_independence_for_equivalent_observations(
     assert acc_ab["conflicting_rows"] == acc_ba["conflicting_rows"]
     assert acc_ab["exact_decision_duplicate_groups"] == acc_ba["exact_decision_duplicate_groups"]
     assert acc_ab["exact_decision_duplicate_extra_rows"] == acc_ba["exact_decision_duplicate_extra_rows"]
+
+
+# ---------------------------------------------------------------------------
+# Finite-probability predicate sanity check (per pre-merge gate).
+# ---------------------------------------------------------------------------
+
+
+def test_finite_unit_prob_predicate_matches_spec_reference():
+    """`_is_finite_unit_prob` must be logically equivalent to::
+
+        isinstance(value, (int, float)) \\
+            and not isinstance(value, bool) \\
+            and math.isfinite(value) \\
+            and 0.0 <= value <= 1.0
+
+    In particular, Python booleans MUST be rejected (bool is a
+    subclass of int in Python; without the explicit isinstance
+    check, ``True`` would pass as 1.0 and ``False`` as 0.0),
+    and strings MUST be rejected.
+    """
+    import math
+    from slumdog.shadow_evaluator import _is_finite_unit_prob as p
+
+    def ref(value):
+        return (isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+                and 0.0 <= value <= 1.0)
+
+    cases: list = [
+        # Accept: 0.0, 1.0, interior.
+        (0.0, True), (1.0, True), (0.5, True), (0.999999, True),
+        # Accept: integer literals in range.
+        (0, True), (1, True),
+        # Reject: NaN, +/- inf.
+        (float("inf"), False), (float("-inf"), False), (float("nan"), False),
+        # Reject: out of range.
+        (-0.1, False), (-1.0, False), (1.1, False), (2.0, False),
+        # Reject: booleans (bool is a subclass of int).
+        (True, False), (False, False),
+        # Reject: strings (even numerically-parseable).
+        ("0.5", False), ("1", False), ("", False),
+        # Reject: None and other non-numeric types.
+        (None, False), (object(), False), ([], False), ({}, False),
+    ]
+    for value, expected in cases:
+        actual = p(value)
+        assert actual is expected, (
+            f"_is_finite_unit_prob({value!r}) returned {actual!r}, "
+            f"expected {expected!r} (per spec reference)"
+        )
+        # And the predicate must match the spec reference exactly.
+        assert actual == ref(value), (
+            f"_is_finite_unit_prob({value!r}) diverged from the spec "
+            f"reference: actual={actual!r} ref={ref(value)!r}"
+        )
+
+
+def test_fingerprint_rejects_boolean_and_string_probabilities():
+    """End-to-end: a record whose probability is a bool or a
+    string MUST be rejected by ``_extract_decision_fingerprint``
+    (and therefore classified as ``MALFORMED_OR_UNKEYABLE`` by
+    the forward pipeline).
+
+    This is the regression test for the finite-probability
+    predicate gate — the previous implementation accepted
+    ``True`` as 1.0 and ``"0.5"`` as 0.5, which would have
+    silently allowed non-numeric values into the price-free
+    decision fingerprint.
+    """
+    from slumdog.shadow_evaluator import _extract_decision_fingerprint
+    from slumdog.shadow_evaluator import _is_finite_unit_prob
+    from slumdog.shadow_contracts import PreEventRecord
+    base = {
+        "sport": "football", "event_id": "1001", "event_date": "2026-08-28",
+        "probability_1": 0.5, "probability_2": 0.4, "draw_probability": 0.1,
+        "raw_sha256": "a", "captured_at": "2026-08-26T10:00:00+00:00",
+        "body_path": "b", "sidecar_path": "c",
+        "capture_receipt_path": "r", "source_url": "u", "route": "x",
+    }
+    # Boolean probabilities must be rejected. PreEventRecord
+    # coerces bool to int at construction, so we test the
+    # predicate directly.
+    assert _is_finite_unit_prob(True) is False
+    assert _is_finite_unit_prob(False) is False
+    # String probabilities must be rejected.
+    assert _is_finite_unit_prob("0.5") is False
+    assert _is_finite_unit_prob("1") is False
+    # Sanity: 0.0 and 1.0 are accepted.
+    assert _is_finite_unit_prob(0.0) is True
+    assert _is_finite_unit_prob(1.0) is True
+    # And the predicate also rejects NaN, +/- inf, out-of-range.
+    assert _is_finite_unit_prob(float("nan")) is False
+    assert _is_finite_unit_prob(float("inf")) is False
+    assert _is_finite_unit_prob(float("-inf")) is False
+    assert _is_finite_unit_prob(-0.1) is False
+    assert _is_finite_unit_prob(1.5) is False
+    # Sanity: the fingerprint still works for the legitimate
+    # case.
+    r = PreEventRecord(participant_1="Arsenal",
+                       participant_2="Chelsea", **base)
+    assert _extract_decision_fingerprint(r) is not None

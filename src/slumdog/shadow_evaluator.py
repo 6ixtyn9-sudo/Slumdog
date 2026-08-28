@@ -308,17 +308,38 @@ def _extract_decision_fingerprint(
 
 
 def _is_finite_unit_prob(value: Any) -> bool:
-    """Return True iff ``value`` is a finite float in [0, 1]."""
-    if value is None:
+    """Return True iff ``value`` is a finite ``int`` or ``float`` (not
+    a bool, not a string) in [0, 1].
+
+    Logically equivalent to::
+
+        isinstance(value, (int, float)) \\
+            and not isinstance(value, bool) \\
+            and math.isfinite(value) \\
+            and 0.0 <= value <= 1.0
+
+    The explicit ``isinstance(value, (int, float))`` gate rejects
+    strings (``"0.5"``), bytes, decimals encoded as strings, and
+    every other non-numeric type. The ``not isinstance(value, bool)``
+    gate rejects Python booleans, which are a subclass of ``int``:
+    ``True`` would otherwise pass as ``1.0`` and ``False`` as
+    ``0.0``. The ``math.isfinite`` gate rejects NaN and both
+    infinities. The range check rejects values outside
+    ``[0.0, 1.0]``.
+
+    This is the single source of truth for "is this a valid price-
+    free probability". It is called by
+    :func:`_extract_decision_fingerprint` to validate
+    ``probability_1``, ``probability_2``, and ``draw_probability``.
+    """
+    if isinstance(value, bool):
         return False
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
+    if not isinstance(value, (int, float)):
         return False
     import math as _math
-    if not _math.isfinite(f):
+    if not _math.isfinite(value):
         return False
-    return 0.0 <= f <= 1.0
+    return 0.0 <= value <= 1.0
 
 
 def _fingerprint_to_dict(fp: tuple) -> dict[str, Any]:
@@ -358,7 +379,8 @@ def validate_event_identity(record: PreEventRecord) -> tuple[bool, str | None]:
     p1, p2 = record.probability_1, record.probability_2
     if p1 is None or p2 is None:
         return False, "MISSING_PROBABILITY"
-    if not (0.0 <= p1 <= 1.0) or not (0.0 <= p2 <= 1.0):
+    if (not _is_finite_unit_prob(p1)
+            or not _is_finite_unit_prob(p2)):
         return False, "OUT_OF_RANGE_PROBABILITY"
     identity = identify_forebet_underdog(
         probability_1=p1, probability_2=p2, draw_probability=record.draw_probability,
