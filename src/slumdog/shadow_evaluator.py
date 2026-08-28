@@ -255,9 +255,24 @@ def _extract_decision_fingerprint(
       token ``21`` to NOT be rewritten to ``12``, and ``key_of``
       preserves digit order, so ``key_of("21") == "21"`` and
       ``key_of("12") == "12"``)
-    - any of ``probability_1``, ``probability_2``,
-      ``draw_probability`` is None
-    - any probability is outside ``[0.0, 1.0]``
+    - ``probability_1`` or ``probability_2`` is None
+    - ``probability_1`` or ``probability_2`` is not finite
+    - ``probability_1`` or ``probability_2`` is outside
+      ``[0.0, 1.0]``
+    - ``draw_probability`` is present but not finite
+    - ``draw_probability`` is present but outside ``[0.0, 1.0]``
+    - the sport's ``draw_possible`` is False but
+      ``draw_probability`` is present and not 0.0
+      (two-way sports must not carry a non-zero draw)
+
+    ``draw_probability`` may legitimately be ``None``: the
+    price-free contract explicitly supports
+    ``forebet_draw_probability_missing`` and two-way sports
+    commonly have no draw. ``None`` is a valid fingerprint
+    value and is distinguished from ``0.0`` in the fingerprint
+    tuple so two observations of the same event that differ
+    only in the presence/absence of a draw probability are
+    NOT collapsed.
     """
     from .sports import SPORTS
     if record.sport not in SPORTS:
@@ -272,15 +287,38 @@ def _extract_decision_fingerprint(
         return None
     if k1 == k2:
         return None
-    p1, p2, dp = record.probability_1, record.probability_2, record.draw_probability
-    if p1 is None or p2 is None or dp is None:
+    p1 = record.probability_1
+    p2 = record.probability_2
+    dp = record.draw_probability
+    if p1 is None or p2 is None:
         return None
-    if not (0.0 <= p1 <= 1.0) or not (0.0 <= p2 <= 1.0) or not (0.0 <= dp <= 1.0):
+    if not _is_finite_unit_prob(p1) or not _is_finite_unit_prob(p2):
         return None
+    if dp is not None:
+        if not _is_finite_unit_prob(dp):
+            return None
+        spec = SPORTS[record.sport]
+        if not getattr(spec, "draw_possible", False) and dp != 0.0:
+            # Two-way sport carrying a non-zero draw is malformed.
+            return None
     return (
         record.sport, record.event_id, record.event_date,
         k1, k2, p1, p2, dp,
     )
+
+
+def _is_finite_unit_prob(value: Any) -> bool:
+    """Return True iff ``value`` is a finite float in [0, 1]."""
+    if value is None:
+        return False
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return False
+    import math as _math
+    if not _math.isfinite(f):
+        return False
+    return 0.0 <= f <= 1.0
 
 
 def _fingerprint_to_dict(fp: tuple) -> dict[str, Any]:
@@ -448,6 +486,42 @@ def _timing_classify(
 # ---------------------------------------------------------------------------
 
 
+def _select_canonical(members: list[PreEventRecord]) -> PreEventRecord:
+    """Deterministic canonical-record selection for a single
+    fingerprint bucket.
+
+    The shadow pick evaluator is required to be
+    order-independent at the receipt level: two runs that
+    swap the order of two decision-equivalent observations
+    in the capture receipt MUST select the same canonical
+    record, the same features, the same R1 rank, and produce
+    the same ``decision_digest``.
+
+    The canonical record is the observation with the
+    lexicographically smallest ``raw_sha256`` of its body,
+    with ``captured_at`` and ``body_path`` as further
+    tiebreakers. This is a stable, receipt-order-independent
+    rule: ``raw_sha256`` is a function of the body bytes
+    only, and two decision-equivalent observations
+    (identical normalized participants and probabilities)
+    with different bodies (e.g. different odds metadata)
+    have different ``raw_sha256`` values. ALL source
+    observations are still retained as
+    ``provenance_observations`` on the canonical record; the
+    canonical is just the unit the downstream
+    identity/features/R2/R1 pipeline evaluates.
+    """
+    return min(
+        members,
+        key=lambda r: (
+            r.raw_sha256 or "",
+            r.captured_at or "",
+            r.body_path or "",
+            r.source_url or "",
+        ),
+    )
+
+
 def _conflict_classify(
     records: list[PreEventRecord],
 ) -> tuple[list[_AdmittedCanonical], dict[str, int], list[dict[str, Any]]]:
@@ -526,7 +600,14 @@ def _conflict_classify(
         "conflicting_rows": 0,
     }
     conflict_fingerprints: list[dict[str, Any]] = []
-    for key, members in groups.items():
+    # Iterate groups in sorted order so the manifest is
+    # reproducible across runs that differ only in receipt
+    # order. ``groups`` is a dict whose iteration order is the
+    # insertion order of the first record seen for each
+    # composite key; that order depends on receipt order, so
+    # we sort here.
+    for key in sorted(groups.keys()):
+        members = groups[key]
         by_fingerprint: dict[tuple, list[PreEventRecord]] = {}
         for r in members:
             fp = fingerprints_by_record[id(r)]
@@ -554,7 +635,17 @@ def _conflict_classify(
             continue
         # Single fingerprint under this composite key.
         members_in_bucket = by_fingerprint[next(iter(by_fingerprint))]
-        canonical = members_in_bucket[0]
+        # Deterministic canonical selection: the canonical
+        # record is the observation with the lexicographically
+        # smallest ``raw_sha256`` of its body, with
+        # ``captured_at`` and ``body_path`` as further
+        # tiebreakers. This makes the canonical choice
+        # independent of the order in which observations
+        # appeared in the capture receipt. ALL source
+        # observations are still retained as
+        # ``provenance_observations`` on the canonical record
+        # so no source is silently lost.
+        canonical = _select_canonical(members_in_bucket)
         provenance_observations: list[dict[str, Any]] = []
         for r in members_in_bucket:
             provenance_observations.append({

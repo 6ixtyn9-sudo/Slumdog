@@ -336,6 +336,33 @@ sidecar / receipt paths); they are committed to by
 `input_digest` and recorded in the per-record
 `_provenance_observations` list on the canonical record.
 
+`draw_probability` may legitimately be `None` (the
+price-free contract explicitly supports
+`forebet_draw_probability_missing` and two-way sports
+commonly have no draw). `None` is a valid fingerprint value
+and is distinguished from `0.0` in the fingerprint tuple so
+two observations of the same event that differ only in the
+presence/absence of a draw probability are NOT collapsed.
+If `draw_probability` is present it must be finite and in
+`[0, 1]`; a two-way sport carrying a non-zero draw is
+malformed.
+
+Canonical-record selection is deterministic: for a single
+fingerprint bucket the canonical is the observation with
+the lexicographically smallest `raw_sha256` of its body
+(with `captured_at`, `body_path`, and `source_url` as
+tiebreakers). This makes the canonical choice
+order-independent at the receipt level: two runs whose
+capture receipts differ only in the byte order of two
+decision-equivalent observations select the same canonical
+record, the same features, the same R1 rank, and produce
+the same `decision_digest`. `input_digest` legitimately
+differs when the receipt byte order differs (the receipt's
+SHA-256 is committed to by `input_digest`). ALL source
+observations are still retained as
+`provenance_observations` on the canonical record; no
+source is silently lost.
+
 Digests are distinct:
 - `input_digest` commits to every source observation AND
   to the conflict fingerprint trail.

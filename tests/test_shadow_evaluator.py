@@ -2599,7 +2599,6 @@ def test_same_run_odds_provenance_only_observation_is_not_a_conflict(
         f"got body_counts={body_counts}"
     )
     single_dir = run_dirs_single[body_counts.index(1)]
-    twocap_dir = run_dirs_single[body_counts.index(2)]
     manifest_single = json.loads(
         (single_dir / "manifest.json").read_text()
     )
@@ -3231,7 +3230,7 @@ def test_fingerprint_participant_normalization_rejects_self_pair_after_normalize
     fingerprint (proving the fingerprint uses the normalized
     keys, not the display strings, for the self-pair check).
     """
-    from slumdog.shadow_evaluator import _extract_decision_fingerprint
+    from slumdog.shadow_evaluator import _extract_decision_fingerprint as fp_fn
     from slumdog.shadow_contracts import PreEventRecord, key_of
     base = {
         "sport": "football", "event_id": "1001", "event_date": "2026-08-28",
@@ -3246,7 +3245,6 @@ def test_fingerprint_participant_normalization_rejects_self_pair_after_normalize
     # And verifies the fingerprint helper uses the same
     # normalization function (key_of) so the rejection is
     # consistent across the two layers.
-    from slumdog.shadow_evaluator import _extract_decision_fingerprint as fp_fn
     # A direct key_of check matches what the fingerprint
     # would compute internally.
     assert key_of("Arsenal") == key_of("arsenal") == "arsenal"
@@ -3320,3 +3318,561 @@ def test_fingerprint_rejects_empty_normalized_participant():
     assert _extract_decision_fingerprint(r) is None
     r2 = PreEventRecord(participant_1="Arsenal", participant_2="***", **base)
     assert _extract_decision_fingerprint(r2) is None
+
+
+# ---------------------------------------------------------------------------
+# Pre-merge integrity checks: draw_probability=None support and
+# order-independent canonical selection.
+# ---------------------------------------------------------------------------
+
+
+def test_fingerprint_allows_draw_probability_none_on_two_way_sport():
+    """A supported two-way sport (e.g. ``basketball``) with
+    ``draw_probability=None`` MUST produce a well-formed
+    decision fingerprint. ``draw_probability=None`` is the
+    legitimate state for two-way sports and the price-free
+    contract explicitly supports the
+    ``forebet_draw_probability_missing`` feature.
+
+    The ``PreEventRecord`` dataclass accepts ``draw_probability=None``
+    on construction (the identity validation handles the
+    two-way-sport rule separately). The new
+    ``_extract_decision_fingerprint`` MUST also accept it.
+    """
+    from slumdog.shadow_evaluator import _extract_decision_fingerprint
+    from slumdog.shadow_contracts import PreEventRecord
+    from slumdog.sports import SPORTS
+    # Pick a sport that is actually configured as two-way
+    # (draw_possible=False) in the live sport inventory.
+    two_way_sport = next(
+        sport for sport, spec in SPORTS.items() if not spec.draw_possible
+    )
+    base = {
+        "sport": two_way_sport, "event_id": "1001",
+        "event_date": "2026-08-28",
+        "probability_1": 0.55, "probability_2": 0.45,
+        "raw_sha256": "a", "captured_at": "2026-08-26T10:00:00+00:00",
+        "body_path": "b", "sidecar_path": "c",
+        "capture_receipt_path": "r", "source_url": "u", "route": "x",
+    }
+    r = PreEventRecord(participant_1="Lakers", participant_2="Celtics",
+                       draw_probability=None, **base)
+    fp = _extract_decision_fingerprint(r)
+    assert fp is not None, (
+        f"draw_probability=None MUST be allowed on a two-way sport; "
+        f"got None for {two_way_sport}"
+    )
+    assert fp[7] is None, (
+        f"fingerprint must preserve draw_probability=None distinct "
+        f"from 0.0; got fp[7]={fp[7]!r}"
+    )
+
+
+def test_fingerprint_allows_draw_probability_none_on_draw_capable_sport():
+    """A draw-capable sport (e.g. ``football``) with
+    ``draw_probability=None`` MUST also produce a
+    well-formed decision fingerprint. Missing draw probability
+    flows into the existing ``forebet_draw_probability_missing``
+    feature rather than being rejected by the keyability
+    layer.
+    """
+    from slumdog.shadow_evaluator import _extract_decision_fingerprint
+    from slumdog.shadow_contracts import PreEventRecord
+    from slumdog.sports import SPORTS
+    # Pick a sport that is actually configured as draw-capable
+    # in the live sport inventory.
+    draw_capable_sport = next(
+        sport for sport, spec in SPORTS.items() if spec.draw_possible
+    )
+    base = {
+        "sport": draw_capable_sport, "event_id": "1001",
+        "event_date": "2026-08-28",
+        "probability_1": 0.50, "probability_2": 0.40,
+        "raw_sha256": "a", "captured_at": "2026-08-26T10:00:00+00:00",
+        "body_path": "b", "sidecar_path": "c",
+        "capture_receipt_path": "r", "source_url": "u", "route": "x",
+    }
+    r = PreEventRecord(participant_1="Arsenal", participant_2="Chelsea",
+                       draw_probability=None, **base)
+    fp = _extract_decision_fingerprint(r)
+    assert fp is not None, (
+        f"draw_probability=None MUST be allowed on a draw-capable "
+        f"sport (missing draw flows to forebet_draw_probability_missing); "
+        f"got None for {draw_capable_sport}"
+    )
+    assert fp[7] is None
+
+
+def test_fingerprint_distinguishes_none_from_zero_from_concrete_draw():
+    """The decision fingerprint MUST distinguish
+    ``draw_probability=None``, ``draw_probability=0.0``, and a
+    concrete non-zero ``draw_probability``. This is the
+    documented behavior — two observations of the same event
+    that differ in the presence/absence of a draw probability
+    are NOT decision-equivalent.
+    """
+    from slumdog.shadow_evaluator import _extract_decision_fingerprint
+    from slumdog.shadow_contracts import PreEventRecord
+    base = {
+        "sport": "football", "event_id": "1001", "event_date": "2026-08-28",
+        "probability_1": 0.5, "probability_2": 0.4,
+        "raw_sha256": "a", "captured_at": "2026-08-26T10:00:00+00:00",
+        "body_path": "b", "sidecar_path": "c",
+        "capture_receipt_path": "r", "source_url": "u", "route": "x",
+    }
+    r_none = PreEventRecord(participant_1="Arsenal", participant_2="Chelsea",
+                            draw_probability=None, **base)
+    r_zero = PreEventRecord(participant_1="Arsenal", participant_2="Chelsea",
+                            draw_probability=0.0, **base)
+    r_concrete = PreEventRecord(participant_1="Arsenal", participant_2="Chelsea",
+                                draw_probability=0.10, **base)
+    fp_none = _extract_decision_fingerprint(r_none)
+    fp_zero = _extract_decision_fingerprint(r_zero)
+    fp_concrete = _extract_decision_fingerprint(r_concrete)
+    assert fp_none is not None
+    assert fp_zero is not None
+    assert fp_concrete is not None
+    # All three must be distinct fingerprints.
+    assert fp_none[7] is None
+    assert fp_zero[7] == 0.0
+    assert fp_concrete[7] == 0.10
+    # None, 0.0, 0.10 are all distinct in the tuple.
+    assert fp_none != fp_zero, (
+        f"draw_probability=None and draw_probability=0.0 MUST be "
+        f"distinct fingerprints; got {fp_none} == {fp_zero}"
+    )
+    assert fp_none != fp_concrete
+    assert fp_zero != fp_concrete
+
+
+def test_fingerprint_rejects_nonfinite_or_out_of_range_present_draw():
+    """If ``draw_probability`` is present, it MUST be finite and
+    in [0, 1]. Non-finite or out-of-range present draw
+    probabilities fail closed (return None from the
+    fingerprint function).
+    """
+    from slumdog.shadow_evaluator import _extract_decision_fingerprint
+    from slumdog.shadow_contracts import PreEventRecord
+    base = {
+        "sport": "football", "event_id": "1001", "event_date": "2026-08-28",
+        "probability_1": 0.5, "probability_2": 0.4,
+        "raw_sha256": "a", "captured_at": "2026-08-26T10:00:00+00:00",
+        "body_path": "b", "sidecar_path": "c",
+        "capture_receipt_path": "r", "source_url": "u", "route": "x",
+    }
+    for bad in (float("inf"), float("-inf"), float("nan"), 1.5, -0.1, 2.0):
+        r = PreEventRecord(participant_1="Arsenal", participant_2="Chelsea",
+                           draw_probability=bad, **base)
+        fp = _extract_decision_fingerprint(r)
+        assert fp is None, (
+            f"present draw_probability={bad!r} MUST be rejected; "
+            f"got {fp}"
+        )
+
+
+def test_fingerprint_rejects_missing_probability_1_or_2():
+    """Missing ``probability_1`` or ``probability_2`` remains
+    malformed. The two participant probabilities are the core
+    of the price-free decision; either being None rejects the
+    record from keyability.
+    """
+    from slumdog.shadow_evaluator import _extract_decision_fingerprint
+    from slumdog.shadow_contracts import PreEventRecord
+    base = {
+        "sport": "football", "event_id": "1001", "event_date": "2026-08-28",
+        "raw_sha256": "a", "captured_at": "2026-08-26T10:00:00+00:00",
+        "body_path": "b", "sidecar_path": "c",
+        "capture_receipt_path": "r", "source_url": "u", "route": "x",
+    }
+    r_p1 = PreEventRecord(participant_1="Arsenal", participant_2="Chelsea",
+                          probability_1=None, probability_2=0.4,
+                          draw_probability=0.1, **base)
+    assert _extract_decision_fingerprint(r_p1) is None
+    r_p2 = PreEventRecord(participant_1="Arsenal", participant_2="Chelsea",
+                          probability_1=0.5, probability_2=None,
+                          draw_probability=0.1, **base)
+    assert _extract_decision_fingerprint(r_p2) is None
+
+
+def test_fingerprint_rejects_two_way_sport_with_nonzero_draw():
+    """A two-way sport carrying a non-zero draw probability is
+    malformed (the sport's ``draw_possible`` flag is False
+    and a non-zero draw on a two-way sport is a contract
+    violation). ``draw_probability=0.0`` and ``draw_probability=None``
+    are accepted.
+    """
+    from slumdog.shadow_evaluator import _extract_decision_fingerprint
+    from slumdog.shadow_contracts import PreEventRecord
+    from slumdog.sports import SPORTS
+    two_way_sport = next(
+        sport for sport, spec in SPORTS.items() if not spec.draw_possible
+    )
+    base = {
+        "sport": two_way_sport, "event_id": "1001",
+        "event_date": "2026-08-28",
+        "probability_1": 0.55, "probability_2": 0.45,
+        "raw_sha256": "a", "captured_at": "2026-08-26T10:00:00+00:00",
+        "body_path": "b", "sidecar_path": "c",
+        "capture_receipt_path": "r", "source_url": "u", "route": "x",
+    }
+    r_nonzero = PreEventRecord(participant_1="Lakers", participant_2="Celtics",
+                               draw_probability=0.10, **base)
+    assert _extract_decision_fingerprint(r_nonzero) is None, (
+        f"non-zero draw on a two-way sport {two_way_sport!r} MUST "
+        f"be rejected; got {_extract_decision_fingerprint(r_nonzero)}"
+    )
+    # 0.0 and None remain accepted.
+    r_zero = PreEventRecord(participant_1="Lakers", participant_2="Celtics",
+                            draw_probability=0.0, **base)
+    assert _extract_decision_fingerprint(r_zero) is not None
+    r_none = PreEventRecord(participant_1="Lakers", participant_2="Celtics",
+                            draw_probability=None, **base)
+    assert _extract_decision_fingerprint(r_none) is not None
+
+
+def test_e2e_two_way_sport_with_missing_draw_runs_through_r2(tmp_root, monkeypatch):
+    """End-to-end: a two-way sport with
+    ``draw_probability=None`` flows through the full pipeline
+    (keyability -> timing -> conflict -> identity -> features
+    -> R2 -> R1 -> per-sport-day rank). The
+    ``forebet_draw_probability_missing`` feature is recorded
+    as 1.0; if R2 is otherwise satisfied, the event can be
+    selected.
+
+    Note: the price-free contract permits
+    ``draw_probability=None`` for any sport that is not
+    ``draw_possible``. The HTML parser in this repo does not
+    currently emit a non-football HTML stream (basketball /
+    tennis / etc. use the HTML parser which requires
+    ``div.rcnt`` rows). We use the football JSON parser and
+    construct a football capture entry whose ``Pred_X`` is
+    absent so the parser emits ``draw_probability=None`` —
+    this is the same code path the football JSON parser uses
+    for the genuinely-no-draw case (the existing parser
+    drops ``Pred_X`` to ``None`` when it cannot be parsed as
+    a number, which is the documented "no draw" case for
+    two-way sports).
+    """
+    from slumdog import shadow_evaluator as se
+    fixed_clock = datetime(2026, 8, 26, 10, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(se, "_now_utc", lambda: fixed_clock)
+
+    reports = tmp_root / "data" / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    # History sufficient for R2 on the pairing.
+    hist_rows: list[dict] = []
+    for i in range(6):
+        hist_rows.append({
+            "event_id": f"a_a_{i}", "sport": "football",
+            "event_date": f"2024-01-{(i % 28) + 1:02d}",
+            "participant_1": "Arsenal", "participant_2": "Chelsea",
+            "winner_index": 1, "score_1": 2.0, "score_2": 1.0,
+            "probability_1": 0.55, "probability_2": 0.30,
+            "draw_probability": 0.15, "forebet_pick": None,
+            "disposition": "SETTLED",
+        })
+    for i in range(2):
+        hist_rows.append({
+            "event_id": f"h2h_ac_{i}", "sport": "football",
+            "event_date": f"2024-05-{(i % 28) + 1:02d}",
+            "participant_1": "Arsenal", "participant_2": "Chelsea",
+            "winner_index": 1, "score_1": 1.0, "score_2": 0.0,
+            "probability_1": 0.55, "probability_2": 0.30,
+            "draw_probability": 0.15, "forebet_pick": None,
+            "disposition": "SETTLED",
+        })
+    gz_path = reports / "history_football.jsonl.gz"
+    _make_history_gz(gz_path, hist_rows)
+
+    target_date = "2026-08-28"
+    # Build a capture entry where Pred_X is absent (so the
+    # parser sets draw_probability=None). This is the
+    # legitimate "no draw" state for two-way markets and
+    # corresponds to the forebet_draw_probability_missing
+    # feature flag.
+    row = {
+        "id": "1001", "HOST_NAME": "Arsenal", "GUEST_NAME": "Chelsea",
+        "Pred_1": "50", "Pred_2": "40",
+        "best_odd_1": "2.00", "best_odd_2": "2.50",
+        "short_tag": "EPL", "DATE_BAH": f"{target_date} 15:00",
+        "host_sc_pr": "1", "guest_sc_pr": "1", "goalsavg": "2.5",
+        "Host_SC": None, "Guest_SC": None, "comment": "",
+    }
+    # No Pred_X in the row → parser emits draw_probability=None.
+    body = ("<html><body>" + json.dumps([[row], {}]) +
+            "</body></html>").encode("utf-8")
+    body_sha = hashlib.sha256(body).hexdigest()
+    body_dir = tmp_root / "data" / "raw" / "football" / target_date
+    body_dir.mkdir(parents=True, exist_ok=True)
+    body_path = body_dir / f"20260826T100000Z_{body_sha[:12]}.txt"
+    sidecar_path = body_dir / f"20260826T100000Z_{body_sha[:12]}.json"
+    body_path.write_bytes(body)
+    sidecar = {
+        "sport": "football", "target_date": target_date,
+        "captured_at": "2026-08-26T10:00:00+00:00",
+        "source_url": "https://example.invalid/football/2026-08-28",
+        "relay_url": "https://example.invalid/football/2026-08-28",
+        "body_format": "json", "sha256": body_sha, "bytes": len(body),
+        "body_path": str(body_path.relative_to(tmp_root)),
+        "metadata_path": str(sidecar_path.relative_to(tmp_root)),
+        "route": "direct",
+    }
+    sidecar_path.write_text(json.dumps(sidecar, indent=2, sort_keys=True))
+    receipt = {
+        "target_date": target_date,
+        "generated_at": "2026-08-26T10:00:01+00:00",
+        "captured": [sidecar],
+        "failures": [], "reused": 0, "football_markets": None,
+    }
+    receipt_path = reports / f"capture_{target_date}.json"
+    receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True))
+    cfg = tmp_root / "config"
+    cfg.mkdir(parents=True, exist_ok=True)
+    import shutil
+    shutil.copy("config/research_baselines_v1.json",
+                cfg / "research_baselines_v1.json")
+    shutil.copy("config/shadow_evaluator_v1.json",
+                cfg / "shadow_evaluator_v1.json")
+
+    rc = main([
+        "--date", target_date, "--capture-receipt", str(receipt_path),
+        "--history", str(gz_path),
+        "--config", str(cfg / "shadow_evaluator_v1.json"),
+        "--root", str(tmp_root),
+    ])
+    assert rc == 0
+    date_dir = tmp_root / "data" / "reports" / "shadow" / target_date
+    run_dirs = [d for d in date_dir.iterdir()
+                if d.is_dir() and d.name != "BLOCKED"]
+    assert len(run_dirs) == 1
+    manifest = json.loads((run_dirs[0] / "manifest.json").read_text())
+    payload = json.loads((run_dirs[0] / "shadow_selections.json").read_text())
+    acc = manifest["decision_accounting"]
+
+    # The event reached the decision path. The
+    # ``malformed_or_unkeyable`` bucket MUST be 0 (no record
+    # was rejected solely because draw_probability was None).
+    assert acc["malformed_or_unkeyable"] == 0, (
+        f"two-way sport with draw_probability=None MUST NOT be "
+        f"rejected by keyability; got acc={acc}"
+    )
+    # ``admitted_canonical_records`` should be 1 (single
+    # observation, one admitted canonical, one extra
+    # duplicate because the fixture has two observations).
+    assert acc["admitted_canonical_records"] == 1
+    # ``primary_selected`` is 1 if the event is R2-eligible.
+    assert acc["primary_selected"] == 1, (
+        f"event MUST be primary on a sport-day with one "
+        f"R2-eligible event; got acc={acc}"
+    )
+    # ``forebet_draw_probability_missing`` MUST be 1.0 in the
+    # selected record's features, NOT 0.0.
+    selection = payload["selections"][0]
+    assert selection["features"]["forebet_draw_probability_missing"] == 1.0, (
+        f"forebet_draw_probability_missing MUST be 1.0 for "
+        f"draw_probability=None; got {selection['features']}"
+    )
+
+
+def test_e2e_receipt_order_independence_for_equivalent_observations(
+    tmp_root, monkeypatch,
+):
+    """Receipt-order independence: two observations of the same
+    event with equivalent decision content (same normalized
+    participants, same probabilities, different display
+    variants and different provenance) MUST produce the same
+    canonical record, the same feature values, the same R2
+    result, the same rank, and the same ``decision_digest``,
+    regardless of the order in which the observations appear
+    in the capture receipt.
+    """
+    from slumdog import shadow_evaluator as se
+    fixed_clock = datetime(2026, 8, 26, 10, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(se, "_now_utc", lambda: fixed_clock)
+
+    reports = tmp_root / "data" / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    # History sufficient for R2.
+    hist_rows: list[dict] = []
+    for i in range(6):
+        hist_rows.append({
+            "event_id": f"a_a_{i}", "sport": "football",
+            "event_date": f"2024-01-{(i % 28) + 1:02d}",
+            "participant_1": "Arsenal", "participant_2": "Chelsea",
+            "winner_index": 1, "score_1": 2.0, "score_2": 1.0,
+            "probability_1": 0.55, "probability_2": 0.30,
+            "draw_probability": 0.15, "forebet_pick": None,
+            "disposition": "SETTLED",
+        })
+    for i in range(2):
+        hist_rows.append({
+            "event_id": f"h2h_ac_{i}", "sport": "football",
+            "event_date": f"2024-05-{(i % 28) + 1:02d}",
+            "participant_1": "Arsenal", "participant_2": "Chelsea",
+            "winner_index": 1, "score_1": 1.0, "score_2": 0.0,
+            "probability_1": 0.55, "probability_2": 0.30,
+            "draw_probability": 0.15, "forebet_pick": None,
+            "disposition": "SETTLED",
+        })
+    gz_path = reports / "history_football.jsonl.gz"
+    _make_history_gz(gz_path, hist_rows)
+
+    # Two observations of the same event with the SAME
+    # decision content (same probabilities, equivalent
+    # participant display names) but DIFFERENT provenance
+    # (different display variants, captured_at, source_url,
+    # route, body bytes, sidecar, body_path, raw_sha256).
+    target_date = "2026-08-28"
+    rows_a = [{
+        "id": "1001", "HOST_NAME": "Arsenal", "GUEST_NAME": "Chelsea",
+        "Pred_1": "50", "Pred_X": "10", "Pred_2": "40",
+        "best_odd_1": "2.00", "best_odd_2": "2.50", "best_odd_X": "10.00",
+        "short_tag": "EPL", "DATE_BAH": f"{target_date} 15:00",
+        "host_sc_pr": "1", "guest_sc_pr": "1", "goalsavg": "2.5",
+        "Host_SC": None, "Guest_SC": None, "comment": "uppercase",
+    }]
+    rows_b = [{
+        "id": "1001", "HOST_NAME": "arsenal", "GUEST_NAME": "chelsea",
+        "Pred_1": "50", "Pred_X": "10", "Pred_2": "40",
+        "best_odd_1": "1.85", "best_odd_2": "2.80", "best_odd_X": "9.50",
+        "short_tag": "EPL", "DATE_BAH": f"{target_date} 15:00",
+        "host_sc_pr": "1", "guest_sc_pr": "1", "goalsavg": "2.5",
+        "Host_SC": None, "Guest_SC": None, "comment": "lowercase",
+    }]
+    receipt_path_ab, sidecars_ab = _build_two_capture_entries_for_same_event(
+        tmp_root, target_date,
+        rows_a=rows_a, rows_b=rows_b,
+        captured_at_a="2026-08-26T10:00:00+00:00",
+        captured_at_b="2026-08-26T11:00:00+00:00",
+        source_url_a="https://example.invalid/football/2026-08-28",
+        source_url_b="https://example.invalid/football/2026-08-28?v=2",
+    )
+    # Build a BA-ordered receipt by swapping the sidecar
+    # entries in the captured list.
+    cfg = tmp_root / "config"
+    cfg.mkdir(parents=True, exist_ok=True)
+    import shutil
+    shutil.copy("config/research_baselines_v1.json",
+                cfg / "research_baselines_v1.json")
+    shutil.copy("config/shadow_evaluator_v1.json",
+                cfg / "shadow_evaluator_v1.json")
+
+    receipt_ba_path = tmp_root / "data" / "reports" / f"capture_{target_date}_twocap_ba.json"
+    receipt_ba = {
+        "target_date": target_date,
+        "generated_at": "2026-08-26T10:00:01+00:00",
+        "captured": [sidecars_ab[1], sidecars_ab[0]],
+        "failures": [], "reused": 0, "football_markets": None,
+    }
+    receipt_ba_path.write_text(
+        json.dumps(receipt_ba, indent=2, sort_keys=True)
+    )
+
+    def _run(receipt_path):
+        rc = main([
+            "--date", target_date, "--capture-receipt", str(receipt_path),
+            "--history", str(gz_path),
+            "--config", str(cfg / "shadow_evaluator_v1.json"),
+            "--root", str(tmp_root),
+        ])
+        assert rc == 0
+        date_dir = tmp_root / "data" / "reports" / "shadow" / target_date
+        # The just-written run is uniquely identified by the
+        # receipt_sha256 (which is committed to by the
+        # manifest's input_provenance) and by the
+        # payload_file_sha256. The most recently written
+        # manifest has the largest mtime.
+        run_dirs = sorted(
+            (d for d in date_dir.iterdir()
+             if d.is_dir() and d.name != "BLOCKED"),
+            key=lambda d: d.stat().st_mtime,
+        )
+        latest = run_dirs[-1]
+        manifest = json.loads((latest / "manifest.json").read_text())
+        payload = json.loads((latest / "shadow_selections.json").read_text())
+        return manifest, payload, latest
+
+    manifest_ab, payload_ab, _ = _run(receipt_path_ab)
+    manifest_ba, payload_ba, _ = _run(receipt_ba_path)
+
+    # 1) Same admitted decision identity.
+    assert len(payload_ab["selections"]) == 1
+    assert len(payload_ba["selections"]) == 1
+    sel_ab = payload_ab["selections"][0]
+    sel_ba = payload_ba["selections"][0]
+    assert sel_ab["event_id"] == sel_ba["event_id"]
+    assert sel_ab["sport"] == sel_ba["sport"]
+    assert sel_ab["event_date"] == sel_ba["event_date"]
+    assert sel_ab["rank_within_sport_day"] == sel_ba["rank_within_sport_day"]
+    assert sel_ab["status"] == sel_ba["status"]
+    # 2) Same feature values.
+    assert sel_ab["features"] == sel_ba["features"], (
+        f"feature values MUST be order-independent; got "
+        f"ab={sel_ab['features']} ba={sel_ba['features']}"
+    )
+    # 3) Same canonical record. The canonical record is
+    #    the observation with the lexicographically smallest
+    #    ``raw_sha256`` (deterministic), so the canonical's
+    #    ``raw_sha256``, ``body_path``, ``source_url``, and
+    #    ``captured_at`` are the same in both runs. The
+    #    raw_sha256 is the proof of determinism — two
+    #    decision-equivalent observations of the same event
+    #    necessarily have different raw_sha256 (because
+    #    their bodies differ in odds metadata) and the
+    #    smaller one wins.
+    assert sel_ab["raw_sha256"] == sel_ba["raw_sha256"], (
+        f"canonical raw_sha256 MUST be order-independent; got "
+        f"ab={sel_ab['raw_sha256']} ba={sel_ba['raw_sha256']}"
+    )
+    assert sel_ab["body_path"] == sel_ba["body_path"]
+    assert sel_ab["captured_at"] == sel_ba["captured_at"]
+    assert sel_ab["source_url"] == sel_ba["source_url"]
+    # 3) Same R2 result (R2-eligible in both).
+    acc_ab = manifest_ab["decision_accounting"]
+    acc_ba = manifest_ba["decision_accounting"]
+    assert acc_ab["primary_selected"] == 1
+    assert acc_ba["primary_selected"] == 1
+    assert acc_ab["admitted_canonical_records"] == acc_ba["admitted_canonical_records"]
+    # 4) Same decision_digest.
+    assert manifest_ab["decision_digest"] == manifest_ba["decision_digest"], (
+        f"decision_digest MUST be order-independent for equivalent "
+        f"observations; got ab={manifest_ab['decision_digest']} "
+        f"ba={manifest_ba['decision_digest']}"
+    )
+    # 5) All provenance retained in both runs. The
+    #    manifest's per-record provenance lives on the
+    #    canonical record (not in the payload's selections
+    #    list, which is price-free), but the input_digest
+    #    carries the per-sidecar / per-body digests in both
+    #    runs.
+    sidecars_ab_digests = manifest_ab["input_provenance"]["sidecar_digests"]
+    sidecars_ba_digests = manifest_ba["input_provenance"]["sidecar_digests"]
+    bodies_ab = manifest_ab["input_provenance"]["raw_body_digests"]
+    bodies_ba = manifest_ba["input_provenance"]["raw_body_digests"]
+    assert len(sidecars_ab_digests) == 2
+    assert len(sidecars_ba_digests) == 2
+    assert len(bodies_ab) == 2
+    assert len(bodies_ba) == 2
+    # The set of sidecar / body digests is the same in both
+    # runs (receipt order may differ in the dict iteration
+    # order, but the set of entries is identical).
+    assert set(sidecars_ab_digests.items()) == set(sidecars_ba_digests.items())
+    assert set(bodies_ab.items()) == set(bodies_ba.items())
+    # 6) input_digest MAY differ if the receipt byte order is
+    #    part of source identity. In this design the receipt
+    #    bytes themselves are committed to by input_digest
+    #    (the receipt_sha256 differs), so input_digest
+    #    legitimately differs when the receipt byte order
+    #    differs. We document and assert this.
+    #    (Receipt byte order is a property of the
+    #    capture pipeline, not of the price-free decision.)
+    assert manifest_ab["input_digest"] != manifest_ba["input_digest"], (
+        f"input_digest legitimately differs when receipt byte "
+        f"order differs; got equal digests "
+        f"ab={manifest_ab['input_digest']} ba={manifest_ba['input_digest']}"
+    )
+    # 7) The conflict-detection accounting is identical.
+    assert acc_ab["conflict_groups"] == acc_ba["conflict_groups"]
+    assert acc_ab["conflicting_rows"] == acc_ba["conflicting_rows"]
+    assert acc_ab["exact_decision_duplicate_groups"] == acc_ba["exact_decision_duplicate_groups"]
+    assert acc_ab["exact_decision_duplicate_extra_rows"] == acc_ba["exact_decision_duplicate_extra_rows"]
