@@ -1,13 +1,13 @@
 # Slumdog Living Handoff
 
-**Last updated:** 2026-08-27 (UTC) — Milestone 6B: IMPLEMENTED and locally verified (426 tests passed); canonical config SHA-256 verified; real-data Codespace run pending
-**Branch:** `arena/01a04198-slumdog`
-**Base commit:** `09a56dcae4daff4014f79beca220cefb67edfe9d` (`main` after PR #9 merge)
-**Phase:** Milestones 0–6A COMPLETE AND MERGED; Milestone 6B IMPLEMENTED; training FROZEN; production NOT AUTHORIZED; shortlist policy NOT AUTHORIZED
+**Last updated:** 2026-08-28 (UTC) — **MILESTONE 7 IMPLEMENTED LOCALLY** / **NO REAL SHADOW RUN PERFORMED** / **FIRST REAL RUN BLOCKED ON FULL-PAYLOAD BACKUP AND AUTHORIZED FUTURE CAPTURE**. 515 tests passed (426 + 89 new); canonical declaration SHA-256 `dd08976a…4d597`; frozen baseline SHA-256 `666dabe7…00a1` MATCH; golden regression for `build_price_free_examples` VERIFIED byte-for-byte identical to base commit `b87784f`; no commit, push, or PR for M7 in this session
+**Branch:** `arena/01a048de-slumdog`
+**Base commit:** `b87784fdb590c17b55d4fa1c2bd6c3275dce0f6d`
+**Phase:** Milestones 0–6A COMPLETE AND MERGED; Milestone 6B IMPLEMENTED; **Milestone 7 IMPLEMENTED LOCALLY (shadow pick evaluator: per-sport-day primary + rank-2/3 cohort, R2-frozen, R1-ranking, 4-ID split, atomic no-overwrite artifact, BLOCKED receipts separate, 24h timing gate, history memory bound tightened to 256 MiB default with explicit per-call override, ranks-4+ in `considered_pool[]` with `ELIGIBLE_RANKED_BEYOND_TOP3` and not in `selections[]`, decision_digest independent of per-snapshot source fields, source provenance retained)**; training FROZEN; production NOT AUTHORIZED; shortlist policy NOT AUTHORIZED; first real shadow run NOT yet authorized
 **Mission:** Slumdog identifies a small daily shortlist of participants that Forebet considers underdogs but whose available pre-event evidence indicates a credible outright-win upset.
 **PR:** #10 https://github.com/6ixtyn9-sudo/Slumdog/pull/10 — "Implement two-pass non-trained baseline analyzer (Milestone 6B)" (OPEN, against `main`)
 **Training:** FROZEN (`feature_contracts.py: MODEL_TRAINING_ALLOWED=False`)
-**Tests:** 426 passed (verified 2026-08-27)
+**Tests:** 515 passed (verified 2026-08-28; full suite `python -m pytest`, pyflakes clean, `git diff --check` clean, `python -m py_compile` clean, `python -m slumdog.shadow_evaluator --help` returns 0)
 
 ## Product Invariants (from AGENTS.md)
 
@@ -250,3 +250,237 @@ The original 6A implementation was found not to scale (it materialized all examp
 - Verified from tests: 396 passed, pyflakes clean, py_compile ok, diff-check ok
 - Unresolved: hockey 278977 conflicting scores — retained both, no selection
 - Parked: period_values UNKNOWN PROHIBITED, detail facets UNKNOWN/PARKED, American football odds probe, esoccer audit
+
+## Milestone 7 — Shadow Pick Evaluator (IMPLEMENTED LOCALLY / NO REAL SHADOW RUN PERFORMED / FIRST REAL RUN BLOCKED ON FULL-PAYLOAD BACKUP AND AUTHORIZED FUTURE CAPTURE, 515 tests)
+
+**Status:** Milestone 7 implementation has been re-built per the
+approved recovery plan (Option A: reduce, then complete local
+ingestion vertical slice). All required modules and the CLI exist.
+No commit, push, PR, network access, or real shadow run has been
+performed. Tests are green. Documentation updated to "IN PROGRESS"
+status.
+
+**Scope:** A pre-event forward shadow evaluator that consumes an
+already-captured Forebet snapshot, applies the **frozen R2 eligibility
+rule** read from `config/research_baselines_v1.json` (never
+duplicated), applies **R1 ranking** (the same comparator used by the
+6B analyzer), and emits an immutable per-sport-day payload + manifest
+under `data/reports/shadow/<target_date>/<run_id>/`.
+
+**Files (uncommitted — to be reviewed before commit):**
+- `src/slumdog/shadow_contracts.py` — NEW (~125 lines). Owns
+  `PreEventRecord` and `from_event_snapshot`. Imports from
+  `slumdog.contracts` + `slumdog.sports` only. No dependency on
+  `shadow_evaluator` or `capture_loader`. The
+  `__post_init__` defensively checks forbidden outcome/odds field
+  names. Establishes the typed boundary for the forward evaluator.
+- `src/slumdog/capture_loader.py` — NEW (~290 lines).
+  `load_capture_records(target_date, capture_receipt_path, repo_root)
+  -> CaptureLoadResult`. Verifies receipt SHA-256, sidecar exact-byte
+  SHA-256, body exact-byte SHA-256 against sidecar-declared SHA-256.
+  Uses `parsers.parse_capture`. Path-containment via
+  `_resolve_within_root`. Derives `current_only` rejection from
+  `SPORTS[sport].current_only` (esoccer, afl are rejected
+  automatically). Returns balanced `capture_accounting` and
+  `snapshot_accounting`.
+- `src/slumdog/history_loader.py` — NEW (~270 lines).
+  `load_valid_history(target_date, repo_root, history_paths=None,
+  max_interim_bytes=1GiB) -> HistoryLoadResult`. Supports both formats
+  actually used in the repo:
+  `data/interim/settled_history.json` and
+  `data/reports/history_<sport>.jsonl.gz`. Streams gzipped JSONL
+  without decompressing-into-memory. Uses
+  `dataset._validate_settled_dict` and `dataset._census_grouping`.
+  Asserts two non-overlap equations in the function body. Uses
+  `RESEARCH_FEATURE_CONTRACT_VERSION` from `research_builder`.
+- `src/slumdog/shadow_evaluator.py` — REWRITTEN (~640 lines, down
+  from 1109). Three layers: `_evaluate_record` (pure per-record),
+  `_emit_run` / `_blocked_run` (decision engine), `evaluate_from_disk`
+  (orchestration), `main` (CLI). Single `ShadowEvaluatorError` base.
+  Imports `is_r2_eligible` and `canonical_json_bytes` from
+  `baseline_analyzer` (no duplicated thresholds). `r1_sort_key` is
+  adapted from `baseline_analyzer` via a thin wrapper that maps
+  features+event_id into the event-dict shape it expects. Uses
+  `safe_cutoff_utc(target_date)` which subtracts 24h. Atomic write
+  via `tempfile.mkstemp` + `os.replace`. Refuses overwrite of
+  existing artifact dir. BLOCKED runs go to a separate
+  `BLOCKED/BLOCKED_<stamp>_<reason>.json` so they cannot be mistaken
+  for completed artifacts.
+- `src/slumdog/dataset.py` — UNCHANGED in this recovery (the
+  `build_pre_event_features` extraction is from the prior session;
+  the new helpers delegate to it).
+- `config/shadow_evaluator_v1.json` — UNCHANGED from the prior
+  session. Canonical SHA-256 (sorted keys, compact separators,
+  UTF-8): `dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597`.
+  Verified after refactor.
+- `tests/test_shadow_evaluator.py` — REWRITTEN. 86 focused behavioral
+  tests (up from the prior 60 — additional tests added for v2 history
+  validity matrix, capture accounting, BLOCKED receipt semantics, and
+  digest content). No test-count target. Tests do not import Git, do
+  not load a second copy of `dataset.py`, do not parse source text.
+  The shared feature extraction has a true golden-regression test
+  (`test_shared_feature_golden_regression`) whose expected digest
+  `1a97cb81fc6521a99f1055a873975d562cae33fefce7468ceca929739f8fca0d`
+  is hardcoded and recorded with a comment naming the base commit
+  `b87784fdb590c17b55d4fa1c2bd6c3275dce0f6d` and the audit procedure
+  that produced it (separate subprocess against
+  `/tmp/golden_audit/base_pkg/slumdog/`). The base and current
+  canonical outputs are byte-for-byte identical
+  (`diff -q` reports no difference).
+- `docs/MILESTONE7_SHADOW_PICKS_PLAN.md` — UNCHANGED from prior
+  session.
+- `HANDOFF.md` (this file), `docs/STATE.md` — UPDATED to "MILESTONE 7
+  IMPLEMENTED LOCALLY / NO REAL SHADOW RUN PERFORMED / FIRST REAL
+  RUN BLOCKED ON FULL-PAYLOAD BACKUP AND AUTHORIZED FUTURE CAPTURE"
+  status. Do NOT say complete, merged, production-ready, or
+  shortlist-authorized.
+
+**Frozen rule source (not duplicated):**
+- R2 eligibility is the single `bool` returned by
+  `baseline_analyzer.is_r2_eligible(features)`. No second
+  implementation exists. The local `is_r2_eligible` re-exports the
+  baseline one. The shadow declaration's
+  `anti_tuning.rule_source_frozen_config_sha256` equals the frozen
+  6B config SHA-256 and is verified at load. Any drift in the 6B
+  config raises a `ShadowEvaluatorError` and the evaluator refuses
+  to read input or write output.
+- R1 ranking is `baseline_analyzer.r1_sort_key` invoked through a
+  thin adapter that maps the local features+event_id shape into the
+  event-dict shape the baseline expects. There is no duplicate
+  ranking tuple.
+
+**Authorization gates (fail-closed at load):**
+- `production_authorized`, `shortlist_policy_authorized`,
+  `training_authorized`, `threshold_optimization_authorized` must
+  all be explicitly `false`. `shadow_evaluation_authorized` must be
+  `true`. Tested via parametrized `test_authorization_gate_rejected`.
+
+**Typed boundary (PreEventRecord) at the lowest sensible layer:**
+- The forward record has 15 fields, all required for identity,
+  features, ranking, and provenance. No `score_*`, `winner_index`,
+  `disposition`, `period_scores_*`, or `odds_*` field exists by
+  construction. The `__post_init__` enforces the field-name boundary
+  defensively. The `from_event_snapshot` adapter drops forbidden
+  fields from any source `EventSnapshot`.
+
+**Circular-import avoidance:**
+- `shadow_contracts` imports only from `slumdog.contracts` +
+  `slumdog.sports`.
+- `capture_loader` imports from `slumdog.parsers`, `slumdog.sports`,
+  `slumdog.contracts`, `slumdog.shadow_contracts`. NOT from
+  `slumdog.shadow_evaluator` or `slumdog.history_loader`.
+- `history_loader` imports from `slumdog.contracts`,
+  `slumdog.history`, `slumdog.research_builder`. NOT from
+  `slumdog.shadow_evaluator` or `slumdog.shadow_contracts`. (Late
+  imports to `slumdog.dataset` and `slumdog.sports` only to avoid
+  module-load order coupling.)
+- `shadow_evaluator` imports from `slumdog.baseline_analyzer`,
+  `slumdog.capture_loader`, `slumdog.history_loader`,
+  `slumdog.shadow_contracts`. (No circular imports in either
+  direction.)
+
+**Frozen 24h timing gate:**
+- `safe_cutoff_utc(target_date) = target_date 00:00 UTC − 24h`. The
+  gate is enforced on each record's `captured_at` and on the run's
+  `decision_committed_at`. Both must be tz-aware UTC. A violation is
+  recorded as `PRE_EVENT_TIMING_UNVERIFIED` (and at run level as
+  `SHADOW_RUN_BLOCKED` if the run itself commits after the cutoff).
+  The gate is described in the manifest as a *conservative pre-event
+  timing gate*; it is not proof of exact kickoff time.
+
+**Per-sport-day cohort (no global cap):**
+- R1-sorted eligible events per `(sport, event_date)` are assigned
+  `PRIMARY_SHADOW_SELECTION` (rank 1), `TOP3_EVALUATION_COHORT`
+  (ranks 2–3), and `ELIGIBLE_RANKED_BEYOND_TOP3` (ranks 4+).
+  Sport-days with zero eligible events get `SHADOW_NO_SELECTION`.
+
+**4-ID split (run_id / input_digest / decision_digest /
+decision_committed_at):**
+- `input_digest` is canonical SHA-256 over
+  `{declaration_sha256, target_date, capture_receipt_sha256,
+  history_input_sha256 (per-file map), sorted record tuples}`.
+- `decision_digest` is canonical SHA-256 over
+  `{sorted selections without run_id, decision_accounting}`.
+- `run_id = sha256({version, input_digest, decision_digest,
+  decision_committed_at})[:16]`.
+- `decision_committed_at` captured at the very start of
+  `evaluate_from_disk`, ISO 8601 UTC, second precision, suffixed `Z`.
+
+**No-overwrite invariant:**
+- The artifact directory is created with `mkdir(exist_ok=False)`. A
+  second run with the same `input_digest` and same
+  `decision_committed_at` (i.e. same `run_id`) is rejected with
+  `ShadowEvaluatorError("refusing to overwrite...")`. Changing the
+  input yields a different `run_id` and a sibling directory. The
+  same call repeated with a bumped commit timestamp produces a
+  different `run_id` and the same `decision_digest` /
+  `input_digest` (verified end-to-end).
+
+**Staged accounting (real observations, not zero placeholders):**
+- capture-level: `captures_verified + captures_missing +
+  captures_hash_mismatch + captures_schema_invalid +
+  captures_parse_failed + captures_unsupported =
+  raw_capture_receipt_entries`.
+- snapshot-level: `snapshots_unique_accepted +
+  snapshots_exact_duplicate + snapshots_conflicting +
+  snapshots_invalid_identity = parser_emitted_snapshots`.
+- history-level: `history_decoded_rows == history_schema_invalid +
+  history_schema_valid_candidate_rows`; and
+  `history_schema_valid_candidate_rows == v2_excluded +
+  unique_valid_rows + exact_duplicate_rows + conflicting_rows`.
+  Asserted in the function body.
+- decision-level: `timing_rejected + identity_ineligible +
+  feature_incomplete_or_r2_ineligible + primary_selected +
+  top3_cohort_selected + eligible_ranked_beyond_top3 =
+  unique_nonconflicting_rows`.
+
+**Durability limitation:**
+- The manifest records
+  `durability_status = LOCAL_CODESPACE_ONLY_NOT_BACKED_UP`. A
+  second-copy procedure is **not** part of M7 and is deferred to a
+  separately approved PR.
+
+**Production-isolation evidence:**
+- The shadow_evaluator module imports only from `slumdog.baseline_analyzer`,
+  `slumdog.capture_loader`, `slumdog.history_loader`,
+  `slumdog.shadow_contracts`. NOT from `pipeline`, `forebet`,
+  `settlement`, `research_dataset`, `dataset_audit`, `cli`, or
+  `training`. The test
+  `test_production_isolation_no_settlement_or_collectors` monkeypatches
+  `forebet.ForebetCollector` and
+  `settlement.append_settled_from_capture` to raise AssertionError if
+  called; the test passes.
+- The test `test_production_isolation_no_network` monkeypatches
+  `urllib.request.urlopen` to raise AssertionError if called; the
+  test passes.
+- No raw capture or new fixture was added. No write into
+  `data/raw/`, `data/interim/`, `data/ledgers/`, or any pre-existing
+  final path. New outputs only under
+  `data/reports/shadow/<target_date>/<run_id>/` (success) or
+  `data/reports/shadow/<target_date>/BLOCKED/` (failure receipts).
+
+**CLI:**
+- `python -m slumdog.shadow_evaluator --help` works without loading
+  configs or touching the filesystem.
+- `python -m slumdog.shadow_evaluator --date <YYYY-MM-DD>
+  --capture-receipt <path> --config <path> [--root <root>]
+  [--history <path>...]` returns 0 on success and a non-zero exit on
+  any integrity failure with a concise stderr line that does not
+  include a Python traceback.
+
+**Real-run-id uniqueness proof (verified end-to-end):**
+- Run A (clock 2026-08-26T12:00:00Z): `run_id=8bb932e3c9d28bd0`,
+  `decision_digest=77d56bef797d3c78…`, `input_digest=aea7f565…47ba8b`,
+  `status=SHADOW_NO_SELECTION`.
+- Run B (clock 2026-08-26T12:00:01Z, same on-disk inputs):
+  `run_id=6f16dbb2698e7954`, same `decision_digest`, same
+  `input_digest`, same `status`. Both artifact directories exist;
+  neither overwrote the other.
+
+**No-first-real-run confirmation:**
+- No real Forebet network request was made during M7 development or
+  recovery.
+- No real shadow evaluation run was performed.
+- The evaluator was verified against synthetic / in-memory input
+  only (per-test `tempfile.TemporaryDirectory()` root).
+- No commit / push / PR was made for the M7 work in this session.
