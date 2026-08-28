@@ -43,7 +43,7 @@ from typing import Any
 from .contracts import SettledEvent
 from .history import HistoryIndex
 from .sports import SPORTS
-from .underdog import identify_forebet_underdog, label_underdog_outcome
+from .underdog import ForebetUnderdogIdentity, identify_forebet_underdog, label_underdog_outcome
 
 FEATURE_CONTRACT_VERSION = "price-free-v1-minimal-2026-08-24"
 LABEL_CONTRACT_VERSION = "price-free-v1"
@@ -866,6 +866,158 @@ def _prior_scoring_stats(
     return avg_scored, avg_conceded, draw_count, total
 
 
+def build_pre_event_features(
+    *,
+    sport: str,
+    event_date: str,
+    participant_1: str,
+    participant_2: str,
+    identity: "ForebetUnderdogIdentity",
+    history: HistoryIndex,
+) -> tuple[dict[str, float | None], dict[str, int]]:
+    """Pure pre-event feature construction (Milestone 7, Design B extraction).
+
+    Builds the 17-field ALLOWED_FEATURES dict and the matching missingness
+    map for a single event, using only:
+
+    - price-free identity (a pre-computed ForebetUnderdogIdentity),
+    - participants (for history lookup),
+    - sport (for SPORTS-keyed history),
+    - event_date (for the strict prior-history cutoff),
+    - a HistoryIndex built from rows with event_date < current event_date
+      (HistoryIndex._earlier enforces the same-date exclusion).
+
+    The function does NOT accept any of:
+    - labels,
+    - winner_index / score_1 / score_2 / period_scores_1 / period_scores_2,
+    - disposition,
+    - odds_1 / odds_2,
+    - any PROHIBITED_KEYS value.
+
+    The signature itself enforces the typed boundary; the function does not
+    read these fields because they are not parameters.
+
+    This is a mechanical extraction from ``build_price_free_examples``; the
+    per-event work was identical for the research builder. The research
+    builder now calls this helper; the forward shadow evaluator calls this
+    helper. Existing 426 tests assert the research output is byte-for-byte
+    unchanged.
+
+    Returns ``(features_dict, missingness_dict)``:
+
+    - ``features_dict`` keys are exactly ``ALLOWED_FEATURES`` (5 identity +
+      12 prior). Each value is ``float | None`` (None means "not in
+      history / not computable").
+    - ``missingness_dict`` maps each feature key to ``0`` (present) or ``1``
+      (missing). The three "games" fields are always present (0).
+
+    Pre-condition: ``identity.eligible is True`` and
+    ``identity.favorite_index in (1, 2)`` and
+    ``identity.underdog_index in (1, 2)``. The function does not re-validate
+    identity (the research builder validates upstream; the forward
+    evaluator validates upstream).
+    """
+    if not identity.eligible:
+        raise ValueError("build_pre_event_features requires an eligible identity")
+    if identity.favorite_index not in (1, 2) or identity.underdog_index not in (1, 2):
+        raise ValueError("build_pre_event_features requires favorite/underdog indices in (1, 2)")
+    if identity.favorite_index == identity.underdog_index:
+        raise ValueError("build_pre_event_features requires favorite and underdog to differ")
+
+    fav_idx = identity.favorite_index
+    dog_idx = identity.underdog_index
+
+    h2h, recent_1, recent_2 = history.context(sport, event_date, participant_1, participant_2)
+
+    if dog_idx == 1:
+        dog_recent = recent_1
+        fav_recent = recent_2
+    else:
+        dog_recent = recent_2
+        fav_recent = recent_1
+
+    underdog_prior_games = dog_recent.games if dog_recent else 0
+    favorite_prior_games = fav_recent.games if fav_recent else 0
+    underdog_prior_win_rate = dog_recent.win_rate if dog_recent and dog_recent.games > 0 else None
+    favorite_prior_win_rate = fav_recent.win_rate if fav_recent and fav_recent.games > 0 else None
+    if underdog_prior_win_rate is not None and favorite_prior_win_rate is not None:
+        recent_win_rate_gap = underdog_prior_win_rate - favorite_prior_win_rate
+    else:
+        recent_win_rate_gap = None
+
+    h2h_prior_games = h2h.total_games
+    if h2h_prior_games > 0:
+        p1_wins = h2h.participant_1_wins
+        p2_wins = h2h.participant_2_wins
+        if dog_idx == 1:
+            dog_h2h_wins = p1_wins
+        else:
+            dog_h2h_wins = p2_wins
+        h2h_underdog_win_rate = dog_h2h_wins / h2h_prior_games if h2h_prior_games else None
+        h2h_draw_rate = (h2h_prior_games - p1_wins - p2_wins) / h2h_prior_games if h2h_prior_games else None
+    else:
+        h2h_underdog_win_rate = None
+        h2h_draw_rate = None
+
+    dog_avg_scored, dog_avg_conceded, dog_draws, dog_total = _prior_scoring_stats(
+        sport, participant_1 if dog_idx == 1 else participant_2, event_date, history
+    )
+    fav_avg_scored, fav_avg_conceded, fav_draws, fav_total = _prior_scoring_stats(
+        sport, participant_1 if fav_idx == 1 else participant_2, event_date, history
+    )
+
+    if dog_total > 0:
+        underdog_prior_draw_rate = dog_draws / dog_total if dog_total else None
+    else:
+        underdog_prior_draw_rate = None
+
+    if fav_total > 0:
+        favorite_prior_draw_rate = fav_draws / fav_total if fav_total else None
+    else:
+        favorite_prior_draw_rate = None
+
+    if dog_avg_scored is not None and fav_avg_scored is not None:
+        prior_scoring_rate_gap = dog_avg_scored - fav_avg_scored
+    else:
+        prior_scoring_rate_gap = None
+
+    if dog_avg_conceded is not None and fav_avg_conceded is not None:
+        prior_conceding_rate_gap = dog_avg_conceded - fav_avg_conceded
+    else:
+        prior_conceding_rate_gap = None
+
+    features: dict[str, float | None] = {
+        "forebet_favorite_probability": identity.favorite_probability,
+        "forebet_underdog_probability": identity.underdog_probability,
+        "forebet_probability_gap": identity.probability_gap,
+        "forebet_draw_probability": identity.draw_probability,
+        "forebet_draw_probability_missing": 1.0 if identity.draw_probability is None else 0.0,
+        "underdog_prior_games": float(underdog_prior_games),
+        "favorite_prior_games": float(favorite_prior_games),
+        "underdog_prior_win_rate": underdog_prior_win_rate,
+        "favorite_prior_win_rate": favorite_prior_win_rate,
+        "recent_win_rate_gap": recent_win_rate_gap,
+        "h2h_prior_games": float(h2h_prior_games),
+        "h2h_underdog_win_rate": h2h_underdog_win_rate,
+        "h2h_draw_rate": h2h_draw_rate,
+        "underdog_prior_draw_rate": underdog_prior_draw_rate,
+        "favorite_prior_draw_rate": favorite_prior_draw_rate,
+        "prior_scoring_rate_gap": prior_scoring_rate_gap,
+        "prior_conceding_rate_gap": prior_conceding_rate_gap,
+    }
+
+    missingness: dict[str, int] = {}
+    for k, v in features.items():
+        if k == "forebet_draw_probability_missing":
+            missingness[k] = 0
+        else:
+            missingness[k] = 1 if v is None else 0
+    for gkey in ("underdog_prior_games", "favorite_prior_games", "h2h_prior_games"):
+        missingness[gkey] = 0
+
+    return features, missingness
+
+
 # ---------------------------------------------------------------------------
 # Schema adapter — no unsafe defaults, explicit counting, disposition vocabulary
 # ---------------------------------------------------------------------------
@@ -1263,87 +1415,17 @@ def build_price_free_examples(
         dog_idx = identity.underdog_index
         assert fav_idx in (1, 2) and dog_idx in (1, 2)
 
-        if dog_idx == 1:
-            dog_recent = recent_1
-            fav_recent = recent_2
-        else:
-            dog_recent = recent_2
-            fav_recent = recent_1
-
-        underdog_prior_games = dog_recent.games if dog_recent else 0
-        favorite_prior_games = fav_recent.games if fav_recent else 0
-        underdog_prior_win_rate = dog_recent.win_rate if dog_recent and dog_recent.games > 0 else None
-        favorite_prior_win_rate = fav_recent.win_rate if fav_recent and fav_recent.games > 0 else None
-        if underdog_prior_win_rate is not None and favorite_prior_win_rate is not None:
-            recent_win_rate_gap = underdog_prior_win_rate - favorite_prior_win_rate
-        else:
-            recent_win_rate_gap = None
-
-        h2h_prior_games = h2h.total_games
-        if h2h_prior_games > 0:
-            p1_wins = h2h.participant_1_wins
-            p2_wins = h2h.participant_2_wins
-            if dog_idx == 1:
-                dog_h2h_wins = p1_wins
-            else:
-                dog_h2h_wins = p2_wins
-            h2h_underdog_win_rate = dog_h2h_wins / h2h_prior_games if h2h_prior_games else None
-            h2h_draw_rate = (h2h_prior_games - p1_wins - p2_wins) / h2h_prior_games if h2h_prior_games else None
-        else:
-            h2h_underdog_win_rate = None
-            h2h_draw_rate = None
-
-        dog_avg_scored, dog_avg_conceded, dog_draws, dog_total = _prior_scoring_stats(sport, row.participant_1 if dog_idx == 1 else row.participant_2, row.event_date, history)
-        fav_avg_scored, fav_avg_conceded, fav_draws, fav_total = _prior_scoring_stats(sport, row.participant_1 if fav_idx == 1 else row.participant_2, row.event_date, history)
-
-        if dog_total > 0:
-            underdog_prior_draw_rate = dog_draws / dog_total if dog_total else None
-        else:
-            underdog_prior_draw_rate = None
-
-        if fav_total > 0:
-            favorite_prior_draw_rate = fav_draws / fav_total if fav_total else None
-        else:
-            favorite_prior_draw_rate = None
-
-        if dog_avg_scored is not None and fav_avg_scored is not None:
-            prior_scoring_rate_gap = dog_avg_scored - fav_avg_scored
-        else:
-            prior_scoring_rate_gap = None
-
-        if dog_avg_conceded is not None and fav_avg_conceded is not None:
-            prior_conceding_rate_gap = dog_avg_conceded - fav_avg_conceded
-        else:
-            prior_conceding_rate_gap = None
-
-        features: dict[str, float | None] = {
-            "forebet_favorite_probability": identity.favorite_probability,
-            "forebet_underdog_probability": identity.underdog_probability,
-            "forebet_probability_gap": identity.probability_gap,
-            "forebet_draw_probability": identity.draw_probability,
-            "forebet_draw_probability_missing": 1.0 if identity.draw_probability is None else 0.0,
-            "underdog_prior_games": float(underdog_prior_games),
-            "favorite_prior_games": float(favorite_prior_games),
-            "underdog_prior_win_rate": underdog_prior_win_rate,
-            "favorite_prior_win_rate": favorite_prior_win_rate,
-            "recent_win_rate_gap": recent_win_rate_gap,
-            "h2h_prior_games": float(h2h_prior_games),
-            "h2h_underdog_win_rate": h2h_underdog_win_rate,
-            "h2h_draw_rate": h2h_draw_rate,
-            "underdog_prior_draw_rate": underdog_prior_draw_rate,
-            "favorite_prior_draw_rate": favorite_prior_draw_rate,
-            "prior_scoring_rate_gap": prior_scoring_rate_gap,
-            "prior_conceding_rate_gap": prior_conceding_rate_gap,
-        }
-
-        missingness: dict[str, int] = {}
-        for k, v in features.items():
-            if k == "forebet_draw_probability_missing":
-                missingness[k] = 0
-            else:
-                missingness[k] = 1 if v is None else 0
-        for gkey in ("underdog_prior_games", "favorite_prior_games", "h2h_prior_games"):
-            missingness[gkey] = 0
+        # Milestone 7 Design B: the per-event feature assembly is now a pure
+        # helper. The inline block is replaced by a single call; the research
+        # builder and the forward shadow evaluator share this code.
+        features, missingness = build_pre_event_features(
+            sport=sport,
+            event_date=row.event_date,
+            participant_1=row.participant_1,
+            participant_2=row.participant_2,
+            identity=identity,
+            history=history,
+        )
 
         raw_sha_for_example, source_url_for_example = _extract_provenance(row)
 

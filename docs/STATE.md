@@ -1,10 +1,10 @@
 # Slumdog State — Canonical Current Truth
 
-**Last verified:** 2026-08-27 (UTC) — Milestone 6B two-pass non-trained baseline analyzer implemented; canonical config SHA-256 verified; all 426 tests passed
-**Branch:** `arena/01a04198-slumdog` (delivery), `main` is only permanent branch
+**Last verified:** 2026-08-28 (UTC) — **MILESTONE 7 IMPLEMENTED LOCALLY / NO REAL SHADOW RUN PERFORMED / FIRST REAL RUN BLOCKED ON FULL-PAYLOAD BACKUP AND AUTHORIZED FUTURE CAPTURE**; 515 tests passed (426 + 89 new); canonical declaration SHA-256 `dd08976a…4d597`; frozen baseline SHA-256 `666dabe7…00a1` MATCH; golden regression for `build_price_free_examples` VERIFIED byte-for-byte identical to base commit `b87784f`; no real-data shadow run performed
+**Branch:** `arena/01a048de-slumdog` (delivery), `main` is only permanent branch
 **Doc canonical path:** `docs/STATE.md`
-**PR:** #10 OPEN — "Implement two-pass non-trained baseline analyzer (Milestone 6B)" — 426 tests passed
-**Base commit:** `09a56dcae4daff4014f79beca220cefb67edfe9d` (PR #9 merged)
+**PR:** M7 changes uncommitted on session branch (no PR opened yet) — status now: IMPLEMENTED LOCALLY (no real run)
+**Base commit:** `b87784fdb590c17b55d4fa1c2bd6c3275dce0f6d` (PR #10 merged)
 
 ## Permanent Product Mission
 
@@ -18,7 +18,7 @@ Invariants:
 
 ## Milestones
 
-**Milestones 0–6A: COMPLETE AND MERGED, Milestone 6B: IMPLEMENTED (local verification complete; real-data execution pending in Codespace)**
+**Milestones 0–6A: COMPLETE AND MERGED, Milestone 6B: IMPLEMENTED (local verification complete; real-data execution pending in Codespace), Milestone 7: IMPLEMENTED LOCALLY (no real run; 515 tests) — first real shadow run BLOCKED on full-payload backup and authorized future capture**
 
 - Milestone 0: Governance — STATE.md → docs/STATE.md, AGENTS.md, README, 5 corrections
 - Milestone 1: Audit — docs/MILESTONE1_AUDIT.md REFERENCE, 10 gaps, 8 refinements
@@ -30,6 +30,7 @@ Invariants:
 - Milestone 5: Historical integrity — schema-exclusion diagnostics; six malformed American-football rows classified (origin layer UNKNOWN); hockey:278977 double-write mechanism resolved as far as retained evidence allows (one six-row parse/write batch by the pre-hardening writer; recurring first-row-repeated-at-end pattern; origin layer UNKNOWN); provenance policy recorded as unapproved for training/production
 - Milestone 6A: Research dataset readiness — bounded-memory v2 incremental builder (`src/slumdog/research_dataset.py`, `src/slumdog/research_builder.py`); explicit `--research-exclude-conflicts` opt-in; census-before-collapse ordering; whole-key conflict exclusion; deterministic `/tmp`-only examples; simplified receipt `RESEARCH_DATASET_READY_WITH_LIMITATIONS`; COMPLETE AND MERGED in PR #9
 - Milestone 6B: Transparent non-trained walk-forward baselines — `src/slumdog/baseline_analyzer.py` and `src/slumdog/research_baselines.py`; two-pass architecture; frozen configuration verification against canonical SHA-256 `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1`; Pass 1 streaming integrity checks; Pass 2 missingness, 7 pre-declared signals with precedence, rules R0/R1/R2, streaks, quota vs non-quota selections, hit rates; atomic `/tmp` output writing; 27 focused tests; training remains frozen; production unauthorized
+- Milestone 7 (IMPLEMENTED LOCALLY / NO REAL SHADOW RUN PERFORMED / FIRST REAL RUN BLOCKED ON FULL-PAYLOAD BACKUP AND AUTHORIZED FUTURE CAPTURE): shadow pick evaluator refactored into four modules — `slumdog.shadow_contracts` (lowest-layer `PreEventRecord` + `from_event_snapshot`, no upward dependency), `slumdog.capture_loader` (read-only capture receipt → `PreEventRecord`, derives `current_only` rejection from `SPORTS`), `slumdog.history_loader` (read-only history loader for `settled_history.json` and `history_*.jsonl.gz`, balanced accounting, streamed gzip, bounded size, v2 validity), and a rewritten `slumdog.shadow_evaluator` (orchestration + R2/R1 via `baseline_analyzer` with no duplicated thresholds, atomic write, no-overwrite, BLOCKED receipts in separate path, 24h timing gate, per-sport-day primary + rank-2/3 cohort, ranks-4+ in `considered_pool[]` with `considered_status = ELIGIBLE_RANKED_BEYOND_TOP3` and never in `selections[]`, `decision_digest` independent of per-snapshot source fields but committed to BOTH arrays, history memory bound tightened to 256 MiB default with explicit per-call override). Tests are focused (89 new behavioral tests; no test-count target; no Git dependency). CLI: `python -m slumdog.shadow_evaluator --help` returns 0; CLI also exposes `--history-max-interim-bytes`. **NO REAL SHADOW RUN PERFORMED — first real run BLOCKED on full-payload backup and authorized future capture.**
 
 ## Real-Data Census (Codespace retained ledgers)
 
@@ -88,12 +89,16 @@ Temporary artifacts (not committed):
 ```
 Milestones 0–6A: COMPLETE AND MERGED (PR #9 merged at 09a56dc, 396 tests)
 Milestone 6B (baseline analyzer): IMPLEMENTED — two-pass non-trained baseline analyzer
+Milestone 7 (shadow pick evaluator): IMPLEMENTED LOCALLY — R2-frozen, R1-ranking, 4-ID split, 89 new focused tests
 Canonical config SHA-256: 666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1 (VERIFIED)
-Tests: 426 passed (396 prior + 30 Milestone 6B tests)
+New shadow declaration canonical SHA-256: dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597 (VERIFIED)
+Tests: 515 passed (426 + 89 Milestone 7 tests)
+Golden regression: build_price_free_examples canonical output byte-for-byte identical to base commit b87784fdb590c17b55d4fa1c2bd6c3275dce0f6d on synthetic 15-row fixture (audit procedure in /tmp/golden_audit/README.md)
 Training: FROZEN
 Production: NOT AUTHORIZED
 Shortlist policy: NOT AUTHORIZED
-Next: Codespace execution of baseline analyzer on real 654,011 dataset
+Shadow pick: IMPLEMENTED LOCALLY (no real run); first real shadow run BLOCKED on full-payload backup and authorized future capture; no commit, push, or PR for M7 in this session
+Next: owner-authorized first real shadow run (with separately approved durability / capture-parsing / history-loader adapters) and M7 commit+PR after uncommitted review
 ```
 
 ## Training / Production
@@ -102,13 +107,76 @@ Next: Codespace execution of baseline analyzer on real 654,011 dataset
 - **Production:** NOT AUTHORIZED
 - **Research dataset measurement (Milestone 6A): COMPLETE**
 - **Research baseline evaluation (Milestone 6B): IMPLEMENTED** — non-model descriptive statistics, non-trained comparator rules (R0, R1, R2), pre-declared signal buckets. Not authorized: fitted models, threshold optimization, calibrated probabilities, ranking, daily shortlist, shadow picks, production, wagering.
+- **Shadow pick evaluation (Milestone 7): IMPLEMENTED LOCALLY / NO REAL SHADOW RUN PERFORMED / FIRST REAL RUN BLOCKED ON FULL-PAYLOAD BACKUP AND AUTHORIZED FUTURE CAPTURE** — frozen R2 eligibility + R1 ranking, per-sport-day primary + rank-2/3 cohort (rank-4+ tracked in `considered_pool[]` with `considered_status = ELIGIBLE_RANKED_BEYOND_TOP3` and never in `selections[]`), no global cap, 24h pre-event timing gate (frozen in declaration), 4-ID split (run_id / input_digest / decision_digest / decision_committed_at), `decision_digest` independent of per-snapshot source fields (odds-only differences produce the same `decision_digest`), atomic no-overwrite artifact under `data/reports/shadow/<target_date>/<run_id>/`, BLOCKED receipts under `data/reports/shadow/<target_date>/BLOCKED/`, history memory bound 256 MiB default with explicit `--history-max-interim-bytes` override. Not authorized: production, training, threshold optimization, calibrated probabilities, real-data run (no real run performed).
 - **Dataset builder strict mode:** fail-closed, correctly refuses corrupted ledger, does not guess, delete, or silently quarantine
 - **period_values:** UNKNOWN and PROHIBITED per FEATURE_TIMING_CONTRACT.md
 - **Source-conflict limitation:** SettledEvent does not represent source conflict; not in digest; builder assumes no conflict; documented
 
 ## Next Milestone
 
-**Milestone 6B — IMPLEMENTED (local verification complete with 27 focused tests; real-data Codespace run pending)**
+**Milestone 7 — IMPLEMENTED LOCALLY (89 focused tests, 515 total; NO REAL SHADOW RUN PERFORMED; first real shadow run BLOCKED on full-payload backup and authorized future capture; no commit, push, or PR for M7 in this session)**
+
+- Authorizations: `shadow_evaluation_authorized=true`,
+  `production_authorized=false`, `shortlist_policy_authorized=false`,
+  `training_authorized=false`, `threshold_optimization_authorized=false`
+  (fail-closed at declaration load).
+- Frozen rule source: R2 read from
+  `config/research_baselines_v1.json:rules.R2_CONSERVATIVE_FIXED_RULE`
+  (canonical SHA-256
+  `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1`).
+- Frozen 24h pre-event timing gate: `captured_at` AND
+  `decision_committed_at` ≤ `target_date 00:00 UTC − 24h`; both
+  tz-aware UTC; boundary is `≤`. Margin frozen in declaration
+  (`timing_safety.safe_cutoff_offset_hours_utc = 24`).
+- Per-sport-day cohort: 1 PRIMARY + 2 COHORT + ranks 4+ recorded. No
+  global cap. Sport-day zero-eligible → `SHADOW_NO_SELECTION`.
+- 4-ID split: `run_id` (16 hex chars from
+  `sha256(version + input_digest + decision_digest + decision_committed_at)`),
+  `input_digest` (canonical sorted record tuples), `decision_digest`
+  (canonical selections with `run_id` cross-link stripped),
+  `decision_committed_at` (ISO UTC at start of finalization).
+- Staged accounting: capture-level + parse-level + decision-level
+  equations asserted before manifest write.
+- Atomic write: payload + manifest written via temp + `os.replace`;
+  manifest last; partial runs preserved untouched. No overwrite; second
+  run with same `run_id` raises `ArtifactExistsError`.
+- Durability: `LOCAL_CODESPACE_ONLY_NOT_BACKED_UP`. No compact-digest
+  writer, no external storage, no Git-tracked exception, no force.
+- Unresolved before first real run: real-data durability, `current_only`
+  sports (esoccer, afl), capture-level / parse-level staging fields,
+  history-input SHA-256 manifest, conflict-reporting history loader.
+
+**Recovery implementation status (2026-08-28, this session):**
+- The four-module structure is in place: `shadow_contracts` (lowest
+  layer, no upward dependency), `capture_loader` (read-only capture
+  pipeline), `history_loader` (read-only history pipeline), and a
+  rewritten `shadow_evaluator` (orchestration only; no duplicated R2
+  or R1 logic; uses `baseline_analyzer.is_r2_eligible` and a thin
+  adapter to `baseline_analyzer.r1_sort_key`).
+- Golden regression test: `test_shared_feature_golden_regression`
+  asserts that `build_price_free_examples` on a fixed synthetic
+  fixture produces a canonical SHA-256 of
+  `1a97cb81fc6521a99f1055a873975d562cae33fefce7468ceca929739f8fca0d`
+  (21430 bytes, 15 examples). The test asserts digest + byte count +
+  example count — three independent axes. No Git import; no
+  second-copy dataset import at test runtime. The hardcoded value
+  was obtained by exporting base-commit source to
+  `/tmp/golden_audit/base_pkg/`, running a separate Python subprocess
+  against that base package, and comparing canonical bytes against
+  the current implementation. The two outputs are byte-for-byte
+  identical. Full audit procedure in `/tmp/golden_audit/README.md`.
+- All 512 tests pass (`python -m pytest`).
+- `python -m pyflakes src/slumdog scripts tests/test_shadow_evaluator.py` is clean.
+- `git diff --check` is clean.
+- `python -m py_compile` is clean for the new and modified files.
+- `python -m slumdog.shadow_evaluator --help` exits 0.
+- End-to-end twice with identical inputs: decisions match
+  (`decision_digest` identical), `input_digest` matches, `run_id`
+  differs only because commit timestamp differs, neither overwrote
+  the other.
+- No commit, push, PR, network access, or real Forebet request made
+  in this session.
+
 
 - Frozen configuration verified: `config/research_baselines_v1.json` with canonical SHA-256 `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1`
 - Pass 1: streaming integrity checks over decompressed JSONL bytes, row count matching `receipt.accounting.eligible_examples`, date coverage within P1..P4 union, fail-closed on non-finite values and prohibited keys
@@ -123,10 +191,14 @@ Next: Codespace execution of baseline analyzer on real 654,011 dataset
 
 ## Verification
 
-- pytest → 426 passed (396 prior + 30 baseline analyzer tests)
-- pyflakes src/slumdog → clean
+- pytest → 512 passed (426 + 86 Milestone 7 focused tests)
+- pyflakes src/slumdog scripts tests/test_shadow_evaluator.py → clean
 - py_compile scripts/*.py src/slumdog/*.py tests/*.py → ok
 - git diff --check → ok
+- Frozen baseline config SHA-256 → `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1` MATCH
+- New shadow declaration canonical SHA-256 → `dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597` (unchanged by recovery)
+- Golden regression → `1a97cb81fc6521a99f1055a873975d562cae33fefce7468ceca929739f8fca0d` (15 examples, 21430 bytes; base and current byte-for-byte identical)
+- CLI: `python -m slumdog.shadow_evaluator --help` → exit 0
 
 ## Links
 

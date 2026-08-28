@@ -1,0 +1,123 @@
+{
+  "declaration_version": "shadow_evaluator_v1",
+  "frozen_at": "2026-08-28",
+  "authoring_session": "arena/01a048de-slumdog",
+  "authoring_base_commit": "b87784fdb590c17b55d4fa1c2bd6c3275dce0f6d",
+
+  "authorizations": {
+    "shadow_evaluation_authorized": true,
+    "production_authorized": false,
+    "shortlist_policy_authorized": false,
+    "training_authorized": false,
+    "threshold_optimization_authorized": false
+  },
+
+  "anti_tuning": {
+    "result_driven_amendments": "prohibited",
+    "tuning_on_observed_results": "prohibited",
+    "config_hash_immutable_after_first_real_run": true,
+    "rule_source_frozen": "R2_CONSERVATIVE_FIXED_RULE",
+    "rule_source_frozen_config_path": "config/research_baselines_v1.json",
+    "rule_source_frozen_config_sha256": "666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1"
+  },
+
+  "timing_safety": {
+    "safe_cutoff_offset_hours": 24,
+    "safe_cutoff_offset_hours_utc": 24,
+    "safe_cutoff_anchor": "target_date_00_00_UTC",
+    "require_captured_at_present": true,
+    "require_decision_committed_at_present": true,
+    "require_both_timestamps_tz_aware_utc": true,
+    "fail_closed_status_on_violation": "PRE_EVENT_TIMING_UNVERIFIED",
+    "margin_frozen_in_declaration": true,
+    "margin_description": "Conservative 24h pre-event timing gate: captured_at AND decision_committed_at must both be <= target_date 00:00:00 UTC minus 24 hours. This is a pre-event timing gate; it is NOT proof of exact kickoff time."
+  },
+
+  "rule": {
+    "name": "R2_CONSERVATIVE_FIXED_RULE",
+    "source": "config/research_baselines_v1.json:rules.R2_CONSERVATIVE_FIXED_RULE",
+    "policy_candidate": false,
+    "quota_forced": false,
+    "rank_policy": "R1_ALWAYS_RANK_COMPARATOR",
+    "eligibility_features": {
+      "underdog_prior_games_min": 5,
+      "favorite_prior_games_min": 5,
+      "h2h_prior_games_min": 1,
+      "forebet_probability_gap_max": 0.2
+    }
+  },
+
+  "cohort_policy": {
+    "primary_selection_per_sport_day": 1,
+    "top3_cohort_per_sport_day": 2,
+    "no_global_cap": true,
+    "ranks_4_plus_recorded_but_not_in_cohort": true
+  },
+
+  "history_loader": {
+    "name": "v2_loaded_priors_only",
+    "use_loaded_v2_history": true,
+    "strict_event_date_lt_target": true,
+    "exclude_same_day": true,
+    "disallow_void": true,
+    "disallow_no_contest": true,
+    "disallow_two_way_anomalous_draw": true,
+    "deterministic_duplicate_handling": "deterministic",
+    "conflict_handling": "report_all_conflicting_source_hashes",
+    "odds_must_not_influence": true
+  },
+
+  "capture_provenance": {
+    "require_raw_capture_receipt": true,
+    "require_per_sidecar_hash_verification": true,
+    "hash_algorithm": "sha256",
+    "preserve_sidecar_path": true,
+    "preserve_body_path": true,
+    "preserve_captured_at": true,
+    "preserve_source_url": true,
+    "preserve_route": true,
+    "never_rewrite_raw_capture": true,
+    "never_rewrite_capture_receipt": true,
+    "never_rewrite_interim": true
+  },
+
+  "idempotency": {
+    "run_id_unique_per_finalization": true,
+    "input_digest_canonical_inputs_only": true,
+    "decision_digest_canonical_selections_only": true,
+    "payload_file_sha256_after_final_write": true,
+    "no_overwrite": true,
+    "no_force": true,
+    "no_supersede": true,
+    "partial_run_preserved_untouched": true,
+    "retry_creates_new_run_id_sibling_dir": true,
+    "manifest_written_last": true
+  },
+
+  "artifact_path": {
+    "root": "data/reports/shadow",
+    "per_date": "data/reports/shadow/<target_date>/",
+    "per_run": "data/reports/shadow/<target_date>/<run_id>/",
+    "manifest": "manifest.json",
+    "payload": "shadow_selections.json",
+    "summary_markdown": "summary.md"
+  },
+
+  "durability": {
+    "status": "LOCAL_CODESPACE_ONLY_NOT_BACKED_UP",
+    "second_copy_procedure": "DEFERRED_TO_SEPARATE_APPROVAL",
+    "no_compact_digest_writer_in_v1": true,
+    "no_external_storage_in_v1": true,
+    "no_force_overwrite_in_v1": true,
+    "git_tracked_exception": false
+  },
+
+  "statuses": {
+    "primary_selection": "PRIMARY_SHADOW_SELECTION",
+    "top3_cohort": "TOP3_EVALUATION_COHORT",
+    "no_selection_sport_day": "SHADOW_NO_SELECTION",
+    "run_blocked": "SHADOW_RUN_BLOCKED",
+    "timing_unverified": "PRE_EVENT_TIMING_UNVERIFIED",
+    "feature_incomplete": "FEATURE_INCOMPLETE_OR_R2_INELIGIBLE"
+  }
+}
