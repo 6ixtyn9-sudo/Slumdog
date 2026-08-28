@@ -2446,8 +2446,8 @@ def test_same_run_odds_provenance_only_observation_is_not_a_conflict(
 
     # Test A: exactly one admitted decision record, zero conflicts.
     acc = manifest["decision_accounting"]
-    assert acc["unique_decision_records_admitted"] == 1, (
-        f"expected 1 admitted, got {acc['unique_decision_records_admitted']}; "
+    assert acc["admitted_canonical_records"] == 1, (
+        f"expected 1 admitted, got {acc['admitted_canonical_records']}; "
         f"acc={acc}"
     )
     assert acc["conflict_groups"] == 0, (
@@ -2586,13 +2586,25 @@ def test_same_run_odds_provenance_only_observation_is_not_a_conflict(
     )
     # Two runs total: the first was the 2-cap run, the second is
     # the 1-cap run. They have different run_ids because the
-    # body digests differ.
+    # body digests differ. Disambiguate by counting the body
+    # digests committed to by the manifest.
     assert len(run_dirs_single) == 2
+    body_counts = []
+    for d in run_dirs_single:
+        m = json.loads((d / "manifest.json").read_text())
+        body_counts.append(len(m["input_provenance"]["raw_body_digests"]))
+    # One of the two has 2 bodies, the other has 1.
+    assert sorted(body_counts) == [1, 2], (
+        f"expected one run with 1 body and one with 2 bodies, "
+        f"got body_counts={body_counts}"
+    )
+    single_dir = run_dirs_single[body_counts.index(1)]
+    twocap_dir = run_dirs_single[body_counts.index(2)]
     manifest_single = json.loads(
-        (run_dirs_single[1] / "manifest.json").read_text()
+        (single_dir / "manifest.json").read_text()
     )
     payload_single = json.loads(
-        (run_dirs_single[1] / "shadow_selections.json").read_text()
+        (single_dir / "shadow_selections.json").read_text()
     )
     # input_digest differs (the body digests differ; the single
     # run has 1 body, the two-cap run has 2).
@@ -2723,9 +2735,9 @@ def test_same_run_genuine_decision_conflict_excludes_all_members(
         f"expected 2 conflicting rows, got {acc['conflicting_rows']}; "
         f"acc={acc}"
     )
-    assert acc["unique_decision_records_admitted"] == 0, (
+    assert acc["admitted_canonical_records"] == 0, (
         f"expected 0 admitted (the only event is in conflict), got "
-        f"{acc['unique_decision_records_admitted']}; acc={acc}"
+        f"{acc['admitted_canonical_records']}; acc={acc}"
     )
     assert acc["exact_decision_duplicate_groups"] == 0
     assert acc["exact_decision_duplicate_extra_rows"] == 0
@@ -2794,12 +2806,517 @@ def test_same_run_genuine_decision_conflict_excludes_all_members(
             f"conflict pool entry must have no rank: {p}"
         )
 
-    # Staged equation balances with the new accounting.
+    # Staged equation balances with the new accounting. Three
+    # equations are checked independently so a regression in any
+    # one is caught at the source.
     total_in = acc["decision_total_records"]
-    assert (acc["timing_rejected"]
-            + acc["identity_ineligible"]
-            + acc["feature_incomplete_or_r2_ineligible"]
-            + acc["unique_decision_records_admitted"]
-            + acc["conflicting_rows"]) == total_in, (
-        f"staged equation imbalance: {acc}"
+    # Stage 1: verified = malformed + timing_rejected + timed
+    assert (acc["malformed_or_unkeyable"]
+            + acc["timing_rejected"]
+            + acc["timed_keyable_snapshots"]) == total_in, (
+        f"stage 1 imbalance: {acc}"
     )
+    # Stage 2: timed = admitted + extras + conflicting
+    assert (acc["admitted_canonical_records"]
+            + acc["exact_decision_duplicate_extra_rows"]
+            + acc["conflicting_rows"]) == acc["timed_keyable_snapshots"], (
+        f"stage 2 imbalance: {acc}"
+    )
+    # Stage 3: admitted = identity_ineligible + feature + primary + cohort + r4plus
+    assert (acc["identity_ineligible"]
+            + acc["feature_incomplete_or_r2_ineligible"]
+            + acc["primary_selected"]
+            + acc["top3_cohort_selected"]
+            + acc["eligible_ranked_beyond_top3"]) == acc["admitted_canonical_records"], (
+        f"stage 3 imbalance: {acc}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stage-ordering / asymmetric-conflict tests (owner integrity review)
+# ---------------------------------------------------------------------------
+
+
+def test_asymmetric_conflict_r2_eligible_vs_r2_ineligible_probability(
+    tmp_root, monkeypatch,
+):
+    """Asymmetric conflict test A (owner spec, ordering blocker).
+
+    Two observations of the same composite key
+    ``(sport, event_id, event_date)``:
+      - observation A: P1=50, P2=40 (gap 0.10) → R2-eligible
+        (gap <= 0.2).
+      - observation B: P1=60, P2=30 (gap 0.30) → R2-INELIGIBLE
+        (gap > 0.2).
+
+    The previous design ran dedup on the R2-filtered set, so
+    observation B was silently dropped before conflict detection
+    and observation A was admitted as the primary. The new
+    design runs conflict detection on ALL timed-valid records
+    BEFORE R2 / R1, so the two observations are classified as
+    a genuine decision conflict and the entire group is
+    excluded.
+
+    Required outcomes (owner spec, test A):
+      - exactly one conflict group, two conflicting rows
+      - 0 admitted decision records
+      - no primary, no cohort
+      - both fingerprints retained
+      - both provenance observations retained
+      - event absent from selections[]
+    """
+    from slumdog import shadow_evaluator as se
+    fixed_clock = datetime(2026, 8, 26, 10, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(se, "_now_utc", lambda: fixed_clock)
+
+    reports = tmp_root / "data" / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    # History sufficient for R2 on the pairing.
+    hist_rows: list[dict] = []
+    for i in range(6):
+        hist_rows.append({
+            "event_id": f"a_a_{i}", "sport": "football",
+            "event_date": f"2024-01-{(i % 28) + 1:02d}",
+            "participant_1": "Arsenal", "participant_2": "Chelsea",
+            "winner_index": 1, "score_1": 2.0, "score_2": 1.0,
+            "probability_1": 0.55, "probability_2": 0.30,
+            "draw_probability": 0.15, "forebet_pick": None,
+            "disposition": "SETTLED",
+        })
+    for i in range(2):
+        hist_rows.append({
+            "event_id": f"h2h_ac_{i}", "sport": "football",
+            "event_date": f"2024-05-{(i % 28) + 1:02d}",
+            "participant_1": "Arsenal", "participant_2": "Chelsea",
+            "winner_index": 1, "score_1": 1.0, "score_2": 0.0,
+            "probability_1": 0.55, "probability_2": 0.30,
+            "draw_probability": 0.15, "forebet_pick": None,
+            "disposition": "SETTLED",
+        })
+    gz_path = reports / "history_football.jsonl.gz"
+    _make_history_gz(gz_path, hist_rows)
+
+    # Observation A: gap 0.10 (R2-eligible).
+    # Observation B: gap 0.30 (R2-INELIGIBLE).
+    target_date = "2026-08-28"
+    rows_a = [{
+        "id": "1001", "HOST_NAME": "Arsenal", "GUEST_NAME": "Chelsea",
+        "Pred_1": "50", "Pred_X": "10", "Pred_2": "40",
+        "best_odd_1": "2.00", "best_odd_2": "2.50", "best_odd_X": "10.00",
+        "short_tag": "EPL", "DATE_BAH": f"{target_date} 15:00",
+        "host_sc_pr": "1", "guest_sc_pr": "1", "goalsavg": "2.5",
+        "Host_SC": None, "Guest_SC": None, "comment": "r2-eligible",
+    }]
+    rows_b = [{
+        "id": "1001", "HOST_NAME": "Arsenal", "GUEST_NAME": "Chelsea",
+        "Pred_1": "60", "Pred_X": "10", "Pred_2": "30",
+        "best_odd_1": "1.50", "best_odd_2": "3.50", "best_odd_X": "10.00",
+        "short_tag": "EPL", "DATE_BAH": f"{target_date} 15:00",
+        "host_sc_pr": "1", "guest_sc_pr": "1", "goalsavg": "2.5",
+        "Host_SC": None, "Guest_SC": None, "comment": "r2-ineligible",
+    }]
+    receipt_path, _ = _build_two_capture_entries_for_same_event(
+        tmp_root, target_date,
+        rows_a=rows_a, rows_b=rows_b,
+        captured_at_a="2026-08-26T10:00:00+00:00",
+        captured_at_b="2026-08-26T11:00:00+00:00",
+        source_url_a="https://example.invalid/football/2026-08-28",
+        source_url_b="https://example.invalid/football/2026-08-28?v=2",
+    )
+    cfg = tmp_root / "config"
+    cfg.mkdir(parents=True, exist_ok=True)
+    import shutil
+    shutil.copy("config/research_baselines_v1.json",
+                cfg / "research_baselines_v1.json")
+    shutil.copy("config/shadow_evaluator_v1.json",
+                cfg / "shadow_evaluator_v1.json")
+
+    rc = main([
+        "--date", target_date, "--capture-receipt", str(receipt_path),
+        "--history", str(gz_path),
+        "--config", str(cfg / "shadow_evaluator_v1.json"),
+        "--root", str(tmp_root),
+    ])
+    assert rc == 0
+    date_dir = tmp_root / "data" / "reports" / "shadow" / target_date
+    run_dirs = [d for d in date_dir.iterdir()
+                if d.is_dir() and d.name != "BLOCKED"]
+    assert len(run_dirs) == 1
+    manifest = json.loads((run_dirs[0] / "manifest.json").read_text())
+    payload = json.loads((run_dirs[0] / "shadow_selections.json").read_text())
+    acc = manifest["decision_accounting"]
+
+    # Ordering: conflict detected BEFORE R2. R2-ineligible
+    # observation B is NOT silently filtered out; it participates
+    # in the fingerprint comparison and the whole group is
+    # excluded.
+    assert acc["conflict_groups"] == 1, (
+        f"expected 1 conflict group, got {acc['conflict_groups']}; acc={acc}"
+    )
+    assert acc["conflicting_rows"] == 2, (
+        f"expected 2 conflicting rows, got {acc['conflicting_rows']}; acc={acc}"
+    )
+    assert acc["admitted_canonical_records"] == 0, (
+        f"expected 0 admitted, got {acc['admitted_canonical_records']}; acc={acc}"
+    )
+    assert acc["primary_selected"] == 0
+    assert acc["top3_cohort_selected"] == 0
+    assert manifest["run_status"] == "SHADOW_NO_SELECTION"
+    # Event absent from selections[].
+    selection_event_ids = [s["event_id"] for s in payload["selections"]]
+    assert "football:1001" not in selection_event_ids, (
+        f"conflicting event must NOT be in selections[]: {selection_event_ids}"
+    )
+    # Both fingerprints retained with their distinct probability_1
+    # values (0.50 and 0.60) — the R2-ineligible fingerprint is
+    # NOT silently dropped.
+    decision_conflicts = manifest["decision_conflicts"]
+    assert len(decision_conflicts) == 1
+    fps = decision_conflicts[0]["decision_fingerprints"]
+    assert len(fps) == 2, f"both fingerprints required, got {len(fps)}: {fps}"
+    fp_p1s = sorted(fp["probability_1"] for fp in fps)
+    assert fp_p1s == [0.5, 0.6] or fp_p1s == [0.50, 0.60], (
+        f"fingerprints must show both probability_1 values: {fp_p1s}"
+    )
+    # Both provenance observations retained.
+    sidecar_digests = manifest["input_provenance"]["sidecar_digests"]
+    body_digests = manifest["input_provenance"]["raw_body_digests"]
+    assert len(sidecar_digests) == 2
+    assert len(body_digests) == 2
+    # Considered pool has 2 entries, both DECISION_CONFLICT_EXCLUDED.
+    pool = manifest["considered_pool"]
+    pool_for_event = [p for p in pool if p["event_id"] == "football:1001"]
+    assert len(pool_for_event) == 2
+    for p in pool_for_event:
+        assert p["considered_status"] == "DECISION_CONFLICT_EXCLUDED"
+    # input_digest commits to the conflict fingerprint trail.
+    trail = manifest["input_provenance"].get("conflict_fingerprint_trail", [])
+    assert len(trail) == 1
+    assert trail[0]["decision_fingerprint_count"] == 2
+    # Staged equations balance.
+    total_in = acc["decision_total_records"]
+    assert (acc["malformed_or_unkeyable"]
+            + acc["timing_rejected"]
+            + acc["timed_keyable_snapshots"]) == total_in, (
+        f"stage 1 imbalance: {acc}"
+    )
+    assert (acc["admitted_canonical_records"]
+            + acc["exact_decision_duplicate_extra_rows"]
+            + acc["conflicting_rows"]) == acc["timed_keyable_snapshots"], (
+        f"stage 2 imbalance: {acc}"
+    )
+    assert (acc["identity_ineligible"]
+            + acc["feature_incomplete_or_r2_ineligible"]
+            + acc["primary_selected"]
+            + acc["top3_cohort_selected"]
+            + acc["eligible_ranked_beyond_top3"]) == acc["admitted_canonical_records"], (
+        f"stage 3 imbalance: {acc}"
+    )
+
+
+def test_asymmetric_conflict_eligible_vs_identity_ineligible_excludes_group(
+    tmp_root, monkeypatch,
+):
+    """Asymmetric conflict test B (owner spec, ordering blocker).
+
+    Two observations of the same composite key:
+      - observation A: identity-eligible, R2-eligible
+        (e.g. gap 0.10)
+      - observation B: identity-INELIGIBLE (e.g. equal
+        participant probabilities on a two-way sport — fails
+        ``IDENTITY_INELIGIBLE: EQUAL_PROBABILITIES``).
+
+    Under the previous design, dedup ran on the R2-filtered
+    set AND identity was checked first, so observation B
+    would have been rejected on identity and observation A
+    would have been admitted. The new design runs conflict
+    detection BEFORE identity/R2, so the two observations
+    are classified as a genuine decision conflict and the
+    entire group is excluded from the decision path.
+
+    Required outcomes (owner spec, test B):
+      - entire group excluded as conflict BEFORE identity/R2
+      - 0 admitted decision records
+      - conflict_groups = 1, conflicting_rows = 2
+    """
+    from slumdog import shadow_evaluator as se
+    fixed_clock = datetime(2026, 8, 26, 10, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(se, "_now_utc", lambda: fixed_clock)
+
+    reports = tmp_root / "data" / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    hist_rows: list[dict] = []
+    for i in range(6):
+        hist_rows.append({
+            "event_id": f"a_a_{i}", "sport": "football",
+            "event_date": f"2024-01-{(i % 28) + 1:02d}",
+            "participant_1": "Arsenal", "participant_2": "Chelsea",
+            "winner_index": 1, "score_1": 2.0, "score_2": 1.0,
+            "probability_1": 0.55, "probability_2": 0.30,
+            "draw_probability": 0.15, "forebet_pick": None,
+            "disposition": "SETTLED",
+        })
+    for i in range(2):
+        hist_rows.append({
+            "event_id": f"h2h_ac_{i}", "sport": "football",
+            "event_date": f"2024-05-{(i % 28) + 1:02d}",
+            "participant_1": "Arsenal", "participant_2": "Chelsea",
+            "winner_index": 1, "score_1": 1.0, "score_2": 0.0,
+            "probability_1": 0.55, "probability_2": 0.30,
+            "draw_probability": 0.15, "forebet_pick": None,
+            "disposition": "SETTLED",
+        })
+    gz_path = reports / "history_football.jsonl.gz"
+    _make_history_gz(gz_path, hist_rows)
+
+    # Observation A: identity-eligible, R2-eligible (gap 0.10).
+    # Observation B: equal participant probabilities (50/50/0)
+    # — fails identity validation (EQUAL_PROBABILITIES) on a
+    # two-way sport.
+    target_date = "2026-08-28"
+    rows_a = [{
+        "id": "1001", "HOST_NAME": "Arsenal", "GUEST_NAME": "Chelsea",
+        "Pred_1": "50", "Pred_X": "10", "Pred_2": "40",
+        "best_odd_1": "2.00", "best_odd_2": "2.50", "best_odd_X": "10.00",
+        "short_tag": "EPL", "DATE_BAH": f"{target_date} 15:00",
+        "host_sc_pr": "1", "guest_sc_pr": "1", "goalsavg": "2.5",
+        "Host_SC": None, "Guest_SC": None, "comment": "ok",
+    }]
+    rows_b = [{
+        "id": "1001", "HOST_NAME": "Arsenal", "GUEST_NAME": "Chelsea",
+        "Pred_1": "50", "Pred_X": "0", "Pred_2": "50",
+        "best_odd_1": "2.00", "best_odd_2": "2.00", "best_odd_X": "0",
+        "short_tag": "EPL", "DATE_BAH": f"{target_date} 15:00",
+        "host_sc_pr": "1", "guest_sc_pr": "1", "goalsavg": "2.5",
+        "Host_SC": None, "Guest_SC": None, "comment": "equal-probs",
+    }]
+    receipt_path, _ = _build_two_capture_entries_for_same_event(
+        tmp_root, target_date,
+        rows_a=rows_a, rows_b=rows_b,
+        captured_at_a="2026-08-26T10:00:00+00:00",
+        captured_at_b="2026-08-26T11:00:00+00:00",
+        source_url_a="https://example.invalid/football/2026-08-28",
+        source_url_b="https://example.invalid/football/2026-08-28?v=2",
+    )
+    cfg = tmp_root / "config"
+    cfg.mkdir(parents=True, exist_ok=True)
+    import shutil
+    shutil.copy("config/research_baselines_v1.json",
+                cfg / "research_baselines_v1.json")
+    shutil.copy("config/shadow_evaluator_v1.json",
+                cfg / "shadow_evaluator_v1.json")
+
+    rc = main([
+        "--date", target_date, "--capture-receipt", str(receipt_path),
+        "--history", str(gz_path),
+        "--config", str(cfg / "shadow_evaluator_v1.json"),
+        "--root", str(tmp_root),
+    ])
+    assert rc == 0
+    date_dir = tmp_root / "data" / "reports" / "shadow" / target_date
+    run_dirs = [d for d in date_dir.iterdir()
+                if d.is_dir() and d.name != "BLOCKED"]
+    assert len(run_dirs) == 1
+    manifest = json.loads((run_dirs[0] / "manifest.json").read_text())
+    payload = json.loads((run_dirs[0] / "shadow_selections.json").read_text())
+    acc = manifest["decision_accounting"]
+
+    # Conflict detection runs BEFORE identity. The two
+    # observations have different decision fingerprints (one
+    # has draw=0.10, the other has draw=0.0) so the entire
+    # group is excluded as a conflict. Identity-ineligible
+    # count must be 0 — observation B was never run through
+    # identity validation; it was excluded by the conflict
+    # stage first.
+    assert acc["conflict_groups"] == 1, (
+        f"expected 1 conflict group, got {acc['conflict_groups']}; acc={acc}"
+    )
+    assert acc["conflicting_rows"] == 2, (
+        f"expected 2 conflicting rows, got {acc['conflicting_rows']}; acc={acc}"
+    )
+    assert acc["admitted_canonical_records"] == 0
+    assert acc["identity_ineligible"] == 0, (
+        f"identity_ineligible must be 0 (conflict runs before identity); "
+        f"got {acc['identity_ineligible']}; acc={acc}"
+    )
+    assert acc["primary_selected"] == 0
+    assert acc["top3_cohort_selected"] == 0
+    # Event absent from selections[].
+    selection_event_ids = [s["event_id"] for s in payload["selections"]]
+    assert "football:1001" not in selection_event_ids
+    # Both fingerprints retained.
+    fps = manifest["decision_conflicts"][0]["decision_fingerprints"]
+    assert len(fps) == 2
+    fp_dps = sorted(fp["draw_probability"] for fp in fps)
+    assert fp_dps == [0.0, 0.10] or fp_dps == [0.0, 0.1], (
+        f"fingerprints must show the two distinct draw_probability values: {fp_dps}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Participant normalization tests (key_of is reused as the v2 helper)
+# ---------------------------------------------------------------------------
+
+
+def test_fingerprint_participant_normalization_equivalent_display_variants():
+    """Two observations whose participant display strings differ
+    only in capitalization / punctuation but normalize to the
+    same key MUST NOT be classified as a conflict. Reuses the
+    existing v2 identity helper ``key_of`` in
+    ``shadow_contracts.py`` (casefold + alphanumeric only).
+    """
+    from slumdog.shadow_evaluator import _extract_decision_fingerprint
+    from slumdog.shadow_contracts import PreEventRecord
+    base = {
+        "sport": "football", "event_id": "1001", "event_date": "2026-08-28",
+        "probability_1": 0.5, "probability_2": 0.4, "draw_probability": 0.1,
+        "raw_sha256": "a", "captured_at": "2026-08-26T10:00:00+00:00",
+        "body_path": "b", "sidecar_path": "c",
+        "capture_receipt_path": "r", "source_url": "u", "route": "x",
+    }
+    r1 = PreEventRecord(participant_1="Manchester United",
+                        participant_2="Liverpool FC", **base)
+    r2 = PreEventRecord(participant_1="manchester united",
+                        participant_2="LIVERPOOL FC", **base)
+    # Display strings differ but key_of normalizes them.
+    assert r1.participant_1 != r2.participant_1
+    assert r1.participant_2 != r2.participant_2
+    fp1 = _extract_decision_fingerprint(r1)
+    fp2 = _extract_decision_fingerprint(r2)
+    assert fp1 == fp2, (
+        f"equivalent display variants MUST produce the same "
+        f"fingerprint; got {fp1} vs {fp2}"
+    )
+
+
+def test_fingerprint_participant_normalization_distinct_participants_conflict():
+    """Two observations with DISTINCT normalized participants
+    MUST be classified as a conflict, even if the display
+    strings share a substring.
+    """
+    from slumdog.shadow_evaluator import _extract_decision_fingerprint
+    from slumdog.shadow_contracts import PreEventRecord
+    base = {
+        "sport": "football", "event_id": "1001", "event_date": "2026-08-28",
+        "probability_1": 0.5, "probability_2": 0.4, "draw_probability": 0.1,
+        "raw_sha256": "a", "captured_at": "2026-08-26T10:00:00+00:00",
+        "body_path": "b", "sidecar_path": "c",
+        "capture_receipt_path": "r", "source_url": "u", "route": "x",
+    }
+    r1 = PreEventRecord(participant_1="Manchester United",
+                        participant_2="Liverpool FC", **base)
+    r2 = PreEventRecord(participant_1="Manchester United",
+                        participant_2="Chelsea FC", **base)
+    fp1 = _extract_decision_fingerprint(r1)
+    fp2 = _extract_decision_fingerprint(r2)
+    assert fp1 != fp2
+    # The participant_key_2 values differ.
+    assert fp1[4] != fp2[4]
+
+
+def test_fingerprint_participant_normalization_rejects_self_pair_after_normalize():
+    """A self-pair after participant normalization (e.g.
+    ``"Arsenal"`` and ``"arsenal"``) MUST be classified as
+    malformed / unkeyable. The ``PreEventRecord`` dataclass
+    already rejects this in its ``__post_init__`` via the
+    same ``key_of`` helper, so a vanilla record construction
+    raises ValueError.
+
+    This test verifies the same ``key_of`` helper is the one
+    used by the fingerprint function (so the rejection is
+    consistent). A fingerprint built on a record that DOES
+    have distinct normalized participants but uses
+    non-normalized display strings that happen to be the
+    same string MUST still produce a well-formed
+    fingerprint (proving the fingerprint uses the normalized
+    keys, not the display strings, for the self-pair check).
+    """
+    from slumdog.shadow_evaluator import _extract_decision_fingerprint
+    from slumdog.shadow_contracts import PreEventRecord, key_of
+    base = {
+        "sport": "football", "event_id": "1001", "event_date": "2026-08-28",
+        "probability_1": 0.5, "probability_2": 0.4, "draw_probability": 0.1,
+        "raw_sha256": "a", "captured_at": "2026-08-26T10:00:00+00:00",
+        "body_path": "b", "sidecar_path": "c",
+        "capture_receipt_path": "r", "source_url": "u", "route": "x",
+    }
+    # Verify the dataclass rejects a self-pair after normalize.
+    with pytest.raises(ValueError, match="self-pair"):
+        PreEventRecord(participant_1="Arsenal", participant_2="arsenal", **base)
+    # And verifies the fingerprint helper uses the same
+    # normalization function (key_of) so the rejection is
+    # consistent across the two layers.
+    from slumdog.shadow_evaluator import _extract_decision_fingerprint as fp_fn
+    # A direct key_of check matches what the fingerprint
+    # would compute internally.
+    assert key_of("Arsenal") == key_of("arsenal") == "arsenal"
+    # Two records with distinct normalized participants but
+    # different display strings (one is uppercase, one is
+    # titlecase) MUST have the same fingerprint.
+    r_upper = PreEventRecord(participant_1="ARSENAL",
+                             participant_2="CHELSEA", **base)
+    r_title = PreEventRecord(participant_1="Arsenal",
+                             participant_2="Chelsea", **base)
+    fp_u = fp_fn(r_upper)
+    fp_t = fp_fn(r_title)
+    assert fp_u == fp_t, (
+        f"normalized participants MUST produce the same "
+        f"fingerprint; got {fp_u} vs {fp_t}"
+    )
+
+
+def test_fingerprint_participant_normalization_preserves_digit_order():
+    """The DC token ``21`` MUST NOT be rewritten to ``12`` by
+    the normalization. ``key_of`` preserves digit order
+    (casefold + alphanumeric filter, no character
+    reordering), so ``key_of("21") == "21"`` and
+    ``key_of("12") == "12"``.
+    """
+    from slumdog.shadow_evaluator import _extract_decision_fingerprint
+    from slumdog.shadow_contracts import PreEventRecord, key_of
+    # Sanity check on key_of: digit order is preserved.
+    assert key_of("21") == "21", (
+        f"key_of must NOT rewrite '21' to '12'; got {key_of('21')!r}"
+    )
+    assert key_of("12") == "12"
+    # Sanity check on the fingerprint: 21 vs 12 are NOT
+    # self-pairs (they have different keys) so the fingerprint
+    # is well-formed and they differ.
+    base = {
+        "sport": "football", "event_id": "1001", "event_date": "2026-08-28",
+        "probability_1": 0.5, "probability_2": 0.4, "draw_probability": 0.1,
+        "raw_sha256": "a", "captured_at": "2026-08-26T10:00:00+00:00",
+        "body_path": "b", "sidecar_path": "c",
+        "capture_receipt_path": "r", "source_url": "u", "route": "x",
+    }
+    r21 = PreEventRecord(participant_1="21", participant_2="Arsenal", **base)
+    r12 = PreEventRecord(participant_1="12", participant_2="Arsenal", **base)
+    fp21 = _extract_decision_fingerprint(r21)
+    fp12 = _extract_decision_fingerprint(r12)
+    assert fp21 is not None and fp12 is not None
+    # Different normalized keys → different fingerprints (NOT
+    # collapsed by the conflict stage).
+    assert fp21 != fp12, (
+        f"'21' and '12' must produce different fingerprints, "
+        f"not be collapsed; got fp21={fp21} fp12={fp12}"
+    )
+
+
+def test_fingerprint_rejects_empty_normalized_participant():
+    """A record whose participant display string is non-empty
+    but normalizes to empty (e.g. ``"---"``) MUST be rejected
+    as malformed / unkeyable.
+    """
+    from slumdog.shadow_evaluator import _extract_decision_fingerprint
+    from slumdog.shadow_contracts import PreEventRecord
+    base = {
+        "sport": "football", "event_id": "1001", "event_date": "2026-08-28",
+        "probability_1": 0.5, "probability_2": 0.4, "draw_probability": 0.1,
+        "raw_sha256": "a", "captured_at": "2026-08-26T10:00:00+00:00",
+        "body_path": "b", "sidecar_path": "c",
+        "capture_receipt_path": "r", "source_url": "u", "route": "x",
+    }
+    r = PreEventRecord(participant_1="---", participant_2="Arsenal", **base)
+    assert _extract_decision_fingerprint(r) is None
+    r2 = PreEventRecord(participant_1="Arsenal", participant_2="***", **base)
+    assert _extract_decision_fingerprint(r2) is None

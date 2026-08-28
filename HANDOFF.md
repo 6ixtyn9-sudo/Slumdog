@@ -271,6 +271,109 @@ interior gap (e.g. `0.18` from `0.54` vs `0.36`) when the test
 needs the third event to be R2-eligible. See
 `docs/MILESTONE7_SHADOW_PICKS_PLAN.md` §8 for the full note.
 
+**Conflict detection must precede R2 eligibility and ranking
+(processing order, owner integrity review):** The shadow
+evaluator's pipeline is a strict five-stage flow. Conflict
+detection runs on EVERY timed-valid record BEFORE identity
+validation, feature construction, R2 eligibility, and R1
+ranking. An R2-ineligible observation whose decision
+content differs from an R2-eligible observation is therefore
+classified as a genuine decision conflict and the entire
+group is excluded — the R2-ineligible observation is NOT
+silently filtered out before conflict detection. The
+previous design ran dedup on the R2-filtered set, which was
+an integrity blocker (reviewed and corrected in the second
+post-PR integrity pass).
+
+Pipeline stages, in order:
+
+1. **Keyability** — every verified parser snapshot is run
+   through `_extract_decision_fingerprint`. Records too
+   malformed to form a fingerprint (unknown sport, empty
+   event_id/date/participant, self-pair after normalize,
+   None or out-of-range probability) are bucketed as
+   `malformed_or_unkeyable`. They do NOT participate in
+   conflict detection and are NOT silently attached to an
+   unrelated event.
+2. **Timing gate** — every keyable record's `captured_at`
+   is checked against the 24h-before-target safe cutoff.
+   Records past the cutoff (or with an unparseable
+   timestamp) are bucketed as `timing_rejected`.
+3. **Conflict classification** — every timed-valid record
+   is grouped by composite key `(sport, event_id,
+   event_date)` and its price-free decision fingerprint
+   is compared against the other records in the group:
+   - one fingerprint, N observations → one admitted
+     canonical record; N-1 extras counted as
+     `exact_decision_duplicate_extra_rows`; all N source
+     observations preserved as provenance;
+   - multiple fingerprints, any number of observations →
+     entire group excluded; `conflict_groups` += 1,
+     `conflicting_rows` += N; both fingerprints retained in
+     `decision_conflicts` for forensic review.
+4. **Identity + features + R2 + R1** — runs ONLY on the
+   admitted canonical records (NOT on the conflict-
+   excluded group, NOT on malformed or timing-rejected
+   records).
+5. **Rank + select** — per-sport-day ranking, primary + top-3
+   cohort assignment, selection emission.
+
+Staged accounting (three separate non-overlapping
+equations, asserted before the manifest is written):
+- Stage 1 — `verified_parser_snapshots = malformed_or_unkeyable + timing_rejected + timed_keyable_snapshots`
+- Stage 2 — `timed_keyable_snapshots = admitted_canonical_records + exact_decision_duplicate_extra_rows + conflicting_rows`
+- Stage 3 — `admitted_canonical_records = identity_ineligible + feature_incomplete_or_r2_ineligible + primary_selected + top3_cohort_selected + eligible_ranked_beyond_top3`
+
+Participant normalization in the fingerprint reuses the
+existing v2 identity helper `key_of` from
+`slumdog.shadow_contracts` (casefold + alphanumeric only,
+digit order preserved). Empty normalized participants are
+rejected as malformed; self-pair after normalize is
+rejected as malformed; the DC token `21` is NOT rewritten
+to `12`. The fingerprint excludes provenance fields
+(`raw_sha256`, `source_url`, `captured_at`, `route`, body /
+sidecar / receipt paths); they are committed to by
+`input_digest` and recorded in the per-record
+`_provenance_observations` list on the canonical record.
+
+Digests are distinct:
+- `input_digest` commits to every source observation AND
+  to the conflict fingerprint trail.
+- `decision_digest` commits to the conflict-resolved
+  considered pool, exclusions, primary/cohort selections,
+  and the staged accounting. It intentionally includes the
+  duplicate-source accounting
+  (`admitted_canonical_records`,
+  `exact_decision_duplicate_extra_rows`,
+  `conflict_groups`, `conflicting_rows`) so two runs with
+  the same decision content but a different number of
+  observations produce different decision_digests — this is
+  the documented choice (the accounting IS the reproducible
+  record of how many observations were collapsed). Two
+  runs differing only in odds-only provenance produce
+  different `input_digest` (because the per-snapshot
+  sidecar/body SHA-256 differ) but the same
+  `decision_digest` (because odds-only differences do not
+  change the price-free decision content).
+
+Asymmetric conflict tests (owner spec):
+- A: same composite key, observation A R2-eligible (gap
+  0.10), observation B R2-INELIGIBLE (gap 0.30) → 1
+  conflict group, 2 conflicting rows, 0 admitted, both
+  fingerprints + provenance retained.
+- B: same composite key, observation A identity-eligible,
+  observation B identity-INELIGIBLE (equal participant
+  probabilities on a two-way sport) → 1 conflict group, 2
+  conflicting rows, 0 admitted, `identity_ineligible`
+  count must be 0 (conflict runs before identity).
+- C (kept from prior commit): same composite key, two
+  observations of the same event with different odds
+  metadata but identical decision content → 1 admitted
+  canonical, 1 exact-decision-duplicate extra, 0 conflicts.
+
+See `docs/MILESTONE7_SHADOW_PICKS_PLAN.md` §10 for the
+full ordering spec.
+
 **Decision content vs source provenance (dedup semantics):**
 The shadow evaluator's across-capture dedup uses a
 **decision fingerprint** that contains ONLY price-free decision

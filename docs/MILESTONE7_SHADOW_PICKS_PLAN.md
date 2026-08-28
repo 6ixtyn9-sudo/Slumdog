@@ -341,32 +341,73 @@ get `status = "SHADOW_RULE_QUALIFIED"`.
 No global cap. Multiple sport-days, each with its own primary + cohort,
 are allowed and tested.
 
-### Decision content vs source provenance (dedup)
+### Decision content vs source provenance (dedup) and ordering of stages
 
 The shadow evaluator receives every capture entry that survived
 verification. The same event may appear in multiple capture entries
 (because the source can be re-snapshotted, the body can be re-fetched,
-odds can update between snapshots, etc.). Across-capture dedup
-classifies these observations as follows, using a **decision
-fingerprint** that contains ONLY price-free decision content:
+odds can update between snapshots, etc.). The forward pipeline is
+a strict five-stage flow. **Conflict detection runs on EVERY
+timed-valid record, BEFORE identity validation, feature
+construction, R2 eligibility, and R1 ranking.** An R2-ineligible
+observation whose decision content differs from an R2-eligible
+observation is therefore classified as a genuine decision conflict
+and the entire group is excluded — the R2-ineligible observation
+is NOT silently filtered out before conflict detection.
+
+Pipeline stages, in order:
+
+1. **Keyability** — every verified parser snapshot is run through
+   `_extract_decision_fingerprint`. Records too malformed to form
+   a fingerprint (unknown sport, empty `event_id` / `event_date`
+   / participant, self-pair after normalize, None or out-of-range
+   probability, empty normalized participant) are bucketed as
+   `malformed_or_unkeyable`. They do NOT participate in conflict
+   detection and are NOT silently attached to an unrelated event.
+2. **Timing gate** — every keyable record's `captured_at` is
+   checked against the 24h-before-target safe cutoff. Records
+   past the cutoff (or with an unparseable timestamp) are
+   bucketed as `timing_rejected`.
+3. **Conflict classification** — every timed-valid record is
+   grouped by composite key `(sport, event_id, event_date)` and
+   its price-free decision fingerprint is compared against the
+   other records in the group.
+4. **Identity + features + R2 + R1** — runs ONLY on the admitted
+   canonical records (NOT on the conflict-excluded group, NOT on
+   malformed or timing-rejected records).
+5. **Rank + select** — per-sport-day ranking, primary + top-3
+   cohort assignment, selection emission.
+
+The decision fingerprint deliberately contains ONLY price-free
+decision content:
 
 ```text
 decision fingerprint = (
   sport, event_date, event_id,
-  participant_1, participant_2,
+  key_of(participant_1), key_of(participant_2),
   probability_1, probability_2, draw_probability,
 )
 ```
 
+`key_of` is the existing v2 identity helper in
+`slumdog.shadow_contracts` (casefold + alphanumeric only, digit
+order preserved: `key_of("21") == "21"`, `key_of("12") == "12"`).
+Equivalent display variants (capitalization or punctuation only)
+normalize to the same key, so two observations of the same event
+with display variants but identical decision content are NOT
+classified as a conflict. Empty normalized participants and
+self-pair-after-normalize records are rejected as
+`malformed_or_unkeyable`.
+
 The decision fingerprint deliberately EXCLUDES provenance fields:
-`source_url`, `raw_sha256`, `sidecar_sha256`, `captured_at`, `route`,
-`body_path`, `sidecar_path`, `capture_receipt_path`. Two observations
-of the same event that differ only in odds or other display metadata
-necessarily have different `raw_sha256` and probably different
-`captured_at`; including those in the fingerprint would mis-classify
-odds-only-different observations as genuine conflicts, which would
-violate the permanent rule that odds cannot affect the price-free
-decision.
+`source_url`, `raw_sha256`, `sidecar_sha256`, `captured_at`,
+`route`, `body_path`, `sidecar_path`, `capture_receipt_path`.
+Two observations of the same event that differ only in odds or
+other display metadata necessarily have different `raw_sha256`
+and probably different `captured_at`; including those in the
+fingerprint would mis-classify odds-only-different observations
+as genuine conflicts, which would violate the permanent rule
+that odds cannot affect the price-free decision.
 
 For a single composite key `(sport, event_id, event_date)`:
 
@@ -387,29 +428,72 @@ For a single composite key `(sport, event_id, event_date)`:
 The accounting fields are:
 
 ```text
-unique_decision_records_admitted      (one per non-conflict composite key)
-exact_decision_duplicate_groups       (groups with N>1 observations collapsed)
-exact_decision_duplicate_extra_rows   (sum of (N-1) over collapsed groups)
-conflict_groups                       (composite keys with multiple fingerprints)
-conflicting_rows                      (total observations in conflict groups)
+# Stage 1
+malformed_or_unkeyable
+timing_rejected
+timed_keyable_snapshots
+
+# Stage 2
+admitted_canonical_records              (one per non-conflict composite key)
+exact_decision_duplicate_groups         (groups with N>1 observations collapsed)
+exact_decision_duplicate_extra_rows     (sum of (N-1) over collapsed groups)
+conflict_groups                         (composite keys with multiple fingerprints)
+conflicting_rows                        (total observations in conflict groups)
+
+# Stage 3
+identity_ineligible
+feature_incomplete_or_r2_ineligible
+primary_selected
+top3_cohort_selected
+eligible_ranked_beyond_top3
 ```
 
-The staged equation remains balanced:
+The three staged equations are asserted independently before the
+manifest is written:
 
 ```text
-total_in == timing_rejected
-           + identity_ineligible
-           + feature_incomplete_or_r2_ineligible
-           + unique_decision_records_admitted
-           + exact_decision_duplicate_extra_rows
-           + conflicting_rows
+# Stage 1: verified_parser_snapshots = malformed + timing + timed
+malformed_or_unkeyable
+    + timing_rejected
+    + timed_keyable_snapshots
+    = decision_total_records
+
+# Stage 2: timed_keyable = admitted + extras + conflicting
+admitted_canonical_records
+    + exact_decision_duplicate_extra_rows
+    + conflicting_rows
+    = timed_keyable_snapshots
+
+# Stage 3: admitted = identity + feature + primary + cohort + r4plus
+identity_ineligible
+    + feature_incomplete_or_r2_ineligible
+    + primary_selected
+    + top3_cohort_selected
+    + eligible_ranked_beyond_top3
+    = admitted_canonical_records
 ```
 
-`decision_digest` is independent of per-snapshot source fields
-(odds-only differences, whether between separate runs or between
-observations in the same run, do not change the decision content).
-The `decision_conflicts` list is published in the manifest for
-forensic review but is NOT in the `decision_digest`.
+Digests are distinct:
+
+- `input_digest` commits to every source observation AND to the
+  conflict fingerprint trail (so two observations in a conflict
+  group both contribute to `input_digest`). Two runs differing
+  only in the per-snapshot sidecar / body SHA-256 produce
+  different `input_digest`s.
+- `decision_digest` commits to the conflict-resolved considered
+  pool, exclusions, primary / cohort selections, and the staged
+  accounting. It intentionally includes the duplicate-source
+  accounting (`admitted_canonical_records`,
+  `exact_decision_duplicate_extra_rows`, `conflict_groups`,
+  `conflicting_rows`) so two runs with the same decision content
+  but a different number of observations produce different
+  decision_digests — this is the documented choice (the
+  accounting IS the reproducible record of how many observations
+  were collapsed). Two runs differing only in odds-only
+  provenance produce the same `decision_digest` (because the
+  decision content is identical). The `decision_conflicts` list
+  is published in the manifest for forensic review but is NOT in
+  the `decision_digest`.
 
 ---
 
@@ -473,18 +557,32 @@ unique_rows + exact_duplicate_rows + conflicting_rows
 ```
 
 **Decision-level** (sums to `decision_total_records`):
+three separate non-overlapping staged equations, each
+asserted independently before the manifest is written:
 
 ```
-timing_rejected
-    + identity_ineligible
-    + feature_incomplete_or_r2_ineligible
-    + unique_decision_records_admitted
+# Stage 1: verified_parser_snapshots = malformed + timing + timed
+malformed_or_unkeyable
+    + timing_rejected
+    + timed_keyable_snapshots
+    = decision_total_records
+
+# Stage 2: timed_keyable = admitted + extras + conflicting
+admitted_canonical_records
     + exact_decision_duplicate_extra_rows
     + conflicting_rows
-    = decision_total_records
+    = timed_keyable_snapshots
+
+# Stage 3: admitted_canonicals = identity + feature + primary + cohort + r4plus
+identity_ineligible
+    + feature_incomplete_or_r2_ineligible
+    + primary_selected
+    + top3_cohort_selected
+    + eligible_ranked_beyond_top3
+    = admitted_canonical_records
 ```
 
-`unique_decision_records_admitted` is the number of composite-key
+`admitted_canonical_records` is the number of composite-key
 groups that have exactly one decision fingerprint; these flow
 into ranking as `primary_selected` + `top3_cohort_selected` +
 `eligible_ranked_beyond_top3`.
