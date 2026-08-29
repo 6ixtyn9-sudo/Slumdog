@@ -98,6 +98,13 @@ _TAR_COMPRESSLEVEL = 9
 # Conservative output permissions.
 _OUTPUT_MODE = 0o600
 
+# Verification reads a (potentially untrusted) archive into memory. Bound both
+# the compressed archive and the decompressed total so a malformed or
+# decompression-bomb archive is rejected instead of exhausting memory. These
+# are far above any genuine shadow bundle (a few tens of MB).
+_MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024        # 2 GiB compressed
+_MAX_UNCOMPRESSED_TOTAL = 4 * 1024 * 1024 * 1024   # 4 GiB decompressed
+
 # Authorization flags that MUST be false on every bundle (the bundle tool
 # is post-decision preservation; it never authorizes anything).
 _AUTH_FLAGS = (
@@ -831,6 +838,7 @@ def _read_archive_members(archive_bytes: bytes) -> dict[str, bytes]:
     except (tarfile.TarError, OSError, EOFError, gzip.BadGzipFile) as e:
         raise BundleIntegrityError(f"corrupt or unreadable archive: {e}") from e
     members: dict[str, bytes] = {}
+    total = 0
     with tar:
         for info in tar.getmembers():
             if info.type not in (tarfile.REGTYPE, tarfile.AREGTYPE):
@@ -838,6 +846,10 @@ def _read_archive_members(archive_bytes: bytes) -> dict[str, bytes]:
                     f"unsupported archive member type for {info.name!r}: "
                     f"only regular files are permitted (no symlinks, hard links, "
                     f"devices, FIFOs, directories)"
+                )
+            if info.size < 0 or info.size > _MAX_UNCOMPRESSED_TOTAL:
+                raise BundleIntegrityError(
+                    f"archive member {info.name!r} has unsafe declared size {info.size}"
                 )
             name = info.name
             if not _safe_archive_member_name(name):
@@ -847,11 +859,20 @@ def _read_archive_members(archive_bytes: bytes) -> dict[str, bytes]:
             extracted = tar.extractfile(info)
             if extracted is None:
                 raise BundleIntegrityError(f"cannot read archive member: {name!r}")
-            data = extracted.read()
-            if len(data) != info.size:
+            # Read exactly the declared (already bounded) byte count, then
+            # confirm no extra data follows — the tar header size is
+            # authoritative, so this never allocates more than the real member.
+            data = extracted.read(info.size)
+            if len(data) != info.size or extracted.read(1):
                 raise BundleIntegrityError(
                     f"archive member size mismatch: {name!r} header={info.size} "
                     f"actual={len(data)}"
+                )
+            total += len(data)
+            if total > _MAX_UNCOMPRESSED_TOTAL:
+                raise BundleIntegrityError(
+                    f"archive decompressed total exceeds safety limit "
+                    f"({_MAX_UNCOMPRESSED_TOTAL} bytes)"
                 )
             members[name] = data
     return members
@@ -880,6 +901,10 @@ def verify_bundle(*, bundle_path: str | Path, receipt_path: str | Path) -> dict[
         raise BundleIntegrityError(f"bundle receipt not found: {receipt_path}")
 
     archive_bytes = bundle_path.read_bytes()
+    if len(archive_bytes) > _MAX_ARCHIVE_BYTES:
+        raise BundleIntegrityError(
+            f"archive exceeds maximum compressed size ({_MAX_ARCHIVE_BYTES} bytes)"
+        )
     archive_sha = _sha256_bytes(archive_bytes)
     try:
         receipt = json.loads(receipt_path.read_bytes().decode("utf-8"))
@@ -887,6 +912,12 @@ def verify_bundle(*, bundle_path: str | Path, receipt_path: str | Path) -> dict[
         raise BundleIntegrityError(f"receipt is not valid JSON: {e}") from e
     if not isinstance(receipt, dict):
         raise BundleIntegrityError("receipt must be a JSON object")
+    claimed_total = receipt.get("total_uncompressed_bytes")
+    if isinstance(claimed_total, int) and claimed_total > _MAX_UNCOMPRESSED_TOTAL:
+        raise BundleIntegrityError(
+            f"receipt claims uncompressed size above the safety limit "
+            f"({_MAX_UNCOMPRESSED_TOTAL} bytes)"
+        )
 
     # --- receipt schema / authorization flags ------------------------------
     if receipt.get("bundle_schema_version") != BUNDLE_SCHEMA_VERSION:
