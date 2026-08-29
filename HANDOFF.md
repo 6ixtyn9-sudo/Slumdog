@@ -1,13 +1,30 @@
 # Slumdog Living Handoff
 
-**Last updated:** 2026-08-28 (UTC) — **MILESTONE 7 MERGED INTO `main` VIA PR #11** / **NO REAL SHADOW RUN PERFORMED** / **FIRST REAL RUN BLOCKED ON FULL-PAYLOAD BACKUP AND AUTHORIZED FUTURE CAPTURE**. 534 tests pass (426 prior + 108 new M7 tests); canonical declaration SHA-256 `dd08976a…4d597`; frozen baseline SHA-256 `666dabe7…00a1` MATCH; golden regression for `build_price_free_examples` VERIFIED byte-for-byte identical to base commit `b87784f`; PR #11 merge commit `dadfb8eb5bcfa14d7314a792c60b4cec9c2b3f2a`; temporary branch `arena/01a048de-slumdog` deleted; only permanent `main` remains remotely
-**Branch:** `main` (merged)
-**Merge commit:** `dadfb8eb5bcfa14d7314a792c60b4cec9c2b3f2a`
-**Phase:** Milestones 0–7 COMPLETE AND MERGED. **Milestone 7 software path is COMPLETE**: shadow pick evaluator (per-sport-day primary + rank-2/3 cohort, R2-frozen, R1-ranking, 4-ID split, atomic no-overwrite artifact, BLOCKED receipts separate, 24h timing gate, history memory bound tightened to 256 MiB default with explicit per-call override, ranks-4+ in `considered_pool[]` with `ELIGIBLE_RANKED_BEYOND_TOP3` and not in `selections[]`, decision_digest independent of per-snapshot source fields, source provenance retained, five-stage fail-closed pipeline: keyability → timing → conflict → identity+features+R2+R1 → rank+select, three-staged accounting equation, draw_probability=None supported, canonical selection is receipt-order-independent, finite-probability predicate rejects bool/string/NaN/inf/out-of-range). Training FROZEN. Production NOT AUTHORIZED. Shortlist policy NOT AUTHORIZED. First real shadow run NOT yet authorized.
+**Last updated:** 2026-08-29 (UTC) — **MILESTONE 7B IMPLEMENTED/TESTED LOCALLY (shadow bundle tool; PR opened, NOT merged)** / **NO REAL SHADOW BUNDLE CREATED** / **NO REAL FOREBET CAPTURE** / **NO REAL SHADOW RUN** / **PRODUCTION NOT AUTHORIZED** / **SHORTLIST POLICY NOT AUTHORIZED**. 601 tests pass (534 prior + 67 new M7B tests); canonical declaration SHA-256 `dd08976a…4d597`; frozen baseline SHA-256 `666dabe7…00a1` MATCH (unchanged); golden shared-feature digest `1a97cb81…ca0d` unchanged; full suite `python -m pytest` green, pyflakes clean, `git diff --check` clean, `py_compile` clean. See **Milestone 7B** below and `docs/MILESTONE7B_SHADOW_BUNDLE.md`.
+
+Prior state (2026-08-28): MILESTONE 7 MERGED INTO `main` VIA PR #11 (merge `dadfb8e`); 534 tests pass; NO REAL SHADOW RUN PERFORMED.
+
+**Branch:** `arena/01a04d74-slumdog` (delivery from `main` @ `3c5dbab`); `main` is only permanent branch
+**Base commit:** `3c5dbab2d035038c055b664c57a842ab7f09743e`
+**Phase:** Milestones 0–7 COMPLETE AND MERGED. **Milestone 7B (verifiable full-payload shadow bundle) IMPLEMENTED/TESTED LOCALLY** — deterministic `.tar.gz` full-payload bundler + in-memory verifier, stdlib-only, post-decision preservation. First real shadow run still BLOCKED on (1) synthetic bundle download/verify exercise in the data-bearing Codespace and (2) an authorized gentle future-date capture. Training FROZEN. Production NOT AUTHORIZED. Shortlist policy NOT AUTHORIZED.
 **Mission:** Slumdog identifies a small daily shortlist of participants that Forebet considers underdogs but whose available pre-event evidence indicates a credible outright-win upset.
-**PR:** #11 https://github.com/6ixtyn9-sudo/Slumdog/pull/11 — "Milestone 7: add immutable forward shadow evaluator" (MERGED into `main`; merge commit `dadfb8e`)
 **Training:** FROZEN (`feature_contracts.py: MODEL_TRAINING_ALLOWED=False`)
-**Tests:** 515 passed (verified 2026-08-28; full suite `python -m pytest`, pyflakes clean, `git diff --check` clean, `python -m py_compile` clean, `python -m slumdog.shadow_evaluator --help` returns 0)
+**Tests:** 601 passed (verified 2026-08-29; full suite `python -m pytest`, pyflakes clean, `git diff --check` clean, `python -m py_compile` clean, `python -m slumdog.shadow_bundle --help` returns 0)
+
+## Milestone 7B — COMPLETE LOCALLY (shadow bundle; PR opened, NOT merged)
+
+**Deliverable:** `src/slumdog/shadow_bundle.py` + `tests/test_shadow_bundle.py` (67 focused tests, incl. bounded-memory streaming) + `docs/MILESTONE7B_SHADOW_BUNDLE.md`. Standard-library-only module; imports no other Slumdog submodule, so verification runs on an independent machine with only the archive + receipt + Python.
+
+**Commands:**
+- Create: `python -m slumdog.shadow_bundle create --run-dir <completed-run-dir> --output-dir <explicit-dir> --root <repo-root>` → writes `slumdog-shadow-<date>-<run>.tar.gz`, `*.bundle.json`, `*.tar.gz.sha256` (all `0600`).
+- Verify: `python -m slumdog.shadow_bundle verify --bundle <archive> --receipt <bundle.json>` → `BUNDLE_VERIFIED` (exit 0) or `BUNDLE_VERIFY_FAILED` (exit 2, no traceback). Never extracts to disk.
+
+**Behavior:** packages a completed run's exact `shadow_selections.json` + `manifest.json` plus the two frozen configs, the capture receipt, every referenced sidecar/raw body, and every referenced history input; content-addressed logical `bundle/` layout with a canonical `inventory.json` and `README.txt`; deterministic tar.gz (sorted members, uid/gid 0, mode 0644, mtime 0, gzip mtime 0, regular files only) — same source bytes produce byte-identical archives (proven via two-out-dir exact-byte comparison through the CLI). Create refuses partial/blocked runs, corrupt payloads, hash mismatches, missing inputs, unsupported schema/version, out-of-root/traversal/symlink paths, and any pre-existing output (no force/overwrite); temp-sibling + atomic-rename finalization, checksum marker last, so interruptions leave no valid completion marker. **Bounded-memory streaming:** raw bodies/history are hashed and tar-streamed in 1 MiB chunks (never `read_bytes`-ed); the archive is stream-hashed and then **self-verified with the full streaming verifier before finalization**; verification hashes every member in bounded chunks over two streaming passes (never extracts, never holds an archive member whole), with explicit caps (512 MiB compressed / 256 MiB member / 1 GiB total uncompressed / 16 MiB metadata / 10k members / 512-byte paths; no `--unlimited`), and a check/use-race guard that re-hashes and re-stats each streamed source. Verifier checks archive hash, receipt/declaration authorization flags (all false), safe members (no absolute/`..`/symlink/device/FIFO/duplicate/unexpected), inventory schema + per-member hash/size, payload-vs-manifest, recomputed frozen config + declaration canonical hashes, and recomputed input/decision digests + run id. 67 focused tests.
+
+**Authorization state:** Training NOT AUTHORIZED, Production NOT AUTHORIZED, Shortlist policy NOT AUTHORIZED, Threshold optimization NOT AUTHORIZED; no real Forebet capture and no real shadow run authorized in this milestone.
+
+**Milestone 7B implemented/tested locally. No real shadow bundle created. No real Forebet capture. No real shadow run. Production not authorized. Shortlist policy not authorized.**
+
 
 ## Product Invariants (from AGENTS.md)
 
