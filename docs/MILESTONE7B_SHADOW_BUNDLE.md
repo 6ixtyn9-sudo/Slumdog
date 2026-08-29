@@ -17,7 +17,7 @@ collection, or performs any production/training action. It only reads the
 exact bytes the completed run already committed to.
 
 - Module: `src/slumdog/shadow_bundle.py`
-- Tests: `tests/test_shadow_bundle.py` (51 focused tests)
+- Tests: `tests/test_shadow_bundle.py` (67 focused tests, including bounded-memory streaming)
 - Standard library only; the module imports **no** other Slumdog submodule, so
   verification can run on an independent machine with nothing but the archive,
   the receipt, and Python.
@@ -148,6 +148,46 @@ Records the externally-facing identity of the whole bundle:
 
 ---
 
+## Bounded-memory streaming (verifier reliability)
+
+The tool must stay reliable precisely when its input grows or is malformed,
+so it never allocates an entire file or archive.
+
+- **Create:** small metadata files (payload, manifest, both configs, capture
+  receipt, sidecars, inventory, README) are read in memory only under a
+  metadata byte cap. Potentially large evidence — raw capture bodies and
+  history inputs — is verified and archived **by streaming**. Each evidence
+  file is opened once, `fstat`-ed, hashed in fixed chunks, rewound, and
+  streamed directly into the tar; it is re-hashed during tar streaming and its
+  size/inode/mtime identity is re-checked on close, so the bytes that enter the
+  archive are exactly the bytes that were verified (no check/use race). The
+  archive is written to a temp file and then stream-hashed; it is never held in
+  memory.
+- **Verify:** the compressed archive is read through a counting/hashing
+  wrapper (so the archive SHA-256 and compressed size accumulate as tarfile
+  streams the gzip data). Two streaming passes are made: pass 1 hashes and
+  sizes **every** member in bounded chunks (discarding the bytes), checking
+  name/type/size first; pass 2 buffers and parses only the small metadata
+  members needed for semantic checks — again under the metadata cap. Nothing
+  is extracted to disk.
+
+Explicit limits (constants in `shadow_bundle.py`; there is **no**
+`--unlimited` / override):
+
+| Limit | Value | Rationale |
+|---|---|---|
+| Stream chunk | 1 MiB | bounded read/write granularity |
+| Max compressed archive | 512 MiB | comfortably above the current ~53 MB retained data |
+| Max single evidence member | 256 MiB | bounds any one raw body / history file |
+| Max total uncompressed | 1 GiB | bounds the decompressed bundle |
+| Max metadata member | 16 MiB | JSON config/manifest/inventory are small |
+| Max member count | 10,000 | bounds archive metadata |
+| Max member path length | 512 bytes | path-safety guard |
+
+These sit far above the current retained dataset but far below any accidental
+multi-gigabyte allocation. An oversized member is rejected when its tar header
+is read — **before** any content is allocated.
+
 ## 3. Deterministic archive rules
 
 `.tar.gz` produced with the Python standard library only (no shelling out):
@@ -230,9 +270,14 @@ The create command refuses, without writing a bundle, when:
   collision fails before anything is written. There is no force/overwrite flag.
 - Each file is written to a `0600` temporary sibling, fsynced, and atomically
   renamed into place (`os.replace`), then chmod `0600`.
-- Finalization order: **archive → receipt → checksum marker (last)**.
-- An interruption before the last step leaves visibly incomplete output (no
-  valid receipt/checksum), which can never verify as a complete bundle.
+- Finalization order: the archive is written to a temp sibling, stream-hashed,
+  and then **self-verified with the same full streaming verifier against the
+  expected receipt contract**; only after self-verification succeeds is the
+  archive atomically renamed into place, followed by the receipt and finally
+  the checksum marker. Successful tar writing alone is never trusted.
+- An interruption or failed self-verification leaves visibly incomplete output
+  (no valid receipt/checksum; the temp archive is removed), which can never
+  verify as a complete bundle.
 - Source evidence is read-only; inputs are never modified or redacted.
 
 ---

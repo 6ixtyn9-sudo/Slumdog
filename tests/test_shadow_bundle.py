@@ -21,6 +21,7 @@ import gzip
 import hashlib
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -512,7 +513,7 @@ def test_create_rejects_missing_capture_receipt(tmp_path):
 def test_create_rejects_missing_sidecar(tmp_path):
     env = make_env(tmp_path)
     env["sidecar_path"].unlink()
-    with pytest.raises(BundleError, match="capture input"):
+    with pytest.raises(BundleError, match="sidecar"):
         create_bundle(run_dir=env["run_dir"], output_dir=tmp_path / "out", root=env["root"])
 
 
@@ -532,9 +533,21 @@ def test_create_rejects_missing_history_input(tmp_path):
 
 def test_create_rejects_history_hash_mismatch(tmp_path):
     env = make_env(tmp_path)
+    # Flip a byte inside the gz without changing its size, so the recorded
+    # size matches but the streamed SHA-256 must be detected as mismatched.
+    hp = env["history_path"]
+    data = bytearray(hp.read_bytes())
+    data[-1] ^= 0xFF
+    hp.write_bytes(bytes(data))
+    with pytest.raises(BundleError, match="SHA-256 mismatch"):
+        create_bundle(run_dir=env["run_dir"], output_dir=tmp_path / "out", root=env["root"])
+
+
+def test_create_rejects_history_size_mismatch(tmp_path):
+    env = make_env(tmp_path)
     with gzip.open(env["history_path"], "ab") as f:
         f.write(b'{"event_id":"extra","sport":"football"}\n')
-    with pytest.raises(BundleError, match="SHA-256 mismatch"):
+    with pytest.raises(BundleError, match="size mismatch|SHA-256 mismatch"):
         create_bundle(run_dir=env["run_dir"], output_dir=tmp_path / "out", root=env["root"])
 
 
@@ -1017,3 +1030,317 @@ def test_no_real_data_touched():
     for forbidden in ("urllib", "requests", "http.client", "socket.",
                       "forebet capture", "subprocess", "eval(", "exec("):
         assert forbidden not in src, f"shadow_bundle must not reference {forbidden!r}"
+
+
+# ---------------------------------------------------------------------------
+# Group F: bounded-memory / streaming hardening (Milestone 7B review)
+# ---------------------------------------------------------------------------
+
+
+def test_limit_constants_are_conservative():
+    """Bounds are documented, finite, and far below multi-GB allocations."""
+    assert sb.STREAM_CHUNK == 1024 * 1024
+    assert sb.MAX_COMPRESSED_ARCHIVE_BYTES == 512 * 1024 * 1024
+    assert sb.MAX_EVIDENCE_MEMBER_BYTES == 256 * 1024 * 1024
+    assert sb.MAX_TOTAL_UNCOMPRESSED_BYTES == 1024 * 1024 * 1024
+    assert sb.MAX_METADATA_BYTES == 16 * 1024 * 1024
+    assert sb.MAX_MEMBER_COUNT == 10_000
+    assert sb.MAX_PATH_BYTES == 512
+    # No unlimited escape hatch exists: no CLI flag of any kind.
+    import inspect
+    assert "--unlimited" not in inspect.getsource(sb)
+    help_text = sb._build_arg_parser().format_help()
+    assert "unlimited" not in help_text.lower()
+
+
+
+def test_verify_streams_members_in_bounded_chunks(tmp_path, monkeypatch):
+    """Verification must never issue an unbounded file .read().
+
+    Replace the chunk size with a small value and instrument the tar member
+    file objects so any read larger than the chunk (or read with no/negative
+    size) fails the test. Genuine member bytes are far smaller than the chunk,
+    so this proves the verifier only issues bounded chunk reads.
+    """
+    _, _, archive, receipt, _ = _make_verified_bundle(tmp_path)
+    monkeypatch.setattr(sb, "STREAM_CHUNK", 64 * 1024)
+
+    real_extract = tarfile.TarFile.extractfile
+
+    def guarded_extract(self, member):
+        fobj = real_extract(self, member)
+        if fobj is None:
+            return fobj
+        orig_read = fobj.read
+
+        def read(size=-1):
+            assert size is not None and size >= 0, "unbounded member read"
+            assert size <= 64 * 1024, f"read of {size} bytes exceeds chunk"
+            return orig_read(size)
+
+        fobj.read = read
+        return fobj
+
+    monkeypatch.setattr(tarfile.TarFile, "extractfile", guarded_extract)
+    result = verify_bundle(bundle_path=archive, receipt_path=receipt)
+    assert result["status"] == "BUNDLE_VERIFIED"
+
+
+def test_create_streams_history_and_body_without_read_bytes(tmp_path, monkeypatch):
+    """Creation must stream large evidence (history/body), never read_bytes()."""
+    env = make_env(tmp_path)
+    read_bytes = Path.read_bytes
+
+    def no_large_read_bytes(self, *a, **k):
+        name = self.name.lower()
+        if name.endswith(".gz") or name.endswith(".txt"):
+            raise AssertionError(
+                f"create must stream evidence file, not read_bytes(): {self.name}"
+            )
+        return read_bytes(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_bytes", no_large_read_bytes)
+    res = create_bundle(
+        run_dir=env["run_dir"], output_dir=tmp_path / "out", root=env["root"])
+    assert res["member_count"] >= 1
+    members = read_archive(tmp_path / "out" / res["archive_filename"])
+    assert any(n.startswith("bundle/history/") for n in members)
+    assert any(n.startswith("bundle/capture/bodies/") for n in members)
+
+
+def test_create_rejects_evidence_member_over_size_limit(tmp_path, monkeypatch):
+    """A raw body/history larger than the evidence cap fails closed."""
+    env = make_env(tmp_path)
+    monkeypatch.setattr(sb, "MAX_EVIDENCE_MEMBER_BYTES", 8)  # tiny
+    with pytest.raises(BundleError, match="exceeds|limit"):
+        create_bundle(run_dir=env["run_dir"], output_dir=tmp_path / "out", root=env["root"])
+
+
+def _raw_ustar_member(name: str, declared_size: int, payload: bytes = b"") -> bytes:
+    """Hand-craft a single ustar header block + payload + zero blocks.
+
+    Lets us declare a header size independent of the payload length, so the
+    verifier can be proven to reject an oversized header BEFORE allocating or
+    reading content.
+    """
+    header = bytearray(tarfile.BLOCKSIZE)
+
+    def put(field_off, value: bytes):
+        header[field_off:field_off + len(value)] = value
+
+    name_b = name.encode("utf-8")[:100]
+    put(0, name_b)
+    put(100, b"0000644\x00")
+    put(108, b"0000000\x00")
+    put(116, b"0000000\x00")
+    put(124, b"%011o\x00" % declared_size)
+    put(136, b"00000000000\x00")  # mtime
+    put(148, b"        ")         # checksum placeholder (spaces)
+    put(156, b"0")                # typeflag: regular file
+    put(257, b"ustar\x0000")      # ustar magic
+    put(263, b"00")               # version
+    chk = sum(header)
+    put(148, b"%06o\x00 " % chk)
+    blocks = bytes(header)
+    # Payload (deliberately short relative to declared_size).
+    blocks += payload
+    pad = (-len(payload)) % tarfile.BLOCKSIZE
+    blocks += b"\x00" * pad
+    blocks += b"\x00" * (tarfile.BLOCKSIZE * 2)  # archive end
+    return blocks
+
+
+def test_verify_rejects_oversized_declared_member_before_reading(tmp_path):
+    """A member whose tar header declares > the member cap is rejected."""
+    raw_tar = _raw_ustar_member(
+        "bundle/run/manifest.json", sb.MAX_EVIDENCE_MEMBER_BYTES + 1, b"x")
+    archive = tmp_path / "evil.tar.gz"
+    with gzip.GzipFile(filename="", mode="wb", fileobj=archive.open("wb"),
+                       mtime=0, compresslevel=9) as gz:
+        gz.write(raw_tar)
+    receipt = tmp_path / "evil.bundle.json"
+    receipt.write_text(json.dumps({
+        "bundle_schema_version": sb.BUNDLE_SCHEMA_VERSION,
+        "authorizations": {f: False for f in (
+            "production_authorized", "shortlist_policy_authorized",
+            "training_authorized", "threshold_optimization_authorized")},
+        "durability_status": sb.DURABILITY_STATUS,
+        "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+        "archive_bytes": len(archive.read_bytes()),
+    }))
+    with pytest.raises(BundleError, match="unsafe declared size|declared size|exceeds"):
+        verify_bundle(bundle_path=archive, receipt_path=receipt)
+
+
+def test_verify_rejects_excessive_member_count(tmp_path, monkeypatch):
+    """More than MAX_MEMBER_COUNT members is rejected."""
+    _, _, archive, receipt, _ = _make_verified_bundle(tmp_path)
+    monkeypatch.setattr(sb, "MAX_MEMBER_COUNT", 2)
+    tamper_bundle(archive, receipt)  # keep marker consistent; archive valid
+    with pytest.raises(BundleError, match="member count"):
+        verify_bundle(bundle_path=archive, receipt_path=receipt)
+
+
+def test_verify_rejects_cumulative_uncompressed_limit(tmp_path, monkeypatch):
+    """Declared uncompressed total over the cap fails closed."""
+    env = make_env(tmp_path)
+    out = tmp_path / "out"
+    res = create_bundle(run_dir=env["run_dir"], output_dir=out, root=env["root"])
+    archive = out / res["archive_filename"]
+    receipt = out / res["archive_filename"].replace(".tar.gz", ".bundle.json")
+    monkeypatch.setattr(sb, "MAX_TOTAL_UNCOMPRESSED_BYTES", 10)  # below real total
+    with pytest.raises(BundleError, match="uncompressed total|exceeds"):
+        verify_bundle(bundle_path=archive, receipt_path=receipt)
+
+
+def test_verify_rejects_oversized_metadata_member(tmp_path, monkeypatch):
+    """A metadata member larger than the metadata cap is rejected."""
+    _, _, archive, receipt, _ = _make_verified_bundle(tmp_path)
+    # Set the metadata cap below the real manifest size.
+    monkeypatch.setattr(sb, "MAX_METADATA_BYTES", 16)
+    tamper_bundle(archive, receipt)
+    with pytest.raises(BundleError, match="metadata limit|metadata member"):
+        verify_bundle(bundle_path=archive, receipt_path=receipt)
+
+
+def test_verify_rejects_overlong_member_path(tmp_path):
+    """A member path longer than MAX_PATH_BYTES is unsafe.
+
+    ustar cannot physically carry a >100-char name, so a too-long path is
+    asserted at the guard (which also runs during verification for names
+    injected via a hand-crafted/Pax archive).
+    """
+    assert sb._safe_archive_member_name("bundle/" + "a" * (sb.MAX_PATH_BYTES + 1)) is False
+    assert sb._safe_archive_member_name("/etc/passwd") is False
+    assert sb._safe_archive_member_name("bundle/../x.txt") is False
+    assert sb._safe_archive_member_name("bundle\\x.txt") is False
+    assert sb._safe_archive_member_name("other/x.txt") is False
+    assert sb._safe_archive_member_name("bundle/run/manifest.json") is True
+    # The verifier applies this same guard to every member name; names at or
+    # beyond MAX_PATH_BYTES (which ustar cannot even carry in a header) are
+    # rejected before any content is considered.
+    overlong = "bundle/" + "a" * (sb.MAX_PATH_BYTES + 5) + ".txt"
+    assert len(overlong.encode()) > sb.MAX_PATH_BYTES
+    assert sb._safe_archive_member_name(overlong) is False
+
+
+def test_verify_rejects_truncated_member(tmp_path):
+    """A member whose actual bytes are shorter than its declared size fails."""
+    _, _, archive, receipt, _ = _make_verified_bundle(tmp_path)
+    # Build a genuinely valid bundle, then cut the tail off the compressed
+    # archive: the final member/header becomes truncated mid-stream.
+    data = archive.read_bytes()
+    archive.write_bytes(data[: int(len(data) * 0.6)])
+    rcpt = json.loads(receipt.read_text())
+    rcpt["archive_sha256"] = hashlib.sha256(archive.read_bytes()).hexdigest()
+    rcpt["archive_bytes"] = len(archive.read_bytes())
+    receipt.write_text(json.dumps(rcpt))
+    marker = archive.with_name(archive.name + ".sha256")
+    if marker.exists():
+        marker.unlink()
+    with pytest.raises(BundleError, match="corrupt|truncated|unreadable|SHA-256"):
+        verify_bundle(bundle_path=archive, receipt_path=receipt)
+
+
+def test_verified_source_streams_and_rehashes_exact_bytes(tmp_path):
+    """A verified source streams the file and its on-stream hash matches."""
+    import slumdog.shadow_bundle as mod
+    f = tmp_path / "evidence.txt"
+    payload = b"0123456789ABCDEF" * 64  # 1024 bytes (> one small read)
+    f.write_bytes(payload)
+    sha = hashlib.sha256(payload).hexdigest()
+    with mod._verified_source(f, sha, len(payload), what="test") as proxy:
+        out = b""
+        while True:
+            chunk = proxy.read(37)  # deliberately unaligned bounded reads
+            if not chunk:
+                break
+            out += chunk
+    assert out == payload
+
+
+def test_verified_source_detects_growth_after_verification(tmp_path):
+    """If the file grows after the pre-archive hash but before/during the
+    tar streaming phase, the final streamed-size / identity check fails."""
+    import slumdog.shadow_bundle as mod
+    f = tmp_path / "evidence2.txt"
+    payload = b"hello-streaming-world"
+    f.write_bytes(payload)
+    sha = hashlib.sha256(payload).hexdigest()
+
+    # Make the pre-archive streaming phase see extra bytes by growing the file
+    # between the two hashes: we do this by replacing the descriptor's read so
+    # the SECOND pass (the tar stream) yields more than expected_size.
+    with pytest.raises(mod.BundleSourceError, match="grew|do not match"):
+        with mod._verified_source(f, sha, len(payload), what="test") as proxy:
+            b""
+            # Append after verification; the proxy/tar stream would now observe
+            # growth. We emulate a concurrent writer mid-context.
+            with open(f, "ab") as grow:
+                grow.write(b"EXTRA")
+            out = b""
+            while True:
+                c = proxy.read(64)
+                if not c:
+                    break
+                out += c
+
+
+def test_verified_source_detects_replacement_after_read(tmp_path):
+    """If the source is replaced (inode change) during archiving, fail closed.
+
+    The replacement keeps identical content/length so only the inode identity
+    check can detect the check/use race.
+    """
+    import slumdog.shadow_bundle as mod
+    f = tmp_path / "evidence3.txt"
+    payload = b"abcdefghijklmnopqrstuvwxyz0123456789"
+    f.write_bytes(payload)
+    sha = hashlib.sha256(payload).hexdigest()
+    ino_before = f.stat().st_ino
+    with pytest.raises(mod.BundleSourceError, match="changed"):
+        with mod._verified_source(f, sha, len(payload), what="test") as proxy:
+            out = b""
+            while True:
+                c = proxy.read(64)
+                if not c:
+                    break
+                out += c
+            # Atomically replace with an identical-content new inode.
+            tmp_swap = tmp_path / "swap.txt"
+            tmp_swap.write_bytes(payload)
+            os.replace(tmp_swap, f)
+            assert f.stat().st_ino != ino_before
+
+
+def test_create_no_completion_marker_when_self_verification_fails(tmp_path, monkeypatch):
+    """If post-write self-verification fails, no receipt/marker is finalized."""
+    env = make_env(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+
+    def fail_self(archive_path, receipt_obj):
+        # Force self-verification of the freshly written temp archive to fail.
+        raise sb.BundleIntegrityError("simulated self-verification failure")
+
+    monkeypatch.setattr(sb, "verify_archive_file", fail_self)
+    with pytest.raises(BundleError, match="self-verification"):
+        create_bundle(run_dir=env["run_dir"], output_dir=out, root=env["root"])
+    assert list(out.glob("*.bundle.json")) == []
+    assert list(out.glob("*.sha256")) == []
+    assert list(out.glob("*.tar.gz")) == []  # temp archive removed on failure
+    assert list(out.glob("*.tmp")) == []
+
+
+def test_deterministic_archive_bytes_unchanged_by_streaming(tmp_path):
+    """Streaming creation still yields byte-identical archives across runs."""
+    env = make_env(tmp_path)
+    r1, a1, _, _ = bundle_paths(env, tmp_path / "o1")
+    r2, a2, _, _ = bundle_paths(env, tmp_path / "o2")
+    assert a1.read_bytes() == a2.read_bytes()
+    assert r1["archive_sha256"] == r2["archive_sha256"]
+    # And the streamed archive verifies.
+    assert verify_bundle(
+        bundle_path=a1,
+        receipt_path=tmp_path / "o1" / (r1["archive_filename"].replace(".tar.gz", ".bundle.json")),
+    )["status"] == "BUNDLE_VERIFIED"

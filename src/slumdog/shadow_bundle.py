@@ -16,31 +16,44 @@ Standard library only (no third-party dependencies). The module imports
 no other Slumdog submodule, so verification can run on an independent
 machine with nothing but the archive, the bundle receipt, and Python.
 
+Bounded-memory design
+---------------------
+Small metadata files (payload, manifest, the two configs, the capture
+receipt, sidecars, inventory, README) are read into memory only under an
+explicit metadata byte cap. Potentially large evidence files (raw capture
+bodies, history inputs) and the archive itself are **streamed in bounded
+chunks** — never materialized whole — both when the archive is created and
+when it is verified. Verification never extracts files to disk: each tar
+member is hashed and counted through chunked reads, and only the small
+metadata members that must be parsed are buffered (again, under the
+metadata cap). Explicit limits (see constants below) reject oversized or
+malicious archives well before any multi-gigabyte allocation.
+
 CLI:
 
     python -m slumdog.shadow_bundle create \\
         --run-dir <completed-run-dir> --output-dir <dir> --root <repo-root>
     python -m slumdog.shadow_bundle verify \\
         --bundle <archive.tar.gz> --receipt <archive.bundle.json>
-
-Verification never extracts files to disk: every archive member is read
-and hashed in memory.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import gzip
 import hashlib
 import io
 import json
 import os
+import stat
 import sys
 import tarfile
 import tempfile
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 # ---------------------------------------------------------------------------
@@ -60,19 +73,14 @@ FROZEN_BASELINE_CONFIG_SHA256 = (
 FROZEN_BASELINE_CONFIG_REPO_PATH = Path("config") / "research_baselines_v1.json"
 SHADOW_DECLARATION_REPO_PATH = Path("config") / "shadow_evaluator_v1.json"
 
-# Durability status recorded on a successfully created bundle. The archive
-# is a portable, independently copyable export; it is NOT a second backup
-# until an independently downloaded copy verifies.
 DURABILITY_STATUS = "LOCAL_EXPORT_READY_FOR_INDEPENDENT_COPY"
 
-# Completed (non-blocked) run statuses emitted by Milestone 7.
 _COMPLETED_RUN_STATUSES = frozenset({
     "SHADOW_SELECTIONS_EMITTED",
     "SHADOW_NO_SELECTION",
 })
 
 # Logical archive layout.
-ARCHIVE_PREFIX = "bundle/"
 RUN_DIR = "bundle/run"
 CONFIG_DIR = "bundle/config"
 CAPTURE_RECEIPT_MEMBER = "bundle/capture/receipt.json"
@@ -86,6 +94,12 @@ MANIFEST_MEMBER = "bundle/run/manifest.json"
 FROZEN_CONFIG_MEMBER = "bundle/config/research_baselines_v1.json"
 DECLARATION_MEMBER = "bundle/config/shadow_evaluator_v1.json"
 
+# Roles that must be JSON-parsed during verification (small metadata).
+_METADATA_ROLES = frozenset({
+    "run_payload", "run_manifest", "frozen_baseline_config",
+    "shadow_declaration", "bundle_inventory",
+})
+
 # Deterministic tar metadata.
 _TAR_MTIME = 0
 _TAR_MODE = 0o644
@@ -98,15 +112,21 @@ _TAR_COMPRESSLEVEL = 9
 # Conservative output permissions.
 _OUTPUT_MODE = 0o600
 
-# Verification reads a (potentially untrusted) archive into memory. Bound both
-# the compressed archive and the decompressed total so a malformed or
-# decompression-bomb archive is rejected instead of exhausting memory. These
-# are far above any genuine shadow bundle (a few tens of MB).
-_MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024        # 2 GiB compressed
-_MAX_UNCOMPRESSED_TOTAL = 4 * 1024 * 1024 * 1024   # 4 GiB decompressed
+# ---------------------------------------------------------------------------
+# Bounded-memory limits (documented in docs/MILESTONE7B_SHADOW_BUNDLE.md).
+#
+# Chosen comfortably above the current retained dataset (~53 MB total
+# across relevant data dirs) but far below any accidental multi-gigabyte
+# allocation. There is deliberately no "unlimited" override.
+# ---------------------------------------------------------------------------
+STREAM_CHUNK = 1024 * 1024            # 1 MiB hash/copy chunk
+MAX_COMPRESSED_ARCHIVE_BYTES = 512 * 1024 * 1024     # 512 MiB .tar.gz
+MAX_EVIDENCE_MEMBER_BYTES = 256 * 1024 * 1024        # 256 MiB one body/history
+MAX_TOTAL_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024    # 1 GiB decompressed
+MAX_METADATA_BYTES = 16 * 1024 * 1024                # 16 MiB any JSON member
+MAX_MEMBER_COUNT = 10_000
+MAX_PATH_BYTES = 512
 
-# Authorization flags that MUST be false on every bundle (the bundle tool
-# is post-decision preservation; it never authorizes anything).
 _AUTH_FLAGS = (
     "production_authorized",
     "shortlist_policy_authorized",
@@ -181,7 +201,6 @@ def _safe_resolve_within_root(path: str | Path, root: Path, *, what: str) -> Pat
         raise BundleSourceError(
             f"{what}: path escapes approved repository root: {path!r}"
         ) from e
-    # Reject symlinks anywhere along the path inside the root.
     cur = root
     for part in rel.parts:
         cur = cur / part
@@ -195,14 +214,145 @@ def _safe_resolve_within_root(path: str | Path, root: Path, *, what: str) -> Pat
     return resolved
 
 
-def _read_evidence_file(
-    path: str | Path, root: Path, *, expected_sha256: str | None, what: str
+# ---------------------------------------------------------------------------
+# Chunked streaming primitives
+# ---------------------------------------------------------------------------
+
+
+def _hash_stream(fileobj, *, limit: int) -> tuple[str, int]:
+    """Hash a stream in bounded chunks up to ``limit`` bytes.
+
+    Returns ``(sha256_hex, bytes_read)``. Reads at most ``limit`` bytes; a
+    stream longer than ``limit`` reports ``bytes_read == limit + 1``-style
+    overflow only by reading one extra byte — callers detect overflow when
+    ``bytes_read`` exceeds the expected/allowed size.
+    """
+    h = hashlib.sha256()
+    total = 0
+    while True:
+        chunk = fileobj.read(STREAM_CHUNK)
+        if not chunk:
+            break
+        h.update(chunk)
+        total += len(chunk)
+        if total > limit:
+            # Stop reading; the caller compares total against the cap.
+            return h.hexdigest(), total
+    return h.hexdigest(), total
+
+
+def _safe_archive_member_name(name: str) -> bool:
+    """Reject absolute paths, '..', backslashes, and non-bundle paths."""
+    if not name or name in (".", "/"):
+        return False
+    if len(name.encode("utf-8")) > MAX_PATH_BYTES:
+        return False
+    if name.startswith("/") or name.startswith("\\"):
+        return False
+    if "\\" in name:
+        return False
+    parts = name.split("/")
+    if parts[0] != "bundle":
+        return False
+    for part in parts:
+        if part in ("", ".", ".."):
+            return False
+    return True
+
+
+class _CountingHashReader:
+    """Wrap a binary file object: count bytes and hash them on read.
+
+    Used to measure/hash the compressed archive as tarfile streams it,
+    without ever holding the whole archive in memory.
+    """
+
+    def __init__(self, fileobj, *, limit: int, what: str) -> None:
+        self._f = fileobj
+        self._limit = limit
+        self._what = what
+        self.count = 0
+        self.sha = hashlib.sha256()
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            size = STREAM_CHUNK
+        want = min(size, STREAM_CHUNK)
+        chunk = self._f.read(want)
+        if chunk:
+            self.count += len(chunk)
+            self.sha.update(chunk)
+            if self.count > self._limit:
+                raise BundleIntegrityError(
+                    f"{self._what} exceeds size limit ({self._limit} bytes)"
+                )
+        return chunk
+
+    def close(self) -> None:
+        self._f.close()
+
+
+# ---------------------------------------------------------------------------
+# Member specs
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _Member:
+    """One archive member.
+
+    Either ``data`` (small metadata/generated bytes, bounded by the
+    metadata cap) or ``source`` (a disk evidence file that is streamed
+    into the tar and never materialized) is set — never both for large
+    evidence.
+    """
+
+    archive_member: str
+    role: str
+    size: int
+    sha256: str
+    source_paths: list[str] = field(default_factory=list)
+    data: bytes | None = None
+    source: Path | None = None
+
+
+def _add_member(members: dict[str, _Member], member: _Member) -> None:
+    existing = members.get(member.archive_member)
+    if existing is not None:
+        if existing.sha256 != member.sha256:
+            raise BundleSourceError(
+                f"archive member collision on {member.archive_member!r} with "
+                f"different content"
+            )
+        existing.source_paths = sorted(set(existing.source_paths) | set(member.source_paths))
+        return
+    members[member.archive_member] = member
+
+
+# ---------------------------------------------------------------------------
+# Source verification
+# ---------------------------------------------------------------------------
+
+
+def _read_metadata_file(
+    path: str | Path, root: Path, *, what: str,
+    expected_sha256: str | None = None, limit: int = MAX_METADATA_BYTES,
 ) -> tuple[Path, bytes]:
-    """Read a referenced evidence file, requiring regular-file + exact hash."""
+    """Read a small metadata file in bounded fashion and verify its hash.
+
+    Used for manifest, payload, configs, declaration, capture receipt, and
+    sidecars. Reads at most ``limit + 1`` bytes and fails closed if the
+    file is larger than the metadata cap.
+    """
     resolved = _safe_resolve_within_root(path, root, what=what)
     if not resolved.is_file():
         raise BundleSourceError(f"{what}: missing or not a regular file: {path!r}")
-    data = resolved.read_bytes()
+    with resolved.open("rb") as f:
+        data = f.read(limit + 1)
+    if len(data) > limit:
+        raise BundleSourceError(
+            f"{what}: metadata file exceeds {limit} bytes for {path!r}"
+        )
     actual = _sha256_bytes(data)
     if expected_sha256 is not None and actual != expected_sha256:
         raise BundleSourceError(
@@ -212,32 +362,141 @@ def _read_evidence_file(
     return resolved, data
 
 
+def _verify_evidence_file(
+    path: str | Path, root: Path, *, expected_sha256: str,
+    expected_size: int | None, what: str,
+) -> tuple[Path, str, int]:
+    """Stream-verify a potentially large evidence file WITHOUT buffering it.
+
+    Opens the file once, fstats it (regular file + size), streams a
+    chunked SHA-256 (capped at the evidence-member limit), and checks the
+    hash against the run manifest. Returns ``(resolved_path, sha, size)``.
+    No file bytes are retained.
+    """
+    resolved = _safe_resolve_within_root(path, root, what=what)
+    if not resolved.is_file():
+        raise BundleSourceError(f"{what}: missing or not a regular file: {path!r}")
+    with resolved.open("rb") as f:
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise BundleSourceError(f"{what}: not a regular file: {path!r}")
+        size = st.st_size
+        if expected_size is not None and size != expected_size:
+            raise BundleSourceError(
+                f"{what}: size mismatch for {path!r}: expected {expected_size} actual {size}"
+            )
+        if size > MAX_EVIDENCE_MEMBER_BYTES:
+            raise BundleSourceError(
+                f"{what}: evidence file exceeds {MAX_EVIDENCE_MEMBER_BYTES} bytes: {path!r}"
+            )
+        sha, read = _hash_stream(f, limit=MAX_EVIDENCE_MEMBER_BYTES)
+    if read != size:
+        raise BundleSourceError(
+            f"{what}: size changed or file truncated while hashing: {path!r}"
+        )
+    if sha != expected_sha256:
+        raise BundleSourceError(
+            f"{what}: exact-byte SHA-256 mismatch for {path!r}: "
+            f"expected {expected_sha256} actual {sha}"
+        )
+    return resolved, sha, size
+
+
+@contextlib.contextmanager
+def _verified_source(path: Path, expected_sha256: str, expected_size: int, *,
+                     what: str) -> Iterator[Any]:
+    """Open an evidence file and stream it into tar while re-verifying.
+
+    Check/use-race safe pattern:
+      1. open the source once and fstat it;
+      2. hash the bytes in chunks (must match the manifest hash/size);
+      3. rewind the same descriptor;
+      4. yield a bounded read proxy that re-hashes and counts while tar
+         streams from it;
+      5. after tar finishes, require the re-hash to match and fstat to be
+         unchanged (size/mtime/inode/device), so the bytes that entered
+         the archive are exactly the bytes that were verified.
+
+    Raises BundleSourceError on any mismatch.
+    """
+    f = path.open("rb")
+    try:
+        st0 = os.fstat(f.fileno())
+        if not stat.S_ISREG(st0.st_mode):
+            raise BundleSourceError(f"{what}: not a regular file: {path!r}")
+        if st0.st_size != expected_size:
+            raise BundleSourceError(
+                f"{what}: size changed before archiving: {path!r}: "
+                f"expected {expected_size} found {st0.st_size}"
+            )
+        pre_sha, pre_read = _hash_stream(f, limit=MAX_EVIDENCE_MEMBER_BYTES)
+        if pre_read != expected_size or pre_sha != expected_sha256:
+            raise BundleSourceError(
+                f"{what}: evidence verification failed before archiving: {path!r}"
+            )
+        f.seek(0)
+
+        rehash = hashlib.sha256()
+        state = {"count": 0}
+
+        class _Proxy:
+            """Bounded read view tarfile copies from; re-hashes every byte."""
+
+            def read(self, size=-1):
+                if size is None or size < 0:
+                    size = STREAM_CHUNK
+                chunk = f.read(min(size, STREAM_CHUNK))
+                if chunk:
+                    rehash.update(chunk)
+                    state["count"] += len(chunk)
+                    if state["count"] > expected_size:
+                        raise BundleSourceError(
+                            f"{what}: evidence grew during archiving: {path!r}"
+                        )
+                return chunk
+
+            def close(self):
+                pass
+
+        yield _Proxy()
+
+        if state["count"] != expected_size or rehash.hexdigest() != expected_sha256:
+            raise BundleSourceError(
+                f"{what}: streamed bytes do not match verified hash/size: {path!r} "
+                f"(read {state['count']} of {expected_size})"
+            )
+        # The held descriptor still points at the bytes we streamed, so fstat on
+        # the descriptor catches growth/truncation. But a same-content atomic
+        # replacement (new inode at the same path) leaves the descriptor stale;
+        # re-stat the path itself to detect an inode/identity swap.
+        st_fd = os.fstat(f.fileno())
+        try:
+            st_path = os.stat(path)
+        except OSError as e:
+            raise BundleSourceError(
+                f"{what}: source file vanished before archiving completed: {path!r}"
+            ) from e
+        identity0 = (st0.st_size, st0.st_mtime_ns, st0.st_ino, st0.st_dev)
+        identity_path = (st_path.st_size, st_path.st_mtime_ns,
+                         st_path.st_ino, st_path.st_dev)
+        if identity0 != identity_path:
+            raise BundleSourceError(
+                f"{what}: source file changed between verification and archiving: {path!r}"
+            )
+        if st_fd.st_size != expected_size:
+            raise BundleSourceError(
+                f"{what}: source file size changed while streaming: {path!r}"
+            )
+    finally:
+        f.close()
+
+
 # ---------------------------------------------------------------------------
 # Member collection
 # ---------------------------------------------------------------------------
 
 
-class _Member:
-    __slots__ = ("archive_member", "role", "sha256", "size", "data", "source_paths")
-
-    def __init__(
-        self,
-        *,
-        archive_member: str,
-        role: str,
-        data: bytes,
-        source_paths: list[str],
-    ) -> None:
-        self.archive_member = archive_member
-        self.role = role
-        self.data = data
-        self.sha256 = _sha256_bytes(data)
-        self.size = len(data)
-        self.source_paths = sorted(set(source_paths))
-
-
 def _safe_extension(name: str, *, allowed: tuple[str, ...]) -> str:
-    """Return a lowercase, whitelisted extension for a content-addressed name."""
     suffix = Path(name).suffix.lower()
     if suffix not in allowed:
         raise BundleSourceError(
@@ -248,12 +507,13 @@ def _safe_extension(name: str, *, allowed: tuple[str, ...]) -> str:
 
 
 def _collect_members(
-    *, manifest_bytes: bytes, payload_bytes: bytes, root: Path
+    *, manifest_bytes: bytes, payload_bytes: bytes, root: Path,
 ) -> tuple[dict[str, Any], dict[str, _Member]]:
-    """Validate the completed run and collect every evidence member.
+    """Validate the completed run and build every evidence member spec.
 
-    Returns ``(manifest, member_map)`` where ``member_map`` is keyed by
-    archive member path.
+    Metadata members carry bounded in-memory bytes; capture bodies and
+    history inputs are verified by streaming and reference their on-disk
+    file (they are streamed again into the tar at archive build time).
     """
     try:
         manifest = json.loads(manifest_bytes.decode("utf-8"))
@@ -262,7 +522,6 @@ def _collect_members(
     if not isinstance(manifest, dict):
         raise BundleSourceError("manifest must be a JSON object")
 
-    # --- run schema / version / completion status -------------------------
     if manifest.get("version") != RUN_SCHEMA_VERSION:
         raise BundleSourceError(
             f"unsupported run schema/version: {manifest.get('version')!r} "
@@ -287,7 +546,6 @@ def _collect_members(
     if not manifest.get("decision_committed_at"):
         raise BundleSourceError("manifest missing decision_committed_at")
 
-    # --- payload -----------------------------------------------------------
     try:
         payload = json.loads(payload_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as e:
@@ -295,11 +553,10 @@ def _collect_members(
     if not isinstance(payload, dict):
         raise BundleSourceError("payload must be a JSON object")
     payload_sha = _sha256_bytes(payload_bytes)
-    expected_payload_sha = manifest.get("payload_file_sha256")
-    if payload_sha != expected_payload_sha:
+    if payload_sha != manifest.get("payload_file_sha256"):
         raise BundleSourceError(
             f"payload exact-byte SHA-256 does not match manifest: "
-            f"actual {payload_sha} manifest {expected_payload_sha}"
+            f"actual {payload_sha} manifest {manifest.get('payload_file_sha256')}"
         )
     if payload.get("run_id") != run_id:
         raise BundleSourceError("payload run_id does not match manifest run_id")
@@ -308,57 +565,41 @@ def _collect_members(
 
     members: dict[str, _Member] = {}
 
-    def _add(member: _Member) -> None:
-        existing = members.get(member.archive_member)
-        if existing is not None:
-            # Content-addressed dedup: identical bytes map to one member;
-            # every original reference is still represented in source_paths.
-            if existing.sha256 != member.sha256:
-                raise BundleSourceError(
-                    f"archive member collision on {member.archive_member!r} with "
-                    f"different content"
-                )
-            existing.source_paths = sorted(set(existing.source_paths) | set(member.source_paths))
-            return
-        members[member.archive_member] = member
-
-    # Run payload + manifest (exact original bytes preserved).
-    _add(_Member(
+    members[PAYLOAD_MEMBER] = _Member(
         archive_member=PAYLOAD_MEMBER, role="run_payload",
-        data=payload_bytes, source_paths=[],  # source path set by caller
-    ))
-    _add(_Member(
+        size=len(payload_bytes), sha256=payload_sha, data=payload_bytes,
+    )
+    members[MANIFEST_MEMBER] = _Member(
         archive_member=MANIFEST_MEMBER, role="run_manifest",
-        data=manifest_bytes, source_paths=[],
-    ))
+        size=len(manifest_bytes), sha256=_sha256_bytes(manifest_bytes),
+        data=manifest_bytes,
+    )
 
-    # --- frozen configs ----------------------------------------------------
-    frozen_path = root / FROZEN_BASELINE_CONFIG_REPO_PATH
-    frozen_abs, frozen_bytes = _read_evidence_file(
-        frozen_path, root, expected_sha256=None, what="frozen baseline config"
+    # --- frozen configs (metadata; parsed to verify canonical hashes) ------
+    frozen_abs, frozen_bytes = _read_metadata_file(
+        root / FROZEN_BASELINE_CONFIG_REPO_PATH, root, what="frozen baseline config"
     )
     try:
         frozen_obj = json.loads(frozen_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as e:
         raise BundleSourceError(f"frozen baseline config is not valid JSON: {e}") from e
-    frozen_canonical = _canonical_sha256(frozen_obj)
-    if frozen_canonical != FROZEN_BASELINE_CONFIG_SHA256:
+    if _canonical_sha256(frozen_obj) != FROZEN_BASELINE_CONFIG_SHA256:
         raise BundleSourceError(
             f"frozen baseline config canonical SHA-256 mismatch: "
-            f"actual {frozen_canonical} expected {FROZEN_BASELINE_CONFIG_SHA256}"
+            f"actual {_canonical_sha256(frozen_obj)} expected {FROZEN_BASELINE_CONFIG_SHA256}"
         )
     if manifest.get("frozen_baseline_config_sha256") != FROZEN_BASELINE_CONFIG_SHA256:
         raise BundleSourceError(
             "manifest frozen_baseline_config_sha256 does not match the frozen config"
         )
-    _add(_Member(
+    _add_member(members, _Member(
         archive_member=FROZEN_CONFIG_MEMBER, role="frozen_baseline_config",
-        data=frozen_bytes, source_paths=[_repo_rel(frozen_abs, root)],
+        size=len(frozen_bytes), sha256=_sha256_bytes(frozen_bytes),
+        source_paths=[_repo_rel(frozen_abs, root)], data=frozen_bytes,
     ))
 
-    decl_path = root / SHADOW_DECLARATION_REPO_PATH
-    decl_abs, decl_bytes = _read_evidence_file(
-        decl_path, root, expected_sha256=None, what="shadow declaration"
+    decl_abs, decl_bytes = _read_metadata_file(
+        root / SHADOW_DECLARATION_REPO_PATH, root, what="shadow declaration"
     )
     try:
         decl_obj = json.loads(decl_bytes.decode("utf-8"))
@@ -370,16 +611,16 @@ def _collect_members(
             f"shadow declaration canonical SHA-256 mismatch: actual "
             f"{decl_canonical} manifest {manifest.get('declaration_sha256')}"
         )
-    # Fail-closed authorization gates on the declaration that produced the run.
     decl_auth = decl_obj.get("authorizations", {}) if isinstance(decl_obj, dict) else {}
     for flag in _AUTH_FLAGS:
         if decl_auth.get(flag) is not False:
             raise BundleSourceError(
                 f"shadow declaration authorizations.{flag} must be false (fail closed)"
             )
-    _add(_Member(
+    _add_member(members, _Member(
         archive_member=DECLARATION_MEMBER, role="shadow_declaration",
-        data=decl_bytes, source_paths=[_repo_rel(decl_abs, root)],
+        size=len(decl_bytes), sha256=_sha256_bytes(decl_bytes),
+        source_paths=[_repo_rel(decl_abs, root)], data=decl_bytes,
     ))
 
     # --- capture provenance ------------------------------------------------
@@ -390,19 +631,18 @@ def _collect_members(
     receipt_expected = cp.get("receipt_sha256")
     if not receipt_path or not receipt_expected:
         raise BundleSourceError("capture_provenance missing receipt path/hash")
-    receipt_abs, receipt_bytes = _read_evidence_file(
-        receipt_path, root, expected_sha256=receipt_expected,
-        what="capture receipt",
+    receipt_abs, receipt_bytes = _read_metadata_file(
+        receipt_path, root, expected_sha256=receipt_expected, what="capture receipt"
     )
-    # Cross-anchor the receipt hash to the input provenance block as well.
     ip = manifest.get("input_provenance")
     if isinstance(ip, dict) and ip.get("capture_receipt_sha256") not in (None, receipt_expected):
         raise BundleSourceError(
             "input_provenance.capture_receipt_sha256 disagrees with capture_provenance"
         )
-    _add(_Member(
+    _add_member(members, _Member(
         archive_member=CAPTURE_RECEIPT_MEMBER, role="capture_receipt",
-        data=receipt_bytes, source_paths=[_repo_rel(receipt_abs, root)],
+        size=len(receipt_bytes), sha256=_sha256_bytes(receipt_bytes),
+        source_paths=[_repo_rel(receipt_abs, root)], data=receipt_bytes,
     ))
 
     raw_inputs = cp.get("raw_input_sha256")
@@ -410,28 +650,37 @@ def _collect_members(
         raise BundleSourceError("capture_provenance missing raw_input_sha256")
     for raw_path in sorted(raw_inputs.keys()):
         expected = raw_inputs[raw_path]
-        abs_path, data = _read_evidence_file(
-            raw_path, root, expected_sha256=expected, what="capture input"
-        )
-        rel = _repo_rel(abs_path, root)
         name = Path(raw_path).name.lower()
         if name.endswith(".json"):
+            # Sidecar: small JSON metadata.
+            abs_path, data = _read_metadata_file(
+                raw_path, root, expected_sha256=expected, what="capture sidecar"
+            )
             ext = _safe_extension(name, allowed=(".json",))
             member_path = f"{SIDECAR_DIR}/{expected}{ext}"
-            role = "capture_sidecar"
+            _add_member(members, _Member(
+                archive_member=member_path, role="capture_sidecar",
+                size=len(data), sha256=_sha256_bytes(data),
+                source_paths=[_repo_rel(abs_path, root)], data=data,
+            ))
         elif name.endswith(".txt"):
+            # Raw capture body: potentially large -> stream, never buffer.
+            abs_path, sha, size = _verify_evidence_file(
+                raw_path, root, expected_sha256=expected,
+                expected_size=None, what="capture body",
+            )
             ext = _safe_extension(name, allowed=(".txt",))
             member_path = f"{BODY_DIR}/{expected}{ext}"
-            role = "capture_body"
+            _add_member(members, _Member(
+                archive_member=member_path, role="capture_body",
+                size=size, sha256=sha,
+                source_paths=[_repo_rel(abs_path, root)], source=abs_path,
+            ))
         else:
             raise BundleSourceError(
                 f"unsupported capture input type for {raw_path!r} "
                 f"(expected sidecar .json or body .txt)"
             )
-        _add(_Member(
-            archive_member=member_path, role=role, data=data,
-            source_paths=[rel],
-        ))
 
     # --- history provenance ------------------------------------------------
     hp = manifest.get("history_provenance")
@@ -443,15 +692,7 @@ def _collect_members(
         raise BundleSourceError("history_provenance.history_input_sha256 must be an object")
     for hist_path in sorted(hist_hashes.keys()):
         expected = hist_hashes[hist_path]
-        abs_path, data = _read_evidence_file(
-            hist_path, root, expected_sha256=expected, what="history input"
-        )
-        if hist_path in hist_bytes and hist_bytes[hist_path] != len(data):
-            raise BundleSourceError(
-                f"history input size mismatch for {hist_path!r}: "
-                f"actual {len(data)} manifest {hist_bytes[hist_path]}"
-            )
-        rel = _repo_rel(abs_path, root)
+        expected_size = hist_bytes.get(hist_path) if isinstance(hist_bytes, dict) else None
         name = Path(hist_path).name.lower()
         if name.endswith(".gz"):
             ext = _safe_extension(name, allowed=(".gz",))
@@ -462,10 +703,16 @@ def _collect_members(
                 f"unsupported history input format for {hist_path!r} "
                 f"(supported: .jsonl.gz, settled_history.json)"
             )
+        # History inputs are potentially large -> stream, never buffer.
+        abs_path, sha, size = _verify_evidence_file(
+            hist_path, root, expected_sha256=expected,
+            expected_size=expected_size, what="history input",
+        )
         member_path = f"{HISTORY_DIR}/{expected}{ext}"
-        _add(_Member(
-            archive_member=member_path, role="history_input", data=data,
-            source_paths=[rel],
+        _add_member(members, _Member(
+            archive_member=member_path, role="history_input",
+            size=size, sha256=sha,
+            source_paths=[_repo_rel(abs_path, root)], source=abs_path,
         ))
 
     return manifest, members
@@ -476,15 +723,7 @@ def _collect_members(
 # ---------------------------------------------------------------------------
 
 
-def _build_inventory(
-    *, manifest: dict[str, Any], members: dict[str, _Member]
-) -> bytes:
-    """Build the deterministic canonical inventory JSON bytes.
-
-    Lists every content member (including README) but NOT inventory.json
-    itself (an inventory cannot record its own hash). The external bundle
-    receipt records the inventory hash and the total member count.
-    """
+def _build_inventory(manifest: dict[str, Any], members: dict[str, _Member]) -> bytes:
     member_rows = []
     for archive_member in sorted(members.keys()):
         m = members[archive_member]
@@ -532,6 +771,11 @@ All file names under capture/ and history/ are content-addressed by the
 exact-byte SHA-256 of the file. No absolute or host-specific paths are
 stored in the archive; original repository-relative paths are recorded
 in inventory.json.
+
+BOUNDED-MEMORY VERIFICATION
+  The verifier streams every member in fixed chunks and never extracts
+  files to disk. Archive and member size limits are enforced before any
+  large allocation (see docs/MILESTONE7B_SHADOW_BUNDLE.md).
 
 HOW TO VERIFY (independent machine, no extraction required)
 
@@ -592,39 +836,60 @@ def _build_readme(*, manifest: dict[str, Any], archive_name: str, receipt_name: 
 
 
 # ---------------------------------------------------------------------------
-# Deterministic archive
+# Deterministic streaming archive creation
 # ---------------------------------------------------------------------------
 
 
-def _build_archive_bytes(all_members: list[_Member]) -> bytes:
-    """Serialize members to a deterministic gzip-compressed tar.
+def _write_archive_stream(target_path: Path, all_members: list[_Member]) -> None:
+    """Write members to a deterministic gzip-compressed tar, streaming.
 
-    Fixed: member order (sorted logical path), UID/GID 0, empty
-    owner/group, mode 0644, mtime 0, regular files only, ustar format,
-    gzip mtime 0 and fixed compression level. Same input bytes always
-    produce the same archive bytes and SHA-256.
+    Metadata members (small) are written from in-memory bytes; evidence
+    members (capture bodies, history) are streamed directly from their
+    verified on-disk descriptor via :func:`_verified_source`, so large
+    files are never materialized. Fixed tar metadata keeps the archive
+    deterministic.
     """
     ordered = sorted(all_members, key=lambda m: m.archive_member)
-    buf = io.BytesIO()
-    with gzip.GzipFile(
-        filename="", mode="wb", fileobj=buf,
-        mtime=0, compresslevel=_TAR_COMPRESSLEVEL,
-    ) as gz:
-        # "w|" streams an uncompressed ustar tar into the gzip wrapper
-        # (a plain "w" tar into a gzip fileobj would emit an invalid stream).
-        with tarfile.open(fileobj=gz, mode="w|", format=tarfile.USTAR_FORMAT) as tar:
-            for m in ordered:
-                info = tarfile.TarInfo(name=m.archive_member)
-                info.size = m.size
-                info.mtime = _TAR_MTIME
-                info.mode = _TAR_MODE
-                info.uid = _TAR_UID
-                info.gid = _TAR_GID
-                info.uname = _TAR_UNAME
-                info.gname = _TAR_GNAME
-                info.type = tarfile.REGTYPE
-                tar.addfile(info, io.BytesIO(m.data))
-    return buf.getvalue()
+    with target_path.open("wb") as out:
+        with gzip.GzipFile(
+            filename="", mode="wb", fileobj=out,
+            mtime=0, compresslevel=_TAR_COMPRESSLEVEL,
+        ) as gz:
+            # "w|" streams an uncompressed ustar tar into the gzip wrapper.
+            with tarfile.open(fileobj=gz, mode="w|", format=tarfile.USTAR_FORMAT) as tar:
+                for m in ordered:
+                    info = tarfile.TarInfo(name=m.archive_member)
+                    info.size = m.size
+                    info.mtime = _TAR_MTIME
+                    info.mode = _TAR_MODE
+                    info.uid = _TAR_UID
+                    info.gid = _TAR_GID
+                    info.uname = _TAR_UNAME
+                    info.gname = _TAR_GNAME
+                    info.type = tarfile.REGTYPE
+                    if m.data is not None:
+                        tar.addfile(info, io.BytesIO(m.data))
+                    else:
+                        assert m.source is not None
+                        with _verified_source(
+                            m.source, m.sha256, m.size,
+                            what=f"archive member {m.archive_member}",
+                        ) as proxy:
+                            tar.addfile(info, proxy)
+
+
+def _stream_file_sha256(path: Path) -> tuple[str, int]:
+    """Stream-hash a completed archive file without loading it."""
+    h = hashlib.sha256()
+    total = 0
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(STREAM_CHUNK)
+            if not chunk:
+                break
+            h.update(chunk)
+            total += len(chunk)
+    return h.hexdigest(), total
 
 
 # ---------------------------------------------------------------------------
@@ -633,11 +898,7 @@ def _build_archive_bytes(all_members: list[_Member]) -> bytes:
 
 
 def _atomic_write(final_path: Path, data: bytes) -> None:
-    """Write ``data`` to a temp sibling then atomically rename into place.
-
-    The temp file is created with mode 0600; the final file is chmod 0600.
-    Never overwrites an existing final path (the caller pre-checks).
-    """
+    """Write ``data`` to a temp sibling then atomically rename into place."""
     final_path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(
         prefix=final_path.name + ".", suffix=".tmp", dir=str(final_path.parent)
@@ -652,11 +913,9 @@ def _atomic_write(final_path: Path, data: bytes) -> None:
         os.replace(tmp_path, final_path)
         os.chmod(final_path, _OUTPUT_MODE)
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             if tmp_path.exists():
                 tmp_path.unlink()
-        except OSError:
-            pass
         raise
 
 
@@ -675,7 +934,6 @@ def create_bundle(*, run_dir: str | Path, output_dir: str | Path, root: str | Pa
     if not root.is_dir():
         raise BundleSourceError(f"repository root not found or not a directory: {root}")
 
-    # The run directory must live inside the approved root.
     run_dir_resolved = _safe_resolve_within_root(
         run_dir, root, what="run directory"
     )
@@ -692,8 +950,12 @@ def create_bundle(*, run_dir: str | Path, output_dir: str | Path, root: str | Pa
             f"partial run: shadow_selections.json missing in {run_dir_resolved}"
         )
 
-    manifest_bytes = manifest_path.read_bytes()
-    payload_bytes = payload_path.read_bytes()
+    manifest_abs, manifest_bytes = _read_metadata_file(
+        manifest_path, root, what="run manifest"
+    )
+    payload_abs, payload_bytes = _read_metadata_file(
+        payload_path, root, what="run payload"
+    )
 
     manifest, member_map = _collect_members(
         manifest_bytes=manifest_bytes, payload_bytes=payload_bytes, root=root
@@ -701,74 +963,41 @@ def create_bundle(*, run_dir: str | Path, output_dir: str | Path, root: str | Pa
     run_id = manifest["run_id"]
     target_date = manifest["target_date"]
 
-    # Record the run file source paths (exact original bytes preserved).
-    member_map[PAYLOAD_MEMBER].source_paths = [_repo_rel(payload_path, root)]
-    member_map[MANIFEST_MEMBER].source_paths = [_repo_rel(manifest_path, root)]
+    member_map[PAYLOAD_MEMBER].source_paths = [_repo_rel(payload_abs, root)]
+    member_map[MANIFEST_MEMBER].source_paths = [_repo_rel(manifest_abs, root)]
 
     stem = _stem(target_date, run_id)
     archive_name = f"{stem}.tar.gz"
     receipt_name = f"{stem}.bundle.json"
 
-    # README first (content member, listed in inventory).
     readme_bytes = _build_readme(
         manifest=manifest, archive_name=archive_name, receipt_name=receipt_name
     )
     member_map[README_MEMBER] = _Member(
         archive_member=README_MEMBER, role="bundle_readme",
-        data=readme_bytes, source_paths=[],
+        size=len(readme_bytes), sha256=_sha256_bytes(readme_bytes),
+        data=readme_bytes,
     )
 
-    # Inventory lists every content member except inventory.json itself.
-    inventory_bytes = _build_inventory(manifest=manifest, members=member_map)
+    inventory_bytes = _build_inventory(manifest, member_map)
     inventory_member = _Member(
         archive_member=INVENTORY_MEMBER, role="bundle_inventory",
-        data=inventory_bytes, source_paths=[],
+        size=len(inventory_bytes), sha256=_sha256_bytes(inventory_bytes),
+        data=inventory_bytes,
     )
-
     all_members = list(member_map.values()) + [inventory_member]
-    archive_bytes = _build_archive_bytes(all_members)
-    archive_sha = _sha256_bytes(archive_bytes)
 
-    member_count = len(all_members)
+    if len(all_members) > MAX_MEMBER_COUNT:
+        raise BundleSourceError(
+            f"bundle member count {len(all_members)} exceeds limit {MAX_MEMBER_COUNT}"
+        )
     total_uncompressed = sum(m.size for m in all_members)
+    if total_uncompressed > MAX_TOTAL_UNCOMPRESSED_BYTES:
+        raise BundleSourceError(
+            f"bundle uncompressed total {total_uncompressed} exceeds limit "
+            f"{MAX_TOTAL_UNCOMPRESSED_BYTES}"
+        )
 
-    receipt = {
-        "bundle_schema_version": BUNDLE_SCHEMA_VERSION,
-        "run_schema_version": RUN_SCHEMA_VERSION,
-        "target_date": target_date,
-        "run_id": run_id,
-        "run_status": manifest.get("run_status"),
-        "archive_filename": archive_name,
-        "archive_sha256": archive_sha,
-        "archive_bytes": len(archive_bytes),
-        "archive_format": "tar.gz (deterministic: ustar, mtime=0, uid/gid=0, gzip mtime=0)",
-        "source_manifest_sha256": _sha256_bytes(manifest_bytes),
-        "source_payload_sha256": _sha256_bytes(payload_bytes),
-        "payload_file_sha256": manifest.get("payload_file_sha256"),
-        "frozen_baseline_config_canonical_sha256": FROZEN_BASELINE_CONFIG_SHA256,
-        "shadow_declaration_canonical_sha256": manifest.get("declaration_sha256"),
-        "input_digest": manifest.get("input_digest"),
-        "decision_digest": manifest.get("decision_digest"),
-        "decision_committed_at": manifest.get("decision_committed_at"),
-        "safe_cutoff_utc": manifest.get("safe_cutoff_utc"),
-        "bundle_created_at": _now_utc_iso(),
-        "inventory_sha256": inventory_member.sha256,
-        "inventory_bytes": inventory_member.size,
-        "member_count": member_count,
-        "content_member_count": len(member_map),
-        "total_uncompressed_bytes": total_uncompressed,
-        "durability_status": DURABILITY_STATUS,
-        "authorizations": {
-            "production_authorized": False,
-            "shortlist_policy_authorized": False,
-            "training_authorized": False,
-            "threshold_optimization_authorized": False,
-        },
-    }
-    receipt_bytes = json.dumps(receipt, indent=2, sort_keys=True).encode("utf-8")
-    checksum_bytes = f"{archive_sha}  {archive_name}\n".encode("utf-8")
-
-    # Output directory is explicit; refuse any pre-existing final path.
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     archive_path = out / archive_name
@@ -781,14 +1010,71 @@ def create_bundle(*, run_dir: str | Path, output_dir: str | Path, root: str | Pa
                 f"(no force/overwrite option; remove it explicitly)"
             )
 
-    # Finalize in order: archive, then receipt, then checksum marker last.
-    # An interruption before the checksum leaves no valid completion marker.
-    _atomic_write(archive_path, archive_bytes)
+    # 1) Write the archive to a temporary sibling (streamed).
+    fd, tmp_arch_name = tempfile.mkstemp(
+        prefix=archive_name + ".", suffix=".tmp", dir=str(out)
+    )
+    os.close(fd)
+    tmp_arch = Path(tmp_arch_name)
     try:
+        os.chmod(tmp_arch, _OUTPUT_MODE)
+        _write_archive_stream(tmp_arch, all_members)
+
+        # 2) Compute exact archive SHA-256/size from the finalized bytes.
+        archive_sha, archive_size = _stream_file_sha256(tmp_arch)
+
+        # 3) Build the receipt contract (archive bytes are now fixed).
+        receipt = {
+            "bundle_schema_version": BUNDLE_SCHEMA_VERSION,
+            "run_schema_version": RUN_SCHEMA_VERSION,
+            "target_date": target_date,
+            "run_id": run_id,
+            "run_status": manifest.get("run_status"),
+            "archive_filename": archive_name,
+            "archive_sha256": archive_sha,
+            "archive_bytes": archive_size,
+            "archive_format": "tar.gz (deterministic: ustar, mtime=0, uid/gid=0, gzip mtime=0)",
+            "source_manifest_sha256": _sha256_bytes(manifest_bytes),
+            "source_payload_sha256": _sha256_bytes(payload_bytes),
+            "payload_file_sha256": manifest.get("payload_file_sha256"),
+            "frozen_baseline_config_canonical_sha256": FROZEN_BASELINE_CONFIG_SHA256,
+            "shadow_declaration_canonical_sha256": manifest.get("declaration_sha256"),
+            "input_digest": manifest.get("input_digest"),
+            "decision_digest": manifest.get("decision_digest"),
+            "decision_committed_at": manifest.get("decision_committed_at"),
+            "safe_cutoff_utc": manifest.get("safe_cutoff_utc"),
+            "bundle_created_at": _now_utc_iso(),
+            "inventory_sha256": inventory_member.sha256,
+            "inventory_bytes": inventory_member.size,
+            "member_count": len(all_members),
+            "content_member_count": len(member_map),
+            "total_uncompressed_bytes": total_uncompressed,
+            "durability_status": DURABILITY_STATUS,
+            "authorizations": {
+                "production_authorized": False,
+                "shortlist_policy_authorized": False,
+                "training_authorized": False,
+                "threshold_optimization_authorized": False,
+            },
+        }
+
+        # 4) SELF-VERIFICATION: run the full streaming verifier against the
+        #    completed temp archive before anything is finalized. Do not
+        #    trust successful tar writing alone.
+        verify_archive_file(tmp_arch, receipt)
+
+        # 5) Finalize in order: archive rename -> receipt -> marker last.
+        os.replace(tmp_arch, archive_path)
+        os.chmod(archive_path, _OUTPUT_MODE)
+        tmp_arch = None
+        receipt_bytes = json.dumps(receipt, indent=2, sort_keys=True).encode("utf-8")
         _atomic_write(receipt_path, receipt_bytes)
-        _atomic_write(checksum_path, checksum_bytes)
+        _atomic_write(checksum_path, f"{archive_sha}  {archive_name}\n".encode("utf-8"))
     except Exception:
         # Partial output stays visibly incomplete; never masquerade as done.
+        with contextlib.suppress(OSError):
+            if tmp_arch is not None and tmp_arch.exists():
+                tmp_arch.unlink()
         raise
 
     return {
@@ -797,129 +1083,70 @@ def create_bundle(*, run_dir: str | Path, output_dir: str | Path, root: str | Pa
         "checksum_path": str(checksum_path),
         "archive_filename": archive_name,
         "archive_sha256": archive_sha,
-        "archive_bytes": len(archive_bytes),
+        "archive_bytes": archive_size,
         "run_id": run_id,
         "target_date": target_date,
-        "member_count": member_count,
+        "member_count": len(all_members),
         "durability_status": DURABILITY_STATUS,
     }
 
 
 # ---------------------------------------------------------------------------
-# Verify (pure, in-memory; never extracts)
+# Streaming verification (never extracts)
 # ---------------------------------------------------------------------------
 
 
-def _safe_archive_member_name(name: str) -> bool:
-    """Reject absolute paths, '..', backslashes, and non-bundle paths."""
-    if not name or name in (".", "/"):
-        return False
-    if name.startswith("/") or name.startswith("\\"):
-        return False
-    if "\\" in name:
-        return False
-    parts = name.split("/")
-    if parts[0] != "bundle":
-        return False
-    for part in parts:
-        if part in ("", ".", ".."):
-            return False
-    return True
-
-
-def _read_archive_members(archive_bytes: bytes) -> dict[str, bytes]:
-    """Read every regular archive member into memory.
-
-    Never extracts to disk. Rejects unsafe names, duplicate names, and any
-    non-regular member type (symlinks, hard links, devices, FIFOs, dirs).
-    """
-    try:
-        tar = tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz")
-    except (tarfile.TarError, OSError, EOFError, gzip.BadGzipFile) as e:
-        raise BundleIntegrityError(f"corrupt or unreadable archive: {e}") from e
-    members: dict[str, bytes] = {}
-    total = 0
-    with tar:
-        for info in tar.getmembers():
-            if info.type not in (tarfile.REGTYPE, tarfile.AREGTYPE):
-                raise BundleIntegrityError(
-                    f"unsupported archive member type for {info.name!r}: "
-                    f"only regular files are permitted (no symlinks, hard links, "
-                    f"devices, FIFOs, directories)"
-                )
-            if info.size < 0 or info.size > _MAX_UNCOMPRESSED_TOTAL:
-                raise BundleIntegrityError(
-                    f"archive member {info.name!r} has unsafe declared size {info.size}"
-                )
-            name = info.name
-            if not _safe_archive_member_name(name):
-                raise BundleIntegrityError(f"unsafe archive member path: {name!r}")
-            if name in members:
-                raise BundleIntegrityError(f"duplicate archive member: {name!r}")
-            extracted = tar.extractfile(info)
-            if extracted is None:
-                raise BundleIntegrityError(f"cannot read archive member: {name!r}")
-            # Read exactly the declared (already bounded) byte count, then
-            # confirm no extra data follows — the tar header size is
-            # authoritative, so this never allocates more than the real member.
-            data = extracted.read(info.size)
-            if len(data) != info.size or extracted.read(1):
-                raise BundleIntegrityError(
-                    f"archive member size mismatch: {name!r} header={info.size} "
-                    f"actual={len(data)}"
-                )
-            total += len(data)
-            if total > _MAX_UNCOMPRESSED_TOTAL:
-                raise BundleIntegrityError(
-                    f"archive decompressed total exceeds safety limit "
-                    f"({_MAX_UNCOMPRESSED_TOTAL} bytes)"
-                )
-            members[name] = data
-    return members
-
-
-def _require_member(members: dict[str, bytes], name: str) -> bytes:
-    if name not in members:
-        raise BundleIntegrityError(f"required archive member missing: {name}")
-    return members[name]
-
-
-def _parse_json_member(name: str, data: bytes) -> Any:
-    try:
-        return json.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as e:
-        raise BundleIntegrityError(f"archive member {name!r} is not valid JSON: {e}") from e
-
-
-def verify_bundle(*, bundle_path: str | Path, receipt_path: str | Path) -> dict[str, Any]:
-    """Independently verify a bundle archive against its receipt in memory."""
-    bundle_path = Path(bundle_path)
-    receipt_path = Path(receipt_path)
-    if not bundle_path.is_file():
-        raise BundleIntegrityError(f"bundle archive not found: {bundle_path}")
-    if not receipt_path.is_file():
-        raise BundleIntegrityError(f"bundle receipt not found: {receipt_path}")
-
-    archive_bytes = bundle_path.read_bytes()
-    if len(archive_bytes) > _MAX_ARCHIVE_BYTES:
+def _read_member_bounded(exfile, info, *, limit: int, what: str) -> bytes:
+    """Read at most ``limit`` bytes of a tar member via bounded chunks."""
+    buf = io.BytesIO()
+    remaining = limit + 1
+    while remaining > 0:
+        chunk = exfile.read(min(STREAM_CHUNK, remaining))
+        if not chunk:
+            break
+        buf.write(chunk)
+        remaining -= len(chunk)
+    data = buf.getvalue()
+    if len(data) > limit:
         raise BundleIntegrityError(
-            f"archive exceeds maximum compressed size ({_MAX_ARCHIVE_BYTES} bytes)"
+            f"{what}: member {info.name!r} exceeds {limit} byte metadata limit"
         )
-    archive_sha = _sha256_bytes(archive_bytes)
+    return data
+
+
+def _pass_over_members(archive_path: Path):
+    """Yield ``(tar, info, extractfile)`` over a freshly streamed tar open.
+
+    The compressed archive is read through a counting/hashing wrapper so
+    the archive SHA-256 and compressed size accumulate as tarfile streams
+    the gzip data — the archive is never held in memory.
+    """
+    raw = archive_path.open("rb")
+    counter = _CountingHashReader(
+        raw, limit=MAX_COMPRESSED_ARCHIVE_BYTES, what="compressed archive"
+    )
     try:
-        receipt = json.loads(receipt_path.read_bytes().decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as e:
-        raise BundleIntegrityError(f"receipt is not valid JSON: {e}") from e
+        tar = tarfile.open(fileobj=counter, mode="r:gz")
+    except (tarfile.TarError, OSError, EOFError, gzip.BadGzipFile) as e:
+        counter.close()
+        raise BundleIntegrityError(f"corrupt or unreadable archive: {e}") from e
+    return counter, tar
+
+
+def verify_archive_file(archive_path: str | Path, receipt: dict[str, Any]) -> dict[str, Any]:
+    """Stream-verify an archive against a receipt object. Never extracts.
+
+    Two streaming passes over the compressed file:
+      pass 1 — structural checks + per-member SHA-256/size (all members
+               hashed in chunks and discarded) + archive hash;
+      pass 2 — buffered read (under the metadata cap) and parse of only
+               the small metadata members needed for semantic checks.
+    """
+    archive_path = Path(archive_path)
+
+    # --- receipt schema / authorization flags -----------------------------
     if not isinstance(receipt, dict):
         raise BundleIntegrityError("receipt must be a JSON object")
-    claimed_total = receipt.get("total_uncompressed_bytes")
-    if isinstance(claimed_total, int) and claimed_total > _MAX_UNCOMPRESSED_TOTAL:
-        raise BundleIntegrityError(
-            f"receipt claims uncompressed size above the safety limit "
-            f"({_MAX_UNCOMPRESSED_TOTAL} bytes)"
-        )
-
-    # --- receipt schema / authorization flags ------------------------------
     if receipt.get("bundle_schema_version") != BUNDLE_SCHEMA_VERSION:
         raise BundleIntegrityError(
             f"unsupported bundle schema version: {receipt.get('bundle_schema_version')!r}"
@@ -938,36 +1165,136 @@ def verify_bundle(*, bundle_path: str | Path, receipt_path: str | Path) -> dict[
             f"receipt durability_status must be {DURABILITY_STATUS!r}"
         )
 
+    # --- pass 1: structure + per-member hashing (all streamed) -------------
+    member_digests: dict[str, tuple[str, int]] = {}
+    member_count = 0
+    total_uncompressed = 0
+    archive_sha = ""
+    archive_compressed = 0
+
+    counter, tar = _pass_over_members(archive_path)
+    try:
+        while True:
+            try:
+                info = tar.next()
+            except (tarfile.TarError, OSError, EOFError) as e:
+                raise BundleIntegrityError(f"corrupt or truncated archive: {e}") from e
+            if info is None:
+                break
+            member_count += 1
+            if member_count > MAX_MEMBER_COUNT:
+                raise BundleIntegrityError(
+                    f"member count exceeds limit {MAX_MEMBER_COUNT}"
+                )
+            if info.type not in (tarfile.REGTYPE, tarfile.AREGTYPE):
+                raise BundleIntegrityError(
+                    f"unsupported archive member type for {info.name!r}: only regular "
+                    f"files are permitted (no symlinks, hard links, devices, FIFOs, "
+                    f"directories, PAX headers)"
+                )
+            name = info.name
+            if not _safe_archive_member_name(name):
+                raise BundleIntegrityError(f"unsafe archive member path: {name!r}")
+            if name in member_digests:
+                raise BundleIntegrityError(f"duplicate archive member: {name!r}")
+            if info.size < 0 or info.size > MAX_EVIDENCE_MEMBER_BYTES:
+                raise BundleIntegrityError(
+                    f"archive member {name!r} has unsafe declared size {info.size} "
+                    f"(limit {MAX_EVIDENCE_MEMBER_BYTES})"
+                )
+            total_uncompressed += info.size
+            if total_uncompressed > MAX_TOTAL_UNCOMPRESSED_BYTES:
+                raise BundleIntegrityError(
+                    f"declared uncompressed total exceeds limit "
+                    f"{MAX_TOTAL_UNCOMPRESSED_BYTES} bytes"
+                )
+
+            exfile = tar.extractfile(info)
+            if exfile is None:
+                raise BundleIntegrityError(f"cannot read archive member: {name!r}")
+            h = hashlib.sha256()
+            actual = 0
+            try:
+                while True:
+                    chunk = exfile.read(STREAM_CHUNK)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+                    actual += len(chunk)
+                    if actual > info.size:
+                        raise BundleIntegrityError(
+                            f"archive member {name!r} longer than its declared size"
+                        )
+            except (tarfile.TarError, OSError, EOFError) as e:
+                raise BundleIntegrityError(f"corrupt or truncated member {name!r}: {e}") from e
+            if actual != info.size:
+                raise BundleIntegrityError(
+                    f"archive member size mismatch: {name!r} header={info.size} actual={actual}"
+                )
+            member_digests[name] = (h.hexdigest(), actual)
+    finally:
+        try:
+            tar.close()
+        finally:
+            archive_sha = counter.sha.hexdigest()
+            archive_compressed = counter.count
+            counter.close()
+
     # --- archive exact-byte hash + size against receipt --------------------
     if archive_sha != receipt.get("archive_sha256"):
         raise BundleIntegrityError(
             f"archive SHA-256 mismatch: actual {archive_sha} "
             f"receipt {receipt.get('archive_sha256')}"
         )
-    if len(archive_bytes) != receipt.get("archive_bytes"):
+    if archive_compressed != receipt.get("archive_bytes"):
         raise BundleIntegrityError(
-            f"archive size mismatch: actual {len(archive_bytes)} "
+            f"archive size mismatch: actual {archive_compressed} "
             f"receipt {receipt.get('archive_bytes')}"
         )
+    if archive_compressed > MAX_COMPRESSED_ARCHIVE_BYTES:
+        raise BundleIntegrityError("compressed archive exceeds size limit")
 
-    # Optional sibling checksum marker (sha256sum format).
-    sibling_checksum = bundle_path.with_name(bundle_path.name + ".sha256")
-    if sibling_checksum.is_file():
-        marker = sibling_checksum.read_text().strip().split()[0]
-        if marker != archive_sha:
-            raise BundleIntegrityError(
-                f"sibling .sha256 marker {marker} does not match archive {archive_sha}"
-            )
+    # --- inventory: bounded re-read + parse (pass 2 limited) ---------------
+    parsed: dict[str, Any] = {}
+    needed = {
+        MANIFEST_MEMBER: "run_manifest",
+        PAYLOAD_MEMBER: "run_payload",
+        FROZEN_CONFIG_MEMBER: "frozen_baseline_config",
+        DECLARATION_MEMBER: "shadow_declaration",
+        INVENTORY_MEMBER: "bundle_inventory",
+    }
+    counter2, tar2 = _pass_over_members(archive_path)
+    try:
+        while True:
+            try:
+                info = tar2.next()
+            except (tarfile.TarError, OSError, EOFError) as e:
+                raise BundleIntegrityError(f"corrupt or truncated archive: {e}") from e
+            if info is None:
+                break
+            if info.name in needed:
+                if info.size > MAX_METADATA_BYTES:
+                    raise BundleIntegrityError(
+                        f"metadata member {info.name!r} exceeds {MAX_METADATA_BYTES} "
+                        f"byte metadata limit (declared {info.size})"
+                    )
+                exfile = tar2.extractfile(info)
+                data = _read_member_bounded(
+                    exfile, info, limit=MAX_METADATA_BYTES, what="metadata member"
+                )
+                try:
+                    parsed[info.name] = json.loads(data.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                    raise BundleIntegrityError(
+                        f"archive member {info.name!r} is not valid JSON: {e}"
+                    ) from e
+    finally:
+        tar2.close()
+        counter2.close()
 
-    # --- read + structurally validate archive members ----------------------
-    members = _read_archive_members(archive_bytes)
-
-    inventory_bytes = _require_member(members, INVENTORY_MEMBER)
-    if _sha256_bytes(inventory_bytes) != receipt.get("inventory_sha256"):
-        raise BundleIntegrityError("inventory SHA-256 does not match receipt")
-    if len(inventory_bytes) != receipt.get("inventory_bytes"):
-        raise BundleIntegrityError("inventory byte size does not match receipt")
-    inventory = _parse_json_member(INVENTORY_MEMBER, inventory_bytes)
+    if INVENTORY_MEMBER not in parsed:
+        raise BundleIntegrityError("required archive member missing: inventory")
+    inventory = parsed[INVENTORY_MEMBER]
     if not isinstance(inventory, dict):
         raise BundleIntegrityError("inventory must be a JSON object")
     if inventory.get("bundle_schema_version") != BUNDLE_SCHEMA_VERSION:
@@ -991,36 +1318,39 @@ def verify_bundle(*, bundle_path: str | Path, receipt_path: str | Path) -> dict[
         if name in expected_names:
             raise BundleIntegrityError(f"inventory lists duplicate member: {name!r}")
         expected_names.add(name)
-        data = members.get(name)
-        if data is None:
+        digest = member_digests.get(name)
+        if digest is None:
             raise BundleIntegrityError(f"missing archive member listed in inventory: {name}")
-        if _sha256_bytes(data) != row["sha256"]:
+        if digest[0] != row["sha256"]:
             raise BundleIntegrityError(f"member SHA-256 mismatch: {name}")
-        if len(data) != row["bytes"]:
+        if digest[1] != row["bytes"]:
             raise BundleIntegrityError(f"member byte size mismatch: {name}")
 
-    unexpected = set(members.keys()) - expected_names
+    unexpected = set(member_digests.keys()) - expected_names
     if unexpected:
         raise BundleIntegrityError(
             f"unexpected archive members not listed in inventory: {sorted(unexpected)}"
         )
-    if receipt.get("member_count") != len(members):
+    if receipt.get("member_count") != member_count:
         raise BundleIntegrityError(
-            f"receipt member_count {receipt.get('member_count')} != "
-            f"actual {len(members)}"
+            f"receipt member_count {receipt.get('member_count')} != actual {member_count}"
         )
     if inventory.get("content_member_count") != len(inv_members):
         raise BundleIntegrityError("inventory content_member_count mismatch")
-    total_uncompressed = sum(len(d) for d in members.values())
     if receipt.get("total_uncompressed_bytes") != total_uncompressed:
         raise BundleIntegrityError(
             f"total_uncompressed_bytes mismatch: receipt "
             f"{receipt.get('total_uncompressed_bytes')} actual {total_uncompressed}"
         )
+    inv_sha, inv_size = member_digests[INVENTORY_MEMBER]
+    if inv_sha != receipt.get("inventory_sha256"):
+        raise BundleIntegrityError("inventory SHA-256 does not match receipt")
+    if inv_size != receipt.get("inventory_bytes"):
+        raise BundleIntegrityError("inventory byte size does not match receipt")
 
     # --- run manifest / payload -------------------------------------------
-    manifest = _parse_json_member(MANIFEST_MEMBER, _require_member(members, MANIFEST_MEMBER))
-    payload = _parse_json_member(PAYLOAD_MEMBER, _require_member(members, PAYLOAD_MEMBER))
+    manifest = parsed.get(MANIFEST_MEMBER)
+    payload = parsed.get(PAYLOAD_MEMBER)
     if not isinstance(manifest, dict) or not isinstance(payload, dict):
         raise BundleIntegrityError("manifest and payload must be JSON objects")
     if manifest.get("version") != RUN_SCHEMA_VERSION:
@@ -1031,9 +1361,8 @@ def verify_bundle(*, bundle_path: str | Path, receipt_path: str | Path) -> dict[
         raise BundleIntegrityError(
             f"bundled run is not a completed run: run_status={manifest.get('run_status')!r}"
         )
-    # Payload exact-byte hash against the manifest.
-    payload_actual_sha = _sha256_bytes(members[PAYLOAD_MEMBER])
-    if payload_actual_sha != manifest.get("payload_file_sha256"):
+    payload_digest = member_digests[PAYLOAD_MEMBER]
+    if payload_digest[0] != manifest.get("payload_file_sha256"):
         raise BundleIntegrityError("payload SHA-256 does not match manifest")
     run_id = manifest.get("run_id")
     target_date = manifest.get("target_date")
@@ -1067,20 +1396,18 @@ def verify_bundle(*, bundle_path: str | Path, receipt_path: str | Path) -> dict[
             f"recomputed run_id {recomputed_run_id} does not match manifest {run_id}"
         )
 
-    # --- frozen configs: recompute canonical hashes from bundled bytes ------
-    frozen_data = _require_member(members, FROZEN_CONFIG_MEMBER)
-    frozen_obj = _parse_json_member(FROZEN_CONFIG_MEMBER, frozen_data)
-    if _canonical_sha256(frozen_obj) != FROZEN_BASELINE_CONFIG_SHA256:
-        raise BundleIntegrityError(
-            "bundled frozen baseline config canonical SHA-256 mismatch"
-        )
+    # --- frozen configs: recompute canonical hashes from bundled bytes -----
+    frozen_obj = parsed.get(FROZEN_CONFIG_MEMBER)
+    if not isinstance(frozen_obj, dict) or _canonical_sha256(frozen_obj) != FROZEN_BASELINE_CONFIG_SHA256:
+        raise BundleIntegrityError("bundled frozen baseline config canonical SHA-256 mismatch")
     if manifest.get("frozen_baseline_config_sha256") != FROZEN_BASELINE_CONFIG_SHA256:
         raise BundleIntegrityError("manifest frozen_baseline_config_sha256 mismatch")
     if receipt.get("frozen_baseline_config_canonical_sha256") != FROZEN_BASELINE_CONFIG_SHA256:
         raise BundleIntegrityError("receipt frozen baseline config hash mismatch")
 
-    decl_data = _require_member(members, DECLARATION_MEMBER)
-    decl_obj = _parse_json_member(DECLARATION_MEMBER, decl_data)
+    decl_obj = parsed.get(DECLARATION_MEMBER)
+    if not isinstance(decl_obj, dict):
+        raise BundleIntegrityError("bundled shadow declaration is not a JSON object")
     decl_canonical = _canonical_sha256(decl_obj)
     if decl_canonical != manifest.get("declaration_sha256"):
         raise BundleIntegrityError(
@@ -1090,7 +1417,7 @@ def verify_bundle(*, bundle_path: str | Path, receipt_path: str | Path) -> dict[
         raise BundleIntegrityError(
             "receipt shadow declaration canonical hash does not match bundled bytes"
         )
-    decl_auth = decl_obj.get("authorizations", {}) if isinstance(decl_obj, dict) else {}
+    decl_auth = decl_obj.get("authorizations", {})
     for flag in _AUTH_FLAGS:
         if decl_auth.get(flag) is not False:
             raise BundleIntegrityError(
@@ -1102,12 +1429,43 @@ def verify_bundle(*, bundle_path: str | Path, receipt_path: str | Path) -> dict[
         "run_id": run_id,
         "target_date": target_date,
         "archive_sha256": archive_sha,
-        "member_count": len(members),
+        "member_count": member_count,
         "total_uncompressed_bytes": total_uncompressed,
         "input_digest": input_digest,
         "decision_digest": decision_digest,
         "durability_status": receipt.get("durability_status"),
     }
+
+
+def verify_bundle(*, bundle_path: str | Path, receipt_path: str | Path) -> dict[str, Any]:
+    """Independently verify a bundle archive against its receipt in memory."""
+    bundle_path = Path(bundle_path)
+    receipt_path = Path(receipt_path)
+    if not bundle_path.is_file():
+        raise BundleIntegrityError(f"bundle archive not found: {bundle_path}")
+    if not receipt_path.is_file():
+        raise BundleIntegrityError(f"bundle receipt not found: {receipt_path}")
+    with receipt_path.open("rb") as f:
+        data = f.read(MAX_METADATA_BYTES + 1)
+    if len(data) > MAX_METADATA_BYTES:
+        raise BundleIntegrityError(
+            f"bundle receipt exceeds {MAX_METADATA_BYTES} byte metadata limit"
+        )
+    try:
+        receipt = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise BundleIntegrityError(f"receipt is not valid JSON: {e}") from e
+    result = verify_archive_file(bundle_path, receipt)
+    # Optional sibling checksum marker (sha256sum format), if present.
+    sibling = bundle_path.with_name(bundle_path.name + ".sha256")
+    if sibling.is_file():
+        marker = sibling.read_text().strip().split()
+        if not marker or marker[0] != result["archive_sha256"]:
+            raise BundleIntegrityError(
+                f"sibling .sha256 marker does not match archive "
+                f"{result['archive_sha256']}"
+            )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1121,7 +1479,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         description=(
             "Milestone 7B: package a completed shadow run and every input "
             "needed to audit/reproduce it into a deterministic, independently "
-            "verifiable full-payload bundle (post-decision preservation only)."
+            "verifiable full-payload bundle (post-decision preservation only; "
+            "bounded-memory streaming create and verify)."
         ),
     )
     sub = p.add_subparsers(dest="command", required=True)
@@ -1141,7 +1500,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
     pv = sub.add_parser(
         "verify",
-        help="Independently verify a bundle archive against its receipt (in memory).",
+        help="Independently verify a bundle archive against its receipt (streamed, "
+             "in memory; never extracts).",
     )
     pv.add_argument("--bundle", required=True, type=Path,
                     help="Path to the slumdog-shadow-<date>-<run>.tar.gz archive")
