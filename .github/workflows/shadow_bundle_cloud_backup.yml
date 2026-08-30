@@ -238,4 +238,18 @@ jobs:
               json.dump(receipt, f, indent=2, sort_keys=True)
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
               f.write("## Shadow bundle cloud verification receipt\n\n")
-              f.write("
+              f.write("Verification completed successfully.\n\n")
+              f.write(f"- Artifact: `{receipt['artifact_name']}`\n")
+              f.write(f"- Target date: `{receipt['target_date']}`\n")
+              f.write(f"- Run ID: `{receipt['run_id']}`\n")
+              f.write(f"- Archive SHA-256: `{receipt['archive_sha256']}`\n")
+              f.write("- Status: `BUNDLE_VERIFIED`\n")
+          PY
+      - name: Upload compact verification receipt
+        # actions/upload-artifact v7.0.1 — retention explicitly 30 days
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ needs.bundle-create.outputs.artifact_name }}-verification
+          path: cloud-bundle-verification.json
+          retention-days: 30
+          if-no-files-found: error
