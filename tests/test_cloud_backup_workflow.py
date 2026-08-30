@@ -183,3 +183,69 @@ def test_workflow_never_runs_tests_or_evaluator_on_real_data():
         assert forbidden not in text, (
             f"workflow must not reference {forbidden!r}"
         )
+
+
+def test_embedded_python_blocks_complete_and_verification_receipt_uploaded():
+    """Embedded Python must compile and the verification receipt must upload."""
+    jobs = _jobs(_load())
+
+    embedded_blocks = []
+
+    for job_id, job in jobs.items():
+        for step in job.get("steps", []):
+            run = step.get("run")
+            if not isinstance(run, str):
+                continue
+
+            lines = run.splitlines()
+            index = 0
+
+            while index < len(lines):
+                if "<<'PY'" not in lines[index]:
+                    index += 1
+                    continue
+
+                start = index + 1
+                end = start
+                while end < len(lines) and lines[end].strip() != "PY":
+                    end += 1
+
+                assert end < len(lines), (
+                    f"unterminated Python heredoc in job {job_id!r}, "
+                    f"step {step.get('name')!r}"
+                )
+
+                body = "\n".join(lines[start:end]) + "\n"
+                compile(
+                    body,
+                    f"<workflow:{job_id}:{step.get('name', 'unnamed')}>",
+                    "exec",
+                )
+                embedded_blocks.append((job_id, step.get("name"), body))
+                index = end + 1
+
+    assert embedded_blocks, "workflow must contain embedded Python blocks"
+
+    verify_steps = jobs["bundle-verify"].get("steps", [])
+    receipt_uploads = [
+        step
+        for step in verify_steps
+        if "upload-artifact@" in str(step.get("uses", ""))
+        and str(step.get("with", {}).get("name", "")).endswith("-verification")
+    ]
+
+    assert len(receipt_uploads) == 1, (
+        "verify job must upload exactly one compact verification receipt"
+    )
+
+    upload = receipt_uploads[0]
+    with_ = upload.get("with", {})
+
+    assert with_.get("path") == "cloud-bundle-verification.json"
+    assert with_.get("retention-days") == RETENTION_DAYS
+    assert with_.get("if-no-files-found") == "error"
+
+    assert verify_steps[-1] is upload, (
+        "verification receipt upload must be the final verify-job step"
+    )
+
