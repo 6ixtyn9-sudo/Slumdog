@@ -9,34 +9,23 @@ only GitHub Actions artifact storage and the automatic `GITHUB_TOKEN`.
 
 | File | Purpose |
 |---|---|
-| `.github/workflows/shadow_bundle_cloud_backup.yml` | Manual `workflow_dispatch` workflow: build synthetic fixture → bundle → local verify → upload artifact → fresh-runner download → independent verify → verification receipt. **Delivery note:** the Arena delivery bot's GitHub App token lacks the `workflows` permission, so the agent cannot push this file; it is delivered verbatim in the PR body and must be committed once by the owner from the Codespace (see "Delivery of the workflow file" below). Until it lands, the 10 workflow-contract tests SKIP with an explicit reason (never silently pass) and activate automatically once the file exists. |
+| `.github/workflows/shadow_bundle_cloud_backup.yml` | Manual `workflow_dispatch` workflow: build synthetic fixture → bundle → local verify → upload artifact → fresh-runner download → independent verify → verification receipt. **Committed on PR #13** (owner push `ba7d554` from the Codespace; provenance note below). |
 | `scripts/synthetic_shadow_fixture.py` | Deterministic, network-free generator of an entirely synthetic completed shadow run (`SHADOW_SELECTIONS_EMITTED`, 1 primary + 2 cohort, synthetic participants only, injected decision clock safely before the frozen 24h cutoff). |
 | `tests/test_synthetic_shadow_fixture.py` | 9 focused tests: selection shape, root-independent decision digest + deterministic history bytes, same-root reproducibility, synthetic-only participants, no network/collector references, fail-closed on existing root, bundle create+verify roundtrip, CLI behavior. |
-| `tests/test_cloud_backup_workflow.py` | 10 contract tests over the workflow YAML: dispatch-only trigger, `contents: read`, concurrency, per-job timeouts, immutable-SHA pinning, no caches, explicit 30-day retention, fail-closed upload, verify job isolation. |
+| `tests/test_cloud_backup_workflow.py` | 12 contract tests over the workflow YAML: dispatch-only trigger, `contents: read`, concurrency, per-job timeouts, immutable-SHA pinning, no caches, explicit 30-day retention, fail-closed upload, verify job isolation — plus owner-added regressions: the workflow file is REQUIRED (missing file fails the suite, no skip), every embedded Python heredoc must COMPILE and be terminated, and the compact verification-receipt upload (name/path/retention/final-step) is asserted. |
 
 No change to the shadow evaluator, R2, ranking, configs, or production code.
 
-## Delivery of the workflow file (owner, one short Codespace step)
+## Workflow file provenance (resolved)
 
 GitHub refuses to let a GitHub App create or modify `.github/workflows/*`
 without the `workflows` permission, and the Arena delivery token does not
-carry it. From the Codespace (owner credentials have workflow rights):
-
-```bash
-cd /workspaces/Slumdog
-git fetch origin
-git checkout arena/01a0512f-slumdog
-# create .github/workflows/shadow_bundle_cloud_backup.yml with the exact
-# content from the "Workflow file (verbatim)" section of the Milestone 7D
-# pull request, then:
-git add .github/workflows/shadow_bundle_cloud_backup.yml
-git commit -m "Add M7D cloud backup workflow file (owner push; Arena token lacks workflows scope)"
-git push origin arena/01a0512f-slumdog
-python -m pytest -q          # all 10 contract tests activate and must pass
-```
-
-Alternative: reconnect the Arena GitHub integration with a token that has
-the `workflows` permission and the agent can push the file itself.
+carry it. The workflow file was therefore committed to the PR branch by the
+**owner** from the data-bearing Codespace (commit `ba7d554`, refined in
+`9113116`), together with owner-added regression tests (`1cd9a14`,
+`c35a8d1`) that make a missing workflow file a hard test FAILURE (no skip),
+compile every embedded Python heredoc, and assert the verification-receipt
+upload. All 12 workflow-contract tests now pass with zero skips.
 
 ## Workflow contract
 
@@ -105,9 +94,9 @@ the verification evidence.
 
 ## Honest status distinctions
 
-- Workflow **implemented**: YES (this PR).
-- Workflow **syntax validated locally**: YES (PyYAML parse + 10 structural
-  contract tests).
+- Workflow **implemented**: YES — committed on PR #13 (owner push; see provenance above).
+- Workflow **syntax validated locally**: YES (PyYAML parse + 12 structural
+  contract tests, zero skips; embedded Python heredocs compile).
 - Workflow **executed on GitHub**: **NO** — not dispatched yet.
 - Artifact **uploaded / downloaded in a separate job / independent verification
   passed**: **NO** — all pending the first real dispatch.
