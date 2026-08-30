@@ -1,0 +1,255 @@
+# Slumdog — Milestone 7D: Cloud-Only Shadow Bundle Backup (synthetic)
+#
+# Manually dispatched second-copy proof for the Milestone 7B bundle tooling.
+# It builds an ENTIRELY SYNTHETIC completed shadow run in the runner's
+# temporary directory (scripts/synthetic_shadow_fixture.py — synthetic
+# participants only, no network, no repository data/ access), bundles it
+# with the production CLI, uploads the bundle triplet as a GitHub Actions
+# artifact, then verifies the DOWNLOADED artifact on a SECOND, fresh runner.
+#
+# Contract (enforced by tests/test_cloud_backup_workflow.py):
+#   - manual workflow_dispatch ONLY (no schedule/push/pull_request);
+#   - permissions: contents: read (nothing else);
+#   - every action pinned to an immutable full commit SHA (see comments);
+#   - a timeout on every job;
+#   - no caches of any kind (no actions/cache, no setup-python cache,
+#     pip runs with --no-cache-dir);
+#   - concurrency: queued, never simultaneous duplicates;
+#   - artifact retention is EXPLICITLY 30 days for every artifact
+#     (GitHub Actions artifacts are NOT permanent storage);
+#   - fail closed: any hash/verify mismatch fails the job;
+#   - logs carry filenames/hashes/ids only — no bundle contents, no
+#     participant data;
+#   - no prediction-source access, no real capture, no real shadow run,
+#     no production/training/shortlist/threshold activity, no credentials
+#     beyond the automatic GITHUB_TOKEN.
+
+name: Slumdog · Shadow Bundle Cloud Backup (synthetic)
+run-name: "Slumdog · Shadow Bundle Cloud Backup · #${{ github.run_number }}"
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # One cloud-backup run at a time; extra manual dispatches queue behind
+  # the in-flight run (cancel-in-progress stays false so a dispatched run
+  # is never silently destroyed).
+  group: shadow-bundle-cloud-backup
+  cancel-in-progress: false
+
+jobs:
+  bundle-create:
+    name: Create — synthetic fixture → deterministic bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      artifact_name: ${{ steps.artifact.outputs.artifact_name }}
+      target_date: ${{ steps.bundle.outputs.target_date }}
+      run_id: ${{ steps.bundle.outputs.run_id }}
+      archive_sha256: ${{ steps.bundle.outputs.archive_sha256 }}
+    steps:
+      - name: Check out repository
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Set up Python 3.13
+        # actions/setup-python v7.0.0 (cache deliberately NOT enabled)
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+      - name: Install the package (pip cache disabled)
+        run: python -m pip install --no-cache-dir .
+      - name: Build entirely synthetic completed shadow run
+        id: fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Writes only under $RUNNER_TEMP; refuses existing paths; the
+          # printed summary carries ids/digests only (no participant data).
+          python scripts/synthetic_shadow_fixture.py \
+            --root "$RUNNER_TEMP/synthetic-repo" \
+            > "$RUNNER_TEMP/fixture-summary.json"
+          python - "$RUNNER_TEMP/fixture-summary.json" <<'PY' >> "$GITHUB_OUTPUT"
+          import json, sys
+          summary = json.load(open(sys.argv[1], encoding="utf-8"))
+          print("run_dir=" + summary["run_dir"])
+          print("synthetic_root=" + summary["synthetic_root"])
+          print("run_id=" + summary["run_id"])
+          print("target_date=" + summary["target_date"])
+          PY
+      - name: Create deterministic full-payload bundle (production CLI)
+        id: bundle
+        shell: bash
+        env:
+          SLUMDOG_RUN_DIR: ${{ steps.fixture.outputs.run_dir }}
+          SLUMDOG_SYNTHETIC_ROOT: ${{ steps.fixture.outputs.synthetic_root }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/export"
+          python -m slumdog.shadow_bundle create \
+            --run-dir "$SLUMDOG_RUN_DIR" \
+            --output-dir "$RUNNER_TEMP/export" \
+            --root "$SLUMDOG_SYNTHETIC_ROOT" \
+            > "$RUNNER_TEMP/create-receipt.json"
+          python - "$RUNNER_TEMP/create-receipt.json" <<'PY' >> "$GITHUB_OUTPUT"
+          import json, sys
+          r = json.load(open(sys.argv[1], encoding="utf-8"))
+          print("archive_path=" + r["archive_path"])
+          print("receipt_path=" + r["receipt_path"])
+          print("checksum_path=" + r["checksum_path"])
+          print("archive_filename=" + r["archive_filename"])
+          print("archive_sha256=" + r["archive_sha256"])
+          print("run_id=" + r["run_id"])
+          print("target_date=" + r["target_date"])
+          PY
+      - name: Verify bundle locally before upload
+        shell: bash
+        env:
+          ARCHIVE: ${{ steps.bundle.outputs.archive_path }}
+          RECEIPT: ${{ steps.bundle.outputs.receipt_path }}
+        run: |
+          set -euo pipefail
+          python -m slumdog.shadow_bundle verify \
+            --bundle "$ARCHIVE" --receipt "$RECEIPT" \
+            | tee "$RUNNER_TEMP/verify-local.json"
+          grep -q '"status": "BUNDLE_VERIFIED"' "$RUNNER_TEMP/verify-local.json"
+      - name: Checksum marker check (sha256sum -c, fails closed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/export"
+          sha256sum -c ./*.sha256
+      - name: Compose artifact name (date + run id + hash prefix)
+        id: artifact
+        shell: bash
+        env:
+          TARGET_DATE: ${{ steps.bundle.outputs.target_date }}
+          RUN_ID: ${{ steps.bundle.outputs.run_id }}
+          ARCHIVE_SHA256: ${{ steps.bundle.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          echo "artifact_name=shadow-bundle-${TARGET_DATE}-${RUN_ID}-${ARCHIVE_SHA256:0:8}" \
+            >> "$GITHUB_OUTPUT"
+      - name: Upload bundle triplet as one artifact
+        # actions/upload-artifact v7.0.1 — retention EXPLICITLY 30 days
+        # (Actions artifacts are NOT permanent storage; see
+        # docs/MILESTONE7D_CLOUD_BACKUP.md for the migration plan).
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.artifact.outputs.artifact_name }}
+          path: |
+            ${{ steps.bundle.outputs.archive_path }}
+            ${{ steps.bundle.outputs.receipt_path }}
+            ${{ steps.bundle.outputs.checksum_path }}
+          retention-days: 30
+          if-no-files-found: error
+
+  bundle-verify:
+    name: Verify — fresh runner, downloaded artifact only
+    needs: bundle-create
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Set up Python 3.13
+        # actions/setup-python v7.0.0 (cache deliberately NOT enabled)
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+      - name: Install the package (pip cache disabled)
+        run: python -m pip install --no-cache-dir .
+      - name: Download the uploaded bundle artifact
+        # actions/download-artifact v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ needs.bundle-create.outputs.artifact_name }}
+          path: bundle-download
+      - name: Recompute archive SHA-256 and require exact match
+        shell: bash
+        env:
+          EXPECTED_SHA256: ${{ needs.bundle-create.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          ARCHIVE="$(find bundle-download -type f -name '*.tar.gz' | head -n 1)"
+          test -n "$ARCHIVE"
+          ACTUAL="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
+          echo "downloaded_archive_sha256=$ACTUAL"
+          test "$ACTUAL" = "$EXPECTED_SHA256"
+      - name: Verify bundle through the production CLI (require BUNDLE_VERIFIED)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$(find bundle-download -type f -name '*.tar.gz' | head -n 1)"
+          RECEIPT="${ARCHIVE%.tar.gz}.bundle.json"
+          test -f "$RECEIPT"
+          python -m slumdog.shadow_bundle verify \
+            --bundle "$ARCHIVE" --receipt "$RECEIPT" \
+            | tee verify-result.json
+          grep -q '"status": "BUNDLE_VERIFIED"' verify-result.json
+      - name: Checksum marker check inside the artifact (sha256sum -c)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$(find bundle-download -type f -name '*.tar.gz' | head -n 1)"
+          cd "$(dirname "$ARCHIVE")"
+          sha256sum -c ./*.sha256
+      - name: Write compact verification receipt (summary + artifact)
+        shell: bash
+        env:
+          ARTIFACT_NAME: ${{ needs.bundle-create.outputs.artifact_name }}
+          TARGET_DATE: ${{ needs.bundle-create.outputs.target_date }}
+          RUN_ID: ${{ needs.bundle-create.outputs.run_id }}
+          ARCHIVE_SHA256: ${{ needs.bundle-create.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          export ARTIFACT_NAME TARGET_DATE RUN_ID ARCHIVE_SHA256
+          python - <<'PY'
+          import datetime
+          import json
+          import os
+
+          receipt = {
+              "receipt_schema": "slumdog_cloud_bundle_verification_v1",
+              "workflow_run_id": os.environ["GITHUB_RUN_ID"],
+              "workflow_run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "artifact_name": os.environ["ARTIFACT_NAME"],
+              "target_date": os.environ["TARGET_DATE"],
+              "run_id": os.environ["RUN_ID"],
+              "archive_sha256": os.environ["ARCHIVE_SHA256"],
+              "bundle_verified": True,
+              "creation_job": "bundle-create",
+              "verification_job": os.environ["GITHUB_JOB"],
+              "verified_at_utc": datetime.datetime.now(
+                  datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "artifact_retention_days": 30,
+              "authorizations": {
+                  "production_authorized": False,
+                  "shortlist_policy_authorized": False,
+                  "training_authorized": False,
+                  "threshold_optimization_authorized": False,
+              },
+          }
+          with open("cloud-bundle-verification.json", "w", encoding="utf-8") as f:
+              json.dump(receipt, f, indent=2, sort_keys=True)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("## Shadow bundle cloud verification receipt\n\n")
+              f.write("Verification completed successfully.\n\n")
+              f.write(f"- Artifact: `{receipt['artifact_name']}`\n")
+              f.write(f"- Target date: `{receipt['target_date']}`\n")
+              f.write(f"- Run ID: `{receipt['run_id']}`\n")
+              f.write(f"- Archive SHA-256: `{receipt['archive_sha256']}`\n")
+              f.write("- Status: `BUNDLE_VERIFIED`\n")
+          PY
+      - name: Upload compact verification receipt
+        # actions/upload-artifact v7.0.1 — retention explicitly 30 days
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ needs.bundle-create.outputs.artifact_name }}-verification
+          path: cloud-bundle-verification.json
+          retention-days: 30
+          if-no-files-found: error

@@ -1,15 +1,15 @@
 # Slumdog Living Handoff
 
-**Last updated:** 2026-08-29 (UTC) — **MILESTONE 7B IMPLEMENTED/TESTED LOCALLY (shadow bundle tool; PR opened, NOT merged)** / **NO REAL SHADOW BUNDLE CREATED** / **NO REAL FOREBET CAPTURE** / **NO REAL SHADOW RUN** / **PRODUCTION NOT AUTHORIZED** / **SHORTLIST POLICY NOT AUTHORIZED**. 601 tests pass (534 prior + 67 new M7B tests); canonical declaration SHA-256 `dd08976a…4d597`; frozen baseline SHA-256 `666dabe7…00a1` MATCH (unchanged); golden shared-feature digest `1a97cb81…ca0d` unchanged; full suite `python -m pytest` green, pyflakes clean, `git diff --check` clean, `py_compile` clean. See **Milestone 7B** below and `docs/MILESTONE7B_SHADOW_BUNDLE.md`.
+**Last updated:** 2026-08-30 (UTC) — **MILESTONE 7B MERGED INTO `main` VIA PR #12 (`main` @ `41b345f`)** / **MILESTONE 7C SYNTHETIC TRANSPORT PROOF EXECUTED IN THE ARENA SANDBOX** / **MILESTONE 7D IMPLEMENTED/TESTED LOCALLY (cloud-only bundle backup workflow; workflow COMMITTED on PR #13; 12 workflow-contract tests pass with ZERO skips; workflow NOT dispatched on GitHub — pending merge + manual dispatch)** / **NO REAL SHADOW BUNDLE CREATED** / **NO REAL FOREBET CAPTURE** / **NO REAL SHADOW RUN** / **PRODUCTION NOT AUTHORIZED** / **SHORTLIST POLICY NOT AUTHORIZED**. 622 tests pass on the M7D branch (601 on `main` + 9 fixture + 12 workflow-contract); canonical declaration SHA-256 `dd08976a…4d597`; frozen baseline SHA-256 `666dabe7…00a1` MATCH (unchanged); full suite `python -m pytest` green, `git diff --check` clean, `py_compile` clean, pyflakes clean on all new files. See **Milestone 7D** below and `docs/MILESTONE7D_CLOUD_BACKUP.md`.
 
-Prior state (2026-08-28): MILESTONE 7 MERGED INTO `main` VIA PR #11 (merge `dadfb8e`); 534 tests pass; NO REAL SHADOW RUN PERFORMED.
+Prior state (2026-08-29): MILESTONE 7B IMPLEMENTED/TESTED LOCALLY (PR opened; subsequently merged as PR #12); 601 tests passed.
 
-**Branch:** `arena/01a04d74-slumdog` (delivery from `main` @ `3c5dbab`); `main` is only permanent branch
-**Base commit:** `3c5dbab2d035038c055b664c57a842ab7f09743e`
-**Phase:** Milestones 0–7 COMPLETE AND MERGED. **Milestone 7B (verifiable full-payload shadow bundle) IMPLEMENTED/TESTED LOCALLY** — deterministic `.tar.gz` full-payload bundler + in-memory verifier, stdlib-only, post-decision preservation. First real shadow run still BLOCKED on (1) synthetic bundle download/verify exercise in the data-bearing Codespace and (2) an authorized gentle future-date capture. Training FROZEN. Production NOT AUTHORIZED. Shortlist policy NOT AUTHORIZED.
+**Branch:** `arena/01a0512f-slumdog` (M7D delivery from `main` @ `41b345f`); `main` is only permanent branch
+**Base commit:** `41b345f749169dd2faa04fcaad11ce46c3eaecad`
+**Phase:** Milestones 0–7B COMPLETE AND MERGED. Milestone 7C synthetic transport proof executed in the Arena sandbox (2026-08-30): fully synthetic run through the real evaluator, production-CLI bundle, `BUNDLE_VERIFIED`, byte-identical determinism archives, repository/retained data untouched. **Milestone 7D (cloud-only second-copy procedure) IMPLEMENTED/TESTED LOCALLY** — manual-dispatch workflow + synthetic fixture generator + 19 tests. First real shadow run still BLOCKED on (1) one successful end-to-end manual dispatch of the cloud backup workflow and (2) an authorized gentle future-date capture. Training FROZEN. Production NOT AUTHORIZED. Shortlist policy NOT AUTHORIZED.
 **Mission:** Slumdog identifies a small daily shortlist of participants that Forebet considers underdogs but whose available pre-event evidence indicates a credible outright-win upset.
 **Training:** FROZEN (`feature_contracts.py: MODEL_TRAINING_ALLOWED=False`)
-**Tests:** 601 passed (verified 2026-08-29; full suite `python -m pytest`, pyflakes clean, `git diff --check` clean, `python -m py_compile` clean, `python -m slumdog.shadow_bundle --help` returns 0)
+**Tests:** 620 passed on the M7D branch (verified 2026-08-30 in the Arena sandbox venv: full suite, focused bundle+evaluator tests, fixture-generator and workflow-contract tests, `py_compile`, `git diff --check`; Codespace should re-run `python -m pytest -q` before merge per AGENTS.md)
 
 ## Milestone 7B — COMPLETE LOCALLY (shadow bundle; PR opened, NOT merged)
 
@@ -23,7 +23,27 @@ Prior state (2026-08-28): MILESTONE 7 MERGED INTO `main` VIA PR #11 (merge `dadf
 
 **Authorization state:** Training NOT AUTHORIZED, Production NOT AUTHORIZED, Shortlist policy NOT AUTHORIZED, Threshold optimization NOT AUTHORIZED; no real Forebet capture and no real shadow run authorized in this milestone.
 
-**Milestone 7B implemented/tested locally. No real shadow bundle created. No real Forebet capture. No real shadow run. Production not authorized. Shortlist policy not authorized.**
+**Milestone 7B implemented/tested locally; subsequently merged into `main` via PR #12 (merge commit `41b345f`). No real shadow bundle created. No real Forebet capture. No real shadow run. Production not authorized. Shortlist policy not authorized.**
+
+## Milestone 7D — Cloud-Only Shadow Bundle Backup (IMPLEMENTED LOCALLY / PR opened, NOT merged / WORKFLOW NOT DISPATCHED)
+
+**Owner decision (2026-08-30):** the slow local computer is OUT of the backup loop. Second copies go to GitHub Actions artifact storage, verified from a second short-lived cloud runner. Actions artifacts are NOT permanent storage; 30-day retention configured explicitly; migrate to durable object storage or a private release asset if the experiment continues (separate approval).
+
+**Deliverables:** `.github/workflows/shadow_bundle_cloud_backup.yml` (committed on PR #13 by the owner from the Codespace — the Arena delivery App token cannot push `.github/workflows/*`; historical note only) + `scripts/synthetic_shadow_fixture.py` + `tests/test_synthetic_shadow_fixture.py` (9 tests) + `tests/test_cloud_backup_workflow.py` (12 tests: the 10 original contract tests plus owner-added regressions requiring the workflow file to exist, compiling every embedded Python heredoc, and asserting the compact verification-receipt upload) + `docs/MILESTONE7D_CLOUD_BACKUP.md`. No change to the shadow evaluator, R2, ranking, configs, or production code.
+
+**Workflow contract:** manual `workflow_dispatch` ONLY; `permissions: contents: read`; concurrency group `shadow-bundle-cloud-backup` (queued, never simultaneous, never cancels in-flight); 15-minute timeout per job; NO caches (no cache action, setup-python cache off, `pip install --no-cache-dir .`); all four actions pinned to immutable full commit SHAs (checkout v7.0.1 `3d3c42e5…`, setup-python v7.0.0 `5fda3b95…`, upload-artifact v7.0.1 `043fb46d…`, download-artifact v8.0.1 `3e5f45b2…`); retention-days 30 explicit on every artifact; `if-no-files-found: error`; logs carry filenames/hashes/ids only.
+
+**Job 1 `bundle-create`:** build the entirely synthetic completed run under `$RUNNER_TEMP` (generator below) → `python -m slumdog.shadow_bundle create` → local verify requiring `BUNDLE_VERIFIED` → `sha256sum -c` marker check → upload the exact three-file triplet as ONE artifact named `shadow-bundle-<target_date>-<run_id>-<sha256-prefix-8>`. Exposes artifact name/target date/run id/archive SHA-256 as job outputs.
+
+**Job 2 `bundle-verify` (fresh runner, needs only the artifact):** download-artifact → recompute archive SHA-256, require exact match with job 1 → `python -m slumdog.shadow_bundle verify` requiring `BUNDLE_VERIFIED` → marker re-check → compact JSON receipt `slumdog_cloud_bundle_verification_v1` (workflow run id/attempt, repository, artifact name, target date, run id, archive SHA-256, `bundle_verified: true`, creation job `bundle-create`, verification job from `GITHUB_JOB`, UTC timestamp, retention days, authorization flags all false) appended to the job summary AND uploaded as a separate artifact. Receipts are never auto-committed.
+
+**Synthetic fixture generator (`scripts/synthetic_shadow_fixture.py`):** deterministic and network-free; verifies both frozen config canonical hashes before anything else; copies ONLY those two configs into the synthetic root; synthetic participants (Synthetic Alpha/Beta, Gamma/Delta, Epsilon/Zeta — 3 football events, 42 synthetic settled history rows = 6+6+2 per pairing, direct-route raw-JSON body, gzip mtime=0); injected decision clock `2026-08-30T12:00:00Z` vs cutoff `2026-09-01T00:00:00Z`; drives the REAL evaluator; fails closed unless `SHADOW_SELECTIONS_EMITTED` with exactly 1 primary + 2 cohort; refuses existing roots; never writes inside the repository. Known property (documented in tests): `input_digest`/`run_id` commit to absolute provenance paths, so they are root-dependent BY DESIGN; `decision_digest` and history bytes are root-independent; bundle determinism from a fixed root is proven by the M7B suite.
+
+**Validation (Arena sandbox, 2026-08-30):** full suite 622 passed (601 on `main` + 9 fixture + 12 workflow-contract, ZERO skips); workflow tests 12/12 with `-rs` (no skip reasons); fixture tests 9/9; `py_compile` all files OK; `git diff --check` clean; pyflakes clean on every new/changed file (13 pre-existing warnings in old test files untouched); workflow YAML parsed with PyYAML. Owner commits `ba7d554`..`c35a8d1` added the workflow file and the required-presence / embedded-heredoc / receipt-upload regression tests.
+
+**Honest status:** implemented YES (committed on PR #13) / contract tests 12/12 with zero skips / syntax validated YES / executed on GitHub NO / artifact uploaded NO / downloaded-in-separate-job NO / independent verification passed NO. **Do not claim cloud backup works until a manual dispatch succeeds end-to-end.** Dispatch: `gh workflow run shadow_bundle_cloud_backup.yml --ref main` (after merge) and confirm both jobs green; the receipt artifact is the evidence.
+
+**Authorization state:** Training NOT AUTHORIZED, Production NOT AUTHORIZED, Shortlist policy NOT AUTHORIZED, Threshold optimization NOT AUTHORIZED; the workflow performs no capture, no real run, no production activity, and uses no credentials beyond the automatic `GITHUB_TOKEN`.
 
 
 ## Product Invariants (from AGENTS.md)
@@ -246,6 +266,12 @@ The original 6A implementation was found not to scale (it materialized all examp
 - **Tests:** `tests/test_baseline_analyzer.py` (30 focused tests). Total suite: 426 passed.
 
 ## PR State
+
+- **Active branch:** `arena/01a0512f-slumdog` — Milestone 7D cloud-only bundle backup (base `main` @ `41b345f`).
+- **Pull request:** #13 opened into `main` (NOT merged) — "Add cloud-only shadow bundle backup workflow (Milestone 7D)". Contents: the committed workflow file (owner push `ba7d554` from the Codespace, after the Arena delivery App was refused `.github/workflows/*` writes for lacking the `workflows` permission — resolved, historical note) + synthetic fixture generator + 9 fixture tests + 12 workflow-contract tests passing with ZERO skips (missing workflow file now FAILS the suite) + docs (STATE/HANDOFF/docs README/MILESTONE7D).
+- **Merge approves only:** the manual-dispatch synthetic-bundle cloud backup procedure (fixture generator, workflow, contract tests, docs).
+- **Merge does NOT approve:** model training, threshold optimization, production publication, shortlist policy activation, real Forebet capture, real shadow runs, permanent-storage claims, auto-committed receipts.
+- **Next:** (1) merge PR #13; (2) owner manually dispatches the workflow once (`gh workflow run shadow_bundle_cloud_backup.yml --ref main`) and confirms both jobs green (receipt artifact) — only then is the cloud second-copy path proven; (3) schedule the first real future-date capture/run.
 
 - **Active branch:** `arena/01a04198-slumdog` — head `8977cab` (and handoff commit).
 - **Pull Request:** #10 https://github.com/6ixtyn9-sudo/Slumdog/pull/10 — "Implement two-pass non-trained baseline analyzer (Milestone 6B)" (OPEN, mergeable, against `main`).

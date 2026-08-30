@@ -27,6 +27,9 @@ This index classifies every file under `docs/` as:
 | `FOREBET_PRICE_COVERAGE.json` | Representative displayed-price snapshot: one active-season date per sport. | **REFERENCE** | 2026-08-24 | **Reference evidence only. Price coverage is not a Slumdog candidate-readiness gate.** |
 | `FOREBET_FACET_ANALYSIS_PLAN.md` | Timing class definitions, common fields catalogue, 10-step analysis order. | **REFERENCE** | 2026-08-24 | Stable technical plan; still valid but step 5 calibration must not use ROI-primary; step 6 lift is over Forebet underdog probability (price-free). |
 | `MA_GOLIDE_ROBBER_FORENSIC.md` | Forensic spec of legacy Ma Golide Robber: odds-first cascade, defects. | **HISTORICAL** | 2026-08-24 | Historical evidence — useful to understand magolide.py but NOT current operating truth. |
+| `MILESTONE7_SHADOW_PICKS_PLAN.md` | Milestone 7 shadow pick evaluator plan. | **REFERENCE** | 2026-08-28 | Plan record for the merged Milestone 7 evaluator work. |
+| `MILESTONE7B_SHADOW_BUNDLE.md` | Verifiable full-payload shadow bundle (create + verify, deterministic archives, bounded-memory streaming). | **CURRENT** | 2026-08-29 | Operating doc for the merged (PR #12) Milestone 7B bundle tooling. |
+| `MILESTONE7D_CLOUD_BACKUP.md` | Cloud-only second-copy procedure: manual-dispatch workflow, synthetic fixture generator, artifact retention (30 days, NOT permanent), verification receipt, honest status distinctions. | **CURRENT** | 2026-08-30 | Operating doc for the Milestone 7D cloud backup PR (opened, NOT merged; workflow NOT yet dispatched). |
 | `README.md` (this file) | Doc index with purpose/status/last-verified/canonical relationships. | **CURRENT** | 2026-08-24 | Canonical index — required by Milestone 0, updated for Milestone 4 COMPLETE (4E hardening). |
 
 ## Classification Report (Milestone 0-4E)
