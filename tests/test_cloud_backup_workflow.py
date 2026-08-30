@@ -15,12 +15,10 @@ drift:
 - the verification job runs on a fresh runner and depends ONLY on the
   downloaded artifact from the creation job.
 
-DELIVERY NOTE: the Arena delivery bot's GitHub App token does not carry
-the ``workflows`` permission, so the workflow FILE itself cannot be pushed
-by the agent; it is delivered in the pull-request body for the owner to
-commit from the data-bearing Codespace (one short step). Until that file
-lands, this module SKIPS with an explicit reason — never silently passes —
-and activates automatically once the file exists.
+DELIVERY STATUS: the workflow is committed on the Milestone 7D PR branch.
+Its contract tests must fail if the required workflow file is absent. GitHub
+execution remains unverified until the workflow lands on main and is manually
+dispatched.
 """
 
 from __future__ import annotations
@@ -28,20 +26,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "shadow_bundle_cloud_backup.yml"
 
-if not WORKFLOW.is_file():
-    pytest.skip(
-        "shadow_bundle_cloud_backup.yml is not present yet: the Arena bot "
-        "token lacks the 'workflows' permission, so the owner must commit "
-        "the workflow file (delivered in the Milestone 7D PR body) from "
-        "the Codespace; these contract tests activate once it lands",
-        allow_module_level=True,
-    )
+def test_workflow_file_is_present():
+    assert WORKFLOW.is_file(), f"required workflow missing: {WORKFLOW}"
+
 
 PINNED_USE_RE = re.compile(r"^actions/[a-z-]+@[0-9a-f]{40}$")
 RETENTION_DAYS = 30
@@ -248,4 +240,3 @@ def test_embedded_python_blocks_complete_and_verification_receipt_uploaded():
     assert verify_steps[-1] is upload, (
         "verification receipt upload must be the final verify-job step"
     )
-
