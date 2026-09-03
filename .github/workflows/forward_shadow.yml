@@ -1,0 +1,62 @@
+name: Slumdog \u00b7 Forward Shadow Batch
+run-name: "Slumdog \u00b7 Forward Shadow \u00b7 #${{ github.run_number }}"
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: slumdog-forward-shadow
+  cancel-in-progress: false
+
+jobs:
+  forward-batch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+      - name: Install package (no cache)
+        run: python -m pip install --no-cache-dir .
+      - name: Seed history ledgers from latest depth-pipeline artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p data/reports depth-history
+          RUN_ID=$(gh run list --workflow pipeline.yml --status success --limit 1 --json databaseId -q '.[0].databaseId') || RUN_ID=""
+          if [ -n "$RUN_ID" ]; then
+            gh run download "$RUN_ID" --pattern 'slumdog-history-football' --dir depth-history || echo "no history artifact (first run after depth pipeline)"
+            find depth-history -type f \( -name 'history_*' \) -exec cp {} data/reports/ \; || true
+          fi
+      - name: Run forward batch (D+2..D+6, timing-v1)
+        env:
+          PYTHONPATH: src
+        run: python scripts/forward_shadow_batch.py --root .
+      - name: Persist small evidence to git (permanent ledger)
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          find data/reports/shadow -type f \( -name shadow_selections.json -o -name manifest.json -o -name '*.settlement.json' -o -name '*.settlement.json.sha256' -o -name '*.bundle.json' -o -name '*.tar.gz.sha256' \) | xargs -r git add -f
+          git add -f data/reports/capture_*.json 2>/dev/null || true
+          find data/reports/shadow -name 'status.tsv' | xargs -r git add -f
+          if git diff --cached --quiet; then echo "no new evidence"; exit 0; fi
+          git commit -m "chore: shadow evidence (run ${{ github.run_id }})"
+          git pull --rebase --autostash || (git rebase --abort 2>/dev/null || true; echo "persist race; evidence lives in artifacts this run"; exit 0)
+          git push || (git pull --rebase --autostash && git push) || true
+      - name: Upload full evidence as artifacts (30d retention)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: forward-shadow-${{ github.run_id }}
+          path: data/reports
+          retention-days: 30
+          if-no-files-found: warn

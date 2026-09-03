@@ -46,9 +46,14 @@ class TestForwardShadowWorkflowContract:
         assert "push" not in triggers, "must not have push trigger"
         assert "pull_request" not in triggers, "must not have pull_request trigger"
 
-    def test_permissions_contents_read(self):
+    def test_permissions_contract(self):
+        # Owner amendment 2026-09-03: forward batch PERSISTS small evidence to
+        # git (no ledgers in Codespace) and downloads history artifacts from
+        # the depth pipeline. contents: write for the persist step; actions:
+        # read for cross-run artifact download. Recorded in STATE.md.
         perms = self.wf.get("permissions", {})
-        assert perms.get("contents") == "read"
+        assert perms.get("contents") == "write"
+        assert perms.get("actions") == "read"
 
     def test_timeout_on_every_job(self):
         jobs = self.wf.get("jobs", {})
