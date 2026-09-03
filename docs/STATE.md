@@ -119,14 +119,13 @@ Next: settle 2026-09-05..09 as each date's matches complete (P1 continuation)
 - **Model training:** `MODEL_TRAINING_ALLOWED=False` — frozen heuristics, not trained models
 - **Feature engineering:** Only basic statistics; no use of full facet set
 
-**The long road ahead:**
-1. Audit Forebet for all 14 sports (availability + facets)
-2. Validate facet extraction from HTML/JSON
-3. Decide sport prioritization (data density)
-4. Enable training once facets validated
-5. Multi-sport rollout (one sport at a time)
-6. Feature engineering using full facet set
-7. Model development and validation
+**The long road ahead (owner priority order 2026-09-03):**
+1. **Football facet audit** - what is Forebet actually serving? Are all 11 facets extractable?
+2. **ML training** - use the 655k row historical dataset + full facet set
+3. **Better predictions** - trained models > frozen heuristics
+4. **Wider net** - more picks per day once quality validated
+5. **One sport at a time** - football first, then expand
+6. **Reporting/UI** - only after predictions worth viewing (premature now)
 
 **Current experiment:** Can frozen heuristics using 17 stats pick football underdogs?
 **Future experiment:** Can trained models using full facets pick underdogs across sports?
