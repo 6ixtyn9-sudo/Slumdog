@@ -1,0 +1,90 @@
+{
+  "decision_digest": "92c9ab8658fffe2fba3c0d1c45596e197d71988c5b6e1ff9523703573a0200b1",
+  "graded_at": "2026-09-03T04:06:09.935420+00:00",
+  "graded_selections": [
+    {
+      "disposition": "SETTLED",
+      "event_id": "football:2476049",
+      "grade": "SUCCESS",
+      "participant_1": "Fortaleza (COL)",
+      "participant_2": "Once Caldas",
+      "rank": 1,
+      "score_1": 1.0,
+      "score_2": 2.0,
+      "selection_status": "PRIMARY_SHADOW_SELECTION",
+      "source_url": "https://www.forebet.com/en/football/matches/fortaleza-col-once-caldas-2476049",
+      "underdog_index": 2,
+      "underdog_selection": "Once Caldas",
+      "winner_index": 2
+    },
+    {
+      "disposition": "SETTLED",
+      "event_id": "football:2507058",
+      "grade": "FAILURE",
+      "participant_1": "QPR",
+      "participant_2": "Cardiff City",
+      "rank": 2,
+      "score_1": 2.0,
+      "score_2": 1.0,
+      "selection_status": "TOP3_EVALUATION_COHORT",
+      "source_url": "https://www.forebet.com/en/football/matches/qpr-cardiff-city-2507058",
+      "underdog_index": 2,
+      "underdog_selection": "Cardiff City",
+      "winner_index": 1
+    },
+    {
+      "disposition": "SETTLED",
+      "event_id": "football:2479398",
+      "grade": "FAILURE",
+      "participant_1": "Sportfreunde Siegen",
+      "participant_2": "Paderborn 07 II",
+      "rank": 3,
+      "score_1": 2.0,
+      "score_2": 2.0,
+      "selection_status": "TOP3_EVALUATION_COHORT",
+      "source_url": "https://www.forebet.com/en/football/matches/sportfreunde-siegen-paderborn-07-ii-2479398",
+      "underdog_index": 2,
+      "underdog_selection": "Paderborn 07 II",
+      "winner_index": 0
+    }
+  ],
+  "grading_contract": {
+    "draw": "FAILURE",
+    "target": "UNDERDOG_WIN",
+    "underdog_loss": "FAILURE",
+    "underdog_win": "SUCCESS",
+    "void_or_missing": "UNRESOLVED"
+  },
+  "input_digest": "c17d86a812b141e0b0872deaa22fc99e433d5a299bb85f9c934f1e3c97db340c",
+  "labels": [
+    "SHADOW_RESEARCH_ONLY",
+    "NOT_A_PRODUCTION_PICK",
+    "LOCAL_CODESPACE_ONLY_NOT_BACKED_UP"
+  ],
+  "limitation": "n=1 sport-day is insufficient for performance conclusions",
+  "manifest_sha256": "85682ec4481c559c35b0624659d4402fc5d9515878e227c16ed52e489a24fab4",
+  "payload_sha256": "d04726e3b5182cf605e5d394396ede9d7ac1091154c1009fa98a704007dda170",
+  "primary_metrics": {
+    "accuracy": 1.0,
+    "entries": 1,
+    "failures": 0,
+    "settled": 1,
+    "successes": 1,
+    "unresolved": 0
+  },
+  "run_id": "acd78872019300ff",
+  "settled_rows_sha256": "f635f9fca1b2399aeeb0243f21035d6c0a72abec5f5e02ef2a4d887bdeb651b0",
+  "settlement_capture_receipt_sha256": "abb1f6bf5ce6e53ea163305ee5798ae3f852f77152d23bd24aa93ed77a57a320",
+  "source": "Forebet",
+  "status": "SETTLEMENT_COMPLETE",
+  "target_date": "2026-09-02",
+  "top3_combined_metrics": {
+    "accuracy": 0.3333333333333333,
+    "entries": 3,
+    "failures": 2,
+    "settled": 3,
+    "successes": 1,
+    "unresolved": 0
+  },
+  "version": "shadow_settlement_v1_manual_binding"
+}

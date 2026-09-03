@@ -1,0 +1,22 @@
+{
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/raw/football/2026-09-02/20260830T073322.182574+0000_bc49af3f04d2.txt",
+      "bytes": 96593,
+      "captured_at": "2026-08-30T07:33:22.182574+00:00",
+      "metadata_path": "data/raw/football/2026-09-02/20260830T073322.182574+0000_bc49af3f04d2.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-02&ord=0&tz=0&tzs=&tze=",
+      "route": "relay_markdown",
+      "sha256": "bc49af3f04d28210e532d06a98a2937626ee9f772e7e932d1b0caaf2a5b5b388",
+      "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-02&ord=0&tz=0&tzs=&tze=",
+      "sport": "football",
+      "target_date": "2026-09-02"
+    }
+  ],
+  "failures": [],
+  "football_markets": "data/raw/football/2026-09-02/markets.json",
+  "generated_at": "2026-08-30T07:33:37.951633+00:00",
+  "reused": 0,
+  "target_date": "2026-09-02"
+}
