@@ -107,6 +107,30 @@ Selection width: 1 primary + rank-2/3 cohort (FROZEN; grading all ranks 1..N is 
 Next: settle 2026-09-05..09 as each date's matches complete (P1 continuation)
 ```
 
+## System Maturity: EARLY STAGE (~10% complete)
+
+**Infrastructure: production-grade.** Workflow, git persistence, artifacts, settlement grading — all working.
+
+**Prediction system: infancy.** Minimal viable instrument, not a validated predictor.
+
+**What hasn't been done:**
+- **Multi-sport:** 14 sports defined in `sports.py`, only football collected
+- **Facet validation:** Football has 11 defined facets but only 17 derived stats captured; no Forebet HTML audit
+- **Model training:** `MODEL_TRAINING_ALLOWED=False` — frozen heuristics, not trained models
+- **Feature engineering:** Only basic statistics; no use of full facet set
+
+**The long road ahead:**
+1. Audit Forebet for all 14 sports (availability + facets)
+2. Validate facet extraction from HTML/JSON
+3. Decide sport prioritization (data density)
+4. Enable training once facets validated
+5. Multi-sport rollout (one sport at a time)
+6. Feature engineering using full facet set
+7. Model development and validation
+
+**Current experiment:** Can frozen heuristics using 17 stats pick football underdogs?
+**Future experiment:** Can trained models using full facets pick underdogs across sports?
+
 ## Training / Production
 
 - **Training:** FROZEN (MODEL_TRAINING_ALLOWED=False)

@@ -13,6 +13,16 @@ Dispatch: `gh workflow run forward_shadow.yml --ref main`
 
 Pending: (1) automated settlement trigger, (2) durable storage beyond 30d artifacts.
 
+## System Maturity: EARLY STAGE (~10% complete)
+
+**Infrastructure: production-grade.** Prediction system: infancy.
+
+**Not done:** multi-sport collection (1 of 14 sports), facet validation, model training, feature engineering.
+
+**Road ahead:** audit Forebet for 14 sports → validate facets → enable training → multi-sport rollout → model development.
+
+**Current:** frozen heuristics + 17 stats + football only. **Future:** trained models + full facets + multi-sport.
+
 ## Milestone 7B — COMPLETE LOCALLY (shadow bundle; PR opened, NOT merged)
 
 **Deliverable:** `src/slumdog/shadow_bundle.py` + `tests/test_shadow_bundle.py` (67 focused tests, incl. bounded-memory streaming) + `docs/MILESTONE7B_SHADOW_BUNDLE.md`. Standard-library-only module; imports no other Slumdog submodule, so verification runs on an independent machine with only the archive + receipt + Python.
