@@ -1,0 +1,555 @@
+=== RESUME START ===
+2026-09-03T04:11:24+00:00
+
+=== FINALIZE SATURDAY WITHOUT NETWORK ===
+{
+  "archive_sha256": "115e4434a39f09fa7b3db7334d6bacb038227ab7890f7333b28f19536665a4d6",
+  "decision_digest": "7bd9cdf93d5978e622c07c98eccbd3d5c80ff382003a5c3d90ebc06cf052d91a",
+  "durability_status": "LOCAL_EXPORT_READY_FOR_INDEPENDENT_COPY",
+  "input_digest": "92f176c475bdf29a412940b5bc07dfbc0ae512802f4d11cd56d224cea0d1c7f3",
+  "member_count": 10,
+  "run_id": "4353ca88e825fd6a",
+  "status": "BUNDLE_VERIFIED",
+  "target_date": "2026-09-05",
+  "total_uncompressed_bytes": 18239743
+}
+marker_expected=115e4434a39f09fa7b3db7334d6bacb038227ab7890f7333b28f19536665a4d6
+archive_actual=115e4434a39f09fa7b3db7334d6bacb038227ab7890f7333b28f19536665a4d6
+SATURDAY_BUNDLE_AND_MARKER_VERIFIED
+
+============================================================
+TARGET DATE: 2026-09-06
+============================================================
+2026-09-03T04:11:24+00:00
+=== TIMING-V1 CHECK ===
+now_utc=2026-09-03T04:11:24.783844+00:00
+safe_cutoff_utc=2026-09-05T00:00:00+00:00
+margin_hours=43.810
+=== COLLISION CHECK ===
+=== ONE FOOTBALL LISTING CAPTURE ===
+{
+  "body_path": "data/raw/football/2026-09-06/20260903T041132.879073+0000_1599bee652f4.txt",
+  "body_sha256": "1599bee652f428d2d97ae8c573c1c74aa15b1fc4bd6991b72b1b4c19f548a0a6",
+  "bytes": 1299202,
+  "captured_at": "2026-09-03T04:11:32.879073+00:00",
+  "metadata_path": "data/raw/football/2026-09-06/20260903T041132.879073+0000_1599bee652f4.json",
+  "receipt_path": "data/reports/capture_2026-09-06.json",
+  "route": "relay_markdown",
+  "status": "CAPTURE_COMPLETE",
+  "target_date": "2026-09-06"
+}
+=== VERIFY CAPTURE ===
+receipt_sha256=e70e983ed9d945671a1c0e46ebe7b57a9158791114145eb3150cb9c322da3c88
+body_sha256=1599bee652f428d2d97ae8c573c1c74aa15b1fc4bd6991b72b1b4c19f548a0a6
+CAPTURE_VERIFIED
+=== ONE EVALUATOR INVOCATION ===
+{
+  "artifact_dir": "/workspaces/Slumdog/data/reports/shadow/2026-09-06/8d9a696cd42c1878",
+  "decision_committed_at": "2026-09-03T04:11:46Z",
+  "decision_digest": "d7b51bab8fcf3e8b69b0c9b56f3e06d00f7c26b93a9e26ffa6ac94576bbd1050",
+  "durability_status": "LOCAL_CODESPACE_ONLY_NOT_BACKED_UP",
+  "input_digest": "567bff849568f479042c76447c53622f7fdb8ee2fe3009ebc225069d4bc6ab7c",
+  "payload_file_sha256": "72f9ff94a1e99a2b89fc5826086eb4d53b28eb88aff7521587a21df08720c25a",
+  "run_id": "8d9a696cd42c1878",
+  "run_status": "SHADOW_SELECTIONS_EMITTED",
+  "target_date": "2026-09-06"
+}
+run_id=8d9a696cd42c1878
+=== CREATE BUNDLE ===
+{
+  "archive_bytes": 12998029,
+  "archive_filename": "slumdog-shadow-2026-09-06-8d9a696cd42c1878.tar.gz",
+  "archive_path": "/workspaces/Slumdog/data/reports/shadow/bundles/2026-09-06/slumdog-shadow-2026-09-06-8d9a696cd42c1878.tar.gz",
+  "archive_sha256": "da146aeb7a93211f92f05a16d32b30fa162b0cb20c07084d7c547e7cdd75d3fe",
+  "checksum_path": "/workspaces/Slumdog/data/reports/shadow/bundles/2026-09-06/slumdog-shadow-2026-09-06-8d9a696cd42c1878.tar.gz.sha256",
+  "durability_status": "LOCAL_EXPORT_READY_FOR_INDEPENDENT_COPY",
+  "member_count": 10,
+  "receipt_path": "/workspaces/Slumdog/data/reports/shadow/bundles/2026-09-06/slumdog-shadow-2026-09-06-8d9a696cd42c1878.bundle.json",
+  "run_id": "8d9a696cd42c1878",
+  "target_date": "2026-09-06"
+}
+=== VERIFY BUNDLE ===
+{
+  "archive_sha256": "da146aeb7a93211f92f05a16d32b30fa162b0cb20c07084d7c547e7cdd75d3fe",
+  "decision_digest": "d7b51bab8fcf3e8b69b0c9b56f3e06d00f7c26b93a9e26ffa6ac94576bbd1050",
+  "durability_status": "LOCAL_EXPORT_READY_FOR_INDEPENDENT_COPY",
+  "input_digest": "567bff849568f479042c76447c53622f7fdb8ee2fe3009ebc225069d4bc6ab7c",
+  "member_count": 10,
+  "run_id": "8d9a696cd42c1878",
+  "status": "BUNDLE_VERIFIED",
+  "target_date": "2026-09-06",
+  "total_uncompressed_bytes": 14719170
+}
+marker_expected=da146aeb7a93211f92f05a16d32b30fa162b0cb20c07084d7c547e7cdd75d3fe
+archive_actual=da146aeb7a93211f92f05a16d32b30fa162b0cb20c07084d7c547e7cdd75d3fe
+DATE_COMPLETE:
+target_date=2026-09-06
+run_status=SHADOW_SELECTIONS_EMITTED
+run_id=8d9a696cd42c1878
+archive_sha256=da146aeb7a93211f92f05a16d32b30fa162b0cb20c07084d7c547e7cdd75d3fe
+BUNDLE_VERIFIED
+LOCAL_CODESPACE_ONLY_NOT_BACKED_UP
+
+Waiting 62 seconds before the next Forebet operation...
+
+============================================================
+TARGET DATE: 2026-09-07
+============================================================
+2026-09-03T04:12:49+00:00
+=== TIMING-V1 CHECK ===
+now_utc=2026-09-03T04:12:50.014711+00:00
+safe_cutoff_utc=2026-09-06T00:00:00+00:00
+margin_hours=67.786
+=== COLLISION CHECK ===
+=== ONE FOOTBALL LISTING CAPTURE ===
+{
+  "body_path": "data/raw/football/2026-09-07/20260903T041258.496628+0000_e3d7ce56b099.txt",
+  "body_sha256": "e3d7ce56b099739c34085536603f7fd0a79c2258f5fcbd766d09931d55cf7b63",
+  "bytes": 163179,
+  "captured_at": "2026-09-03T04:12:58.496628+00:00",
+  "metadata_path": "data/raw/football/2026-09-07/20260903T041258.496628+0000_e3d7ce56b099.json",
+  "receipt_path": "data/reports/capture_2026-09-07.json",
+  "route": "relay_markdown",
+  "status": "CAPTURE_COMPLETE",
+  "target_date": "2026-09-07"
+}
+=== VERIFY CAPTURE ===
+receipt_sha256=bdd81f2e322981ccd5f84dafe77d72b64aff38de2456cceb0568a0671caab628
+body_sha256=e3d7ce56b099739c34085536603f7fd0a79c2258f5fcbd766d09931d55cf7b63
+CAPTURE_VERIFIED
+=== ONE EVALUATOR INVOCATION ===
+{
+  "artifact_dir": "/workspaces/Slumdog/data/reports/shadow/2026-09-07/43ae7ceac703d11b",
+  "decision_committed_at": "2026-09-03T04:13:11Z",
+  "decision_digest": "6a35de6b1647e7fc1b731a45cf60feaa6ab7a9dfea0f6baefb4da63e3fe37052",
+  "durability_status": "LOCAL_CODESPACE_ONLY_NOT_BACKED_UP",
+  "input_digest": "0ab7fbaf8eace9de53cc021172df6a2f9b5d5fc2aedc55dcad4e28511cef4c42",
+  "payload_file_sha256": "951bc06f02c200f08e19f8d2cedef385e08e4267705f0414615cb62e823229f7",
+  "run_id": "43ae7ceac703d11b",
+  "run_status": "SHADOW_SELECTIONS_EMITTED",
+  "target_date": "2026-09-07"
+}
+run_id=43ae7ceac703d11b
+=== CREATE BUNDLE ===
+{
+  "archive_bytes": 12858547,
+  "archive_filename": "slumdog-shadow-2026-09-07-43ae7ceac703d11b.tar.gz",
+  "archive_path": "/workspaces/Slumdog/data/reports/shadow/bundles/2026-09-07/slumdog-shadow-2026-09-07-43ae7ceac703d11b.tar.gz",
+  "archive_sha256": "bf2aaa8a1299b523a28737d9d2a1885e6b4150a0908f13a1efbf9cc7dda43542",
+  "checksum_path": "/workspaces/Slumdog/data/reports/shadow/bundles/2026-09-07/slumdog-shadow-2026-09-07-43ae7ceac703d11b.tar.gz.sha256",
+  "durability_status": "LOCAL_EXPORT_READY_FOR_INDEPENDENT_COPY",
+  "member_count": 10,
+  "receipt_path": "/workspaces/Slumdog/data/reports/shadow/bundles/2026-09-07/slumdog-shadow-2026-09-07-43ae7ceac703d11b.bundle.json",
+  "run_id": "43ae7ceac703d11b",
+  "target_date": "2026-09-07"
+}
+=== VERIFY BUNDLE ===
+{
+  "archive_sha256": "bf2aaa8a1299b523a28737d9d2a1885e6b4150a0908f13a1efbf9cc7dda43542",
+  "decision_digest": "6a35de6b1647e7fc1b731a45cf60feaa6ab7a9dfea0f6baefb4da63e3fe37052",
+  "durability_status": "LOCAL_EXPORT_READY_FOR_INDEPENDENT_COPY",
+  "input_digest": "0ab7fbaf8eace9de53cc021172df6a2f9b5d5fc2aedc55dcad4e28511cef4c42",
+  "member_count": 10,
+  "run_id": "43ae7ceac703d11b",
+  "status": "BUNDLE_VERIFIED",
+  "target_date": "2026-09-07",
+  "total_uncompressed_bytes": 13078873
+}
+marker_expected=bf2aaa8a1299b523a28737d9d2a1885e6b4150a0908f13a1efbf9cc7dda43542
+archive_actual=bf2aaa8a1299b523a28737d9d2a1885e6b4150a0908f13a1efbf9cc7dda43542
+DATE_COMPLETE:
+target_date=2026-09-07
+run_status=SHADOW_SELECTIONS_EMITTED
+run_id=43ae7ceac703d11b
+archive_sha256=bf2aaa8a1299b523a28737d9d2a1885e6b4150a0908f13a1efbf9cc7dda43542
+BUNDLE_VERIFIED
+LOCAL_CODESPACE_ONLY_NOT_BACKED_UP
+
+Waiting 62 seconds before the next Forebet operation...
+
+============================================================
+TARGET DATE: 2026-09-08
+============================================================
+2026-09-03T04:14:15+00:00
+=== TIMING-V1 CHECK ===
+now_utc=2026-09-03T04:14:15.393754+00:00
+safe_cutoff_utc=2026-09-07T00:00:00+00:00
+margin_hours=91.762
+=== COLLISION CHECK ===
+=== ONE FOOTBALL LISTING CAPTURE ===
+{
+  "body_path": "data/raw/football/2026-09-08/20260903T041420.443255+0000_f1810b3f4950.txt",
+  "body_sha256": "f1810b3f4950c3d2817e39cc106705d8d27288b47442f673f43c933c2014717b",
+  "bytes": 76042,
+  "captured_at": "2026-09-03T04:14:20.443255+00:00",
+  "metadata_path": "data/raw/football/2026-09-08/20260903T041420.443255+0000_f1810b3f4950.json",
+  "receipt_path": "data/reports/capture_2026-09-08.json",
+  "route": "relay_markdown",
+  "status": "CAPTURE_COMPLETE",
+  "target_date": "2026-09-08"
+}
+=== VERIFY CAPTURE ===
+receipt_sha256=751627e259a6212ac00588085abe4965e5d03ca46d39aa6831c42b1e7442abbf
+body_sha256=f1810b3f4950c3d2817e39cc106705d8d27288b47442f673f43c933c2014717b
+CAPTURE_VERIFIED
+=== ONE EVALUATOR INVOCATION ===
+{
+  "artifact_dir": "/workspaces/Slumdog/data/reports/shadow/2026-09-08/0879f6497f1b4a1c",
+  "decision_committed_at": "2026-09-03T04:14:34Z",
+  "decision_digest": "e1569738d08770d4f28c9a4f81c32bf2038fc84388d56d9fbd8c2f9a3bc38361",
+  "durability_status": "LOCAL_CODESPACE_ONLY_NOT_BACKED_UP",
+  "input_digest": "0015693eee3d8aeff93ebc2635e30f781af66cdb61b913bc080e448148c555a7",
+  "payload_file_sha256": "4d2c58103193222fb31f00f7698f0dd999cbe04d0ed432e947dbddbb268353b3",
+  "run_id": "0879f6497f1b4a1c",
+  "run_status": "SHADOW_SELECTIONS_EMITTED",
+  "target_date": "2026-09-08"
+}
+run_id=0879f6497f1b4a1c
+=== CREATE BUNDLE ===
+{
+  "archive_bytes": 12842789,
+  "archive_filename": "slumdog-shadow-2026-09-08-0879f6497f1b4a1c.tar.gz",
+  "archive_path": "/workspaces/Slumdog/data/reports/shadow/bundles/2026-09-08/slumdog-shadow-2026-09-08-0879f6497f1b4a1c.tar.gz",
+  "archive_sha256": "0d0b1e094cf6afa8486eca3106a33422e3164c538c77522e9d64f159deee7802",
+  "checksum_path": "/workspaces/Slumdog/data/reports/shadow/bundles/2026-09-08/slumdog-shadow-2026-09-08-0879f6497f1b4a1c.tar.gz.sha256",
+  "durability_status": "LOCAL_EXPORT_READY_FOR_INDEPENDENT_COPY",
+  "member_count": 10,
+  "receipt_path": "/workspaces/Slumdog/data/reports/shadow/bundles/2026-09-08/slumdog-shadow-2026-09-08-0879f6497f1b4a1c.bundle.json",
+  "run_id": "0879f6497f1b4a1c",
+  "target_date": "2026-09-08"
+}
+=== VERIFY BUNDLE ===
+{
+  "archive_sha256": "0d0b1e094cf6afa8486eca3106a33422e3164c538c77522e9d64f159deee7802",
+  "decision_digest": "e1569738d08770d4f28c9a4f81c32bf2038fc84388d56d9fbd8c2f9a3bc38361",
+  "durability_status": "LOCAL_EXPORT_READY_FOR_INDEPENDENT_COPY",
+  "input_digest": "0015693eee3d8aeff93ebc2635e30f781af66cdb61b913bc080e448148c555a7",
+  "member_count": 10,
+  "run_id": "0879f6497f1b4a1c",
+  "status": "BUNDLE_VERIFIED",
+  "target_date": "2026-09-08",
+  "total_uncompressed_bytes": 12966256
+}
+marker_expected=0d0b1e094cf6afa8486eca3106a33422e3164c538c77522e9d64f159deee7802
+archive_actual=0d0b1e094cf6afa8486eca3106a33422e3164c538c77522e9d64f159deee7802
+DATE_COMPLETE:
+target_date=2026-09-08
+run_status=SHADOW_SELECTIONS_EMITTED
+run_id=0879f6497f1b4a1c
+archive_sha256=0d0b1e094cf6afa8486eca3106a33422e3164c538c77522e9d64f159deee7802
+BUNDLE_VERIFIED
+LOCAL_CODESPACE_ONLY_NOT_BACKED_UP
+
+Waiting 62 seconds before the next Forebet operation...
+
+============================================================
+TARGET DATE: 2026-09-09
+============================================================
+2026-09-03T04:15:37+00:00
+=== TIMING-V1 CHECK ===
+now_utc=2026-09-03T04:15:37.508479+00:00
+safe_cutoff_utc=2026-09-08T00:00:00+00:00
+margin_hours=115.740
+=== COLLISION CHECK ===
+=== ONE FOOTBALL LISTING CAPTURE ===
+{
+  "body_path": "data/raw/football/2026-09-09/20260903T041539.859250+0000_012a77ecdad0.txt",
+  "body_sha256": "012a77ecdad0290e8c3dc1b496d06f46c1a5f26104e6ed81461179377d7853b7",
+  "bytes": 17887,
+  "captured_at": "2026-09-03T04:15:39.859250+00:00",
+  "metadata_path": "data/raw/football/2026-09-09/20260903T041539.859250+0000_012a77ecdad0.json",
+  "receipt_path": "data/reports/capture_2026-09-09.json",
+  "route": "relay_markdown",
+  "status": "CAPTURE_COMPLETE",
+  "target_date": "2026-09-09"
+}
+=== VERIFY CAPTURE ===
+receipt_sha256=facc75ee0fe9445c68b42edaf4429e97d8c38fe31e1601e5add1b02142935e28
+body_sha256=012a77ecdad0290e8c3dc1b496d06f46c1a5f26104e6ed81461179377d7853b7
+CAPTURE_VERIFIED
+=== ONE EVALUATOR INVOCATION ===
+{
+  "artifact_dir": "/workspaces/Slumdog/data/reports/shadow/2026-09-09/c9ed00de250f8dbd",
+  "decision_committed_at": "2026-09-03T04:15:53Z",
+  "decision_digest": "3a0987abbcc72465569df7b379fb452bfb2c771478e5bb4693547170fe018510",
+  "durability_status": "LOCAL_CODESPACE_ONLY_NOT_BACKED_UP",
+  "input_digest": "95fd9f43dc9e71324718f3060dc5ec31ac5bf9405d4c52fff31c190b185f7c40",
+  "payload_file_sha256": "be2c98fd99c590254bcc3fb81360f1e6b3f7e1c503a36a67b9e10b2ed7313bbb",
+  "run_id": "c9ed00de250f8dbd",
+  "run_status": "SHADOW_SELECTIONS_EMITTED",
+  "target_date": "2026-09-09"
+}
+run_id=c9ed00de250f8dbd
+=== CREATE BUNDLE ===
+{
+  "archive_bytes": 12834816,
+  "archive_filename": "slumdog-shadow-2026-09-09-c9ed00de250f8dbd.tar.gz",
+  "archive_path": "/workspaces/Slumdog/data/reports/shadow/bundles/2026-09-09/slumdog-shadow-2026-09-09-c9ed00de250f8dbd.tar.gz",
+  "archive_sha256": "67cbdc4f8114e5185a9507a358a08df135d3344691c2989ff3a8a8a0821757f3",
+  "checksum_path": "/workspaces/Slumdog/data/reports/shadow/bundles/2026-09-09/slumdog-shadow-2026-09-09-c9ed00de250f8dbd.tar.gz.sha256",
+  "durability_status": "LOCAL_EXPORT_READY_FOR_INDEPENDENT_COPY",
+  "member_count": 10,
+  "receipt_path": "/workspaces/Slumdog/data/reports/shadow/bundles/2026-09-09/slumdog-shadow-2026-09-09-c9ed00de250f8dbd.bundle.json",
+  "run_id": "c9ed00de250f8dbd",
+  "target_date": "2026-09-09"
+}
+=== VERIFY BUNDLE ===
+{
+  "archive_sha256": "67cbdc4f8114e5185a9507a358a08df135d3344691c2989ff3a8a8a0821757f3",
+  "decision_digest": "3a0987abbcc72465569df7b379fb452bfb2c771478e5bb4693547170fe018510",
+  "durability_status": "LOCAL_EXPORT_READY_FOR_INDEPENDENT_COPY",
+  "input_digest": "95fd9f43dc9e71324718f3060dc5ec31ac5bf9405d4c52fff31c190b185f7c40",
+  "member_count": 10,
+  "run_id": "c9ed00de250f8dbd",
+  "status": "BUNDLE_VERIFIED",
+  "target_date": "2026-09-09",
+  "total_uncompressed_bytes": 12883291
+}
+marker_expected=67cbdc4f8114e5185a9507a358a08df135d3344691c2989ff3a8a8a0821757f3
+archive_actual=67cbdc4f8114e5185a9507a358a08df135d3344691c2989ff3a8a8a0821757f3
+DATE_COMPLETE:
+target_date=2026-09-09
+run_status=SHADOW_SELECTIONS_EMITTED
+run_id=c9ed00de250f8dbd
+archive_sha256=67cbdc4f8114e5185a9507a358a08df135d3344691c2989ff3a8a8a0821757f3
+BUNDLE_VERIFIED
+LOCAL_CODESPACE_ONLY_NOT_BACKED_UP
+
+=== FINAL STATUS ===
+target_date	status	detail
+2026-09-04	NOT_EVALUATED	TIMING_V1_CUTOFF_PASSED
+2026-09-05	SHADOW_SELECTIONS_EMITTED	run_id=4353ca88e825fd6a;archive_sha256=115e4434a39f09fa7b3db7334d6bacb038227ab7890f7333b28f19536665a4d6
+2026-09-06	SHADOW_SELECTIONS_EMITTED	run_id=8d9a696cd42c1878;archive_sha256=da146aeb7a93211f92f05a16d32b30fa162b0cb20c07084d7c547e7cdd75d3fe
+2026-09-07	SHADOW_SELECTIONS_EMITTED	run_id=43ae7ceac703d11b;archive_sha256=bf2aaa8a1299b523a28737d9d2a1885e6b4150a0908f13a1efbf9cc7dda43542
+2026-09-08	SHADOW_SELECTIONS_EMITTED	run_id=0879f6497f1b4a1c;archive_sha256=0d0b1e094cf6afa8486eca3106a33422e3164c538c77522e9d64f159deee7802
+2026-09-09	SHADOW_SELECTIONS_EMITTED	run_id=c9ed00de250f8dbd;archive_sha256=67cbdc4f8114e5185a9507a358a08df135d3344691c2989ff3a8a8a0821757f3
+
+=== FORWARD SELECTION SUMMARY ===
+[
+  {
+    "cohort_count": 2,
+    "decision_committed_at": "2026-09-03T04:08:58Z",
+    "decision_digest": "7bd9cdf93d5978e622c07c98eccbd3d5c80ff382003a5c3d90ebc06cf052d91a",
+    "primary_count": 1,
+    "run_id": "4353ca88e825fd6a",
+    "run_status": "SHADOW_SELECTIONS_EMITTED",
+    "selections": [
+      {
+        "draw_probability": 0.47,
+        "event_id": "football:2518617",
+        "favorite_probability": 0.27,
+        "probability_gap": 0.010000000000000009,
+        "rank": 1,
+        "source_url": "https://www.forebet.com/en/football/matches/kf-laci-teuta-durres-2518617",
+        "status": "PRIMARY_SHADOW_SELECTION",
+        "underdog_index": 1,
+        "underdog_probability": 0.26
+      },
+      {
+        "draw_probability": 0.24,
+        "event_id": "football:2498295",
+        "favorite_probability": 0.41,
+        "probability_gap": 0.04999999999999999,
+        "rank": 2,
+        "source_url": "https://www.forebet.com/en/football/matches/fk-pardubice-u19-sparta-praha-u19-2498295",
+        "status": "TOP3_EVALUATION_COHORT",
+        "underdog_index": 2,
+        "underdog_probability": 0.36
+      },
+      {
+        "draw_probability": 0.38,
+        "event_id": "football:2474546",
+        "favorite_probability": 0.37,
+        "probability_gap": 0.12,
+        "rank": 3,
+        "source_url": "https://www.forebet.com/en/football/matches/msk-povazska-bystrica-lehota-p-v-2474546",
+        "status": "TOP3_EVALUATION_COHORT",
+        "underdog_index": 1,
+        "underdog_probability": 0.25
+      }
+    ],
+    "target_date": "2026-09-05"
+  },
+  {
+    "cohort_count": 2,
+    "decision_committed_at": "2026-09-03T04:11:46Z",
+    "decision_digest": "d7b51bab8fcf3e8b69b0c9b56f3e06d00f7c26b93a9e26ffa6ac94576bbd1050",
+    "primary_count": 1,
+    "run_id": "8d9a696cd42c1878",
+    "run_status": "SHADOW_SELECTIONS_EMITTED",
+    "selections": [
+      {
+        "draw_probability": 0.31,
+        "event_id": "football:2518253",
+        "favorite_probability": 0.36,
+        "probability_gap": 0.02999999999999997,
+        "rank": 1,
+        "source_url": "https://www.forebet.com/en/football/matches/belisia-bilzen-houtvenne-2518253",
+        "status": "PRIMARY_SHADOW_SELECTION",
+        "underdog_index": 1,
+        "underdog_probability": 0.33
+      },
+      {
+        "draw_probability": 0.41,
+        "event_id": "football:2509329",
+        "favorite_probability": 0.32,
+        "probability_gap": 0.04999999999999999,
+        "rank": 2,
+        "source_url": "https://www.forebet.com/en/football/matches/real-oviedo-burgos-cf-2509329",
+        "status": "TOP3_EVALUATION_COHORT",
+        "underdog_index": 2,
+        "underdog_probability": 0.27
+      },
+      {
+        "draw_probability": 0.3,
+        "event_id": "football:2495575",
+        "favorite_probability": 0.38,
+        "probability_gap": 0.06,
+        "rank": 3,
+        "source_url": "https://www.forebet.com/en/football/matches/arsenal-chelsea-2495575",
+        "status": "TOP3_EVALUATION_COHORT",
+        "underdog_index": 1,
+        "underdog_probability": 0.32
+      }
+    ],
+    "target_date": "2026-09-06"
+  },
+  {
+    "cohort_count": 2,
+    "decision_committed_at": "2026-09-03T04:13:11Z",
+    "decision_digest": "6a35de6b1647e7fc1b731a45cf60feaa6ab7a9dfea0f6baefb4da63e3fe37052",
+    "primary_count": 1,
+    "run_id": "43ae7ceac703d11b",
+    "run_status": "SHADOW_SELECTIONS_EMITTED",
+    "selections": [
+      {
+        "draw_probability": 0.28,
+        "event_id": "football:2529366",
+        "favorite_probability": 0.38,
+        "probability_gap": 0.03999999999999998,
+        "rank": 1,
+        "source_url": "https://www.forebet.com/en/football/matches/granada-w-real-sociedad-w-2529366",
+        "status": "PRIMARY_SHADOW_SELECTION",
+        "underdog_index": 2,
+        "underdog_probability": 0.34
+      },
+      {
+        "draw_probability": 0.51,
+        "event_id": "football:2509990",
+        "favorite_probability": 0.25,
+        "probability_gap": 0.010000000000000009,
+        "rank": 2,
+        "source_url": "https://www.forebet.com/en/football/matches/kafr-qasim-ironi-modi-in-2509990",
+        "status": "TOP3_EVALUATION_COHORT",
+        "underdog_index": 2,
+        "underdog_probability": 0.24
+      },
+      {
+        "draw_probability": 0.35,
+        "event_id": "football:2442576",
+        "favorite_probability": 0.33,
+        "probability_gap": 0.010000000000000009,
+        "rank": 3,
+        "source_url": "https://www.forebet.com/en/football/matches/dinamo-brest-bate-borisov-2442576",
+        "status": "TOP3_EVALUATION_COHORT",
+        "underdog_index": 1,
+        "underdog_probability": 0.32
+      }
+    ],
+    "target_date": "2026-09-07"
+  },
+  {
+    "cohort_count": 2,
+    "decision_committed_at": "2026-09-03T04:14:34Z",
+    "decision_digest": "e1569738d08770d4f28c9a4f81c32bf2038fc84388d56d9fbd8c2f9a3bc38361",
+    "primary_count": 1,
+    "run_id": "0879f6497f1b4a1c",
+    "run_status": "SHADOW_SELECTIONS_EMITTED",
+    "selections": [
+      {
+        "draw_probability": 0.45,
+        "event_id": "football:2476061",
+        "favorite_probability": 0.32,
+        "probability_gap": 0.09,
+        "rank": 1,
+        "source_url": "https://www.forebet.com/en/football/matches/llaneros-fc-col-deportivo-cali-2476061",
+        "status": "PRIMARY_SHADOW_SELECTION",
+        "underdog_index": 2,
+        "underdog_probability": 0.23
+      },
+      {
+        "draw_probability": 0.43,
+        "event_id": "football:2504899",
+        "favorite_probability": 0.29,
+        "probability_gap": 0.009999999999999953,
+        "rank": 2,
+        "source_url": "https://www.forebet.com/en/football/matches/estoril-u23-famalicao-u23-2504899",
+        "status": "TOP3_EVALUATION_COHORT",
+        "underdog_index": 2,
+        "underdog_probability": 0.28
+      },
+      {
+        "draw_probability": 0.37,
+        "event_id": "football:2504906",
+        "favorite_probability": 0.32,
+        "probability_gap": 0.020000000000000018,
+        "rank": 3,
+        "source_url": "https://www.forebet.com/en/football/matches/maritimo-u23-gil-vicente-u23-2504906",
+        "status": "TOP3_EVALUATION_COHORT",
+        "underdog_index": 2,
+        "underdog_probability": 0.3
+      }
+    ],
+    "target_date": "2026-09-08"
+  },
+  {
+    "cohort_count": 2,
+    "decision_committed_at": "2026-09-03T04:15:53Z",
+    "decision_digest": "3a0987abbcc72465569df7b379fb452bfb2c771478e5bb4693547170fe018510",
+    "primary_count": 1,
+    "run_id": "c9ed00de250f8dbd",
+    "run_status": "SHADOW_SELECTIONS_EMITTED",
+    "selections": [
+      {
+        "draw_probability": 0.36,
+        "event_id": "football:2513272",
+        "favorite_probability": 0.39,
+        "probability_gap": 0.14,
+        "rank": 1,
+        "source_url": "https://www.forebet.com/en/football/matches/jeddah-club-al-oruba-ksa-2513272",
+        "status": "PRIMARY_SHADOW_SELECTION",
+        "underdog_index": 2,
+        "underdog_probability": 0.25
+      },
+      {
+        "draw_probability": 0.38,
+        "event_id": "football:2461472",
+        "favorite_probability": 0.36,
+        "probability_gap": 0.08999999999999997,
+        "rank": 2,
+        "source_url": "https://www.forebet.com/en/football/matches/defensores-de-belgrano-los-andes-2461472",
+        "status": "TOP3_EVALUATION_COHORT",
+        "underdog_index": 1,
+        "underdog_probability": 0.27
+      },
+      {
+        "draw_probability": 0.4,
+        "event_id": "football:2498121",
+        "favorite_probability": 0.34,
+        "probability_gap": 0.08000000000000002,
+        "rank": 3,
+        "source_url": "https://www.forebet.com/en/football/matches/fk-zeljeznicar-fk-sarajevo-2498121",
+        "status": "TOP3_EVALUATION_COHORT",
+        "underdog_index": 1,
+        "underdog_probability": 0.26
+      }
+    ],
+    "target_date": "2026-09-09"
+  }
+]
+
+=== RESUME COMPLETE ===
+2026-09-03T04:15:54+00:00
+Status: /workspaces/Slumdog/data/reports/shadow/batch_2026-09-03/status.tsv
+Log: /workspaces/Slumdog/data/reports/shadow/batch_2026-09-03/forward_batch_resume.log
+]633;D;0]633;P;Cwd=/workspaces/Slumdog[?2004h]633;A[0;32m@6ixtyn9-sudo [0m➜ [1;34m/workspaces/Slumdog [0;36m([1;31mmain[0;36m) [0m$ ]633;B[K]633;A[0;32m@6ixtyn9-sudo [0m➜ [1;34m/workspaces/Slumdog [0;36m([1;31mmain[0;36m) [0m$ ]633;B[?2004l[?2004h[?2004l

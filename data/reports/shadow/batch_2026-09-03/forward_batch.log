@@ -1,0 +1,74 @@
+=== FORWARD BATCH START ===
+2026-09-03T04:08:21+00:00
+Friday 2026-09-04 is NOT_EVALUATED because timing-v1 closed at 2026-09-03T00:00:00Z.
+
+============================================================
+TARGET DATE: 2026-09-05
+============================================================
+2026-09-03T04:08:21+00:00
+=== TIMING-V1 CHECK ===
+now_utc=2026-09-03T04:08:21.156803+00:00
+safe_cutoff_utc=2026-09-04T00:00:00+00:00
+margin_seconds=71498.843
+margin_hours=19.861
+=== COLLISION CHECK ===
+=== ONE FOOTBALL LISTING CAPTURE ===
+{
+  "body_path": "data/raw/football/2026-09-05/20260903T040841.215785+0000_e4aa35a45457.txt",
+  "body_sha256": "e4aa35a454577036ae9605dd474e58c0dcc27f2b4030bb68b61e8f322f1bb856",
+  "bytes": 4508599,
+  "captured_at": "2026-09-03T04:08:41.215785+00:00",
+  "metadata_path": "data/raw/football/2026-09-05/20260903T040841.215785+0000_e4aa35a45457.json",
+  "receipt_path": "data/reports/capture_2026-09-05.json",
+  "route": "relay_markdown",
+  "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-05&ord=0&tz=0&tzs=&tze=",
+  "status": "CAPTURE_COMPLETE",
+  "target_date": "2026-09-05"
+}
+=== CAPTURE RECEIPT HASH/SCHEMA CHECK ===
+receipt_sha256=75a341fc5658ad24fe62e0a8172d6c6753e26111c3eb5bef5030adf7b093d377
+body_sha256=e4aa35a454577036ae9605dd474e58c0dcc27f2b4030bb68b61e8f322f1bb856
+CAPTURE_VERIFIED
+=== ONE SHADOW EVALUATOR INVOCATION ===
+{
+  "artifact_dir": "/workspaces/Slumdog/data/reports/shadow/2026-09-05/4353ca88e825fd6a",
+  "decision_committed_at": "2026-09-03T04:08:58Z",
+  "decision_digest": "7bd9cdf93d5978e622c07c98eccbd3d5c80ff382003a5c3d90ebc06cf052d91a",
+  "durability_status": "LOCAL_CODESPACE_ONLY_NOT_BACKED_UP",
+  "input_digest": "92f176c475bdf29a412940b5bc07dfbc0ae512802f4d11cd56d224cea0d1c7f3",
+  "payload_file_sha256": "2e7c6837902078d57f9d79e0fac5e75203c9d0b35bc8b8726b111a9fceb8b309",
+  "run_id": "4353ca88e825fd6a",
+  "run_status": "SHADOW_SELECTIONS_EMITTED",
+  "target_date": "2026-09-05"
+}
+=== LOCATE EXACTLY ONE COMPLETED RUN ===
+run_id=4353ca88e825fd6a
+run_dir=/workspaces/Slumdog/data/reports/shadow/2026-09-05/4353ca88e825fd6a
+=== CREATE DETERMINISTIC LOCAL BUNDLE ===
+{
+  "archive_bytes": 13465275,
+  "archive_filename": "slumdog-shadow-2026-09-05-4353ca88e825fd6a.tar.gz",
+  "archive_path": "/workspaces/Slumdog/data/reports/shadow/bundles/2026-09-05/slumdog-shadow-2026-09-05-4353ca88e825fd6a.tar.gz",
+  "archive_sha256": "115e4434a39f09fa7b3db7334d6bacb038227ab7890f7333b28f19536665a4d6",
+  "checksum_path": "/workspaces/Slumdog/data/reports/shadow/bundles/2026-09-05/slumdog-shadow-2026-09-05-4353ca88e825fd6a.tar.gz.sha256",
+  "durability_status": "LOCAL_EXPORT_READY_FOR_INDEPENDENT_COPY",
+  "member_count": 10,
+  "receipt_path": "/workspaces/Slumdog/data/reports/shadow/bundles/2026-09-05/slumdog-shadow-2026-09-05-4353ca88e825fd6a.bundle.json",
+  "run_id": "4353ca88e825fd6a",
+  "target_date": "2026-09-05"
+}
+=== LOCATE BUNDLE TRIPLET ===
+=== VERIFY BUNDLE ===
+{
+  "archive_sha256": "115e4434a39f09fa7b3db7334d6bacb038227ab7890f7333b28f19536665a4d6",
+  "decision_digest": "7bd9cdf93d5978e622c07c98eccbd3d5c80ff382003a5c3d90ebc06cf052d91a",
+  "durability_status": "LOCAL_EXPORT_READY_FOR_INDEPENDENT_COPY",
+  "input_digest": "92f176c475bdf29a412940b5bc07dfbc0ae512802f4d11cd56d224cea0d1c7f3",
+  "member_count": 10,
+  "run_id": "4353ca88e825fd6a",
+  "status": "BUNDLE_VERIFIED",
+  "target_date": "2026-09-05",
+  "total_uncompressed_bytes": 18239743
+}
+=== INDEPENDENT CHECKSUM MARKER ===
+bash: rvm_bash_nounset: unbound variable

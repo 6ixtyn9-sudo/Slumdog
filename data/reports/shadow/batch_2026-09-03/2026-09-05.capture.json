@@ -1,0 +1,12 @@
+{
+  "body_path": "data/raw/football/2026-09-05/20260903T040841.215785+0000_e4aa35a45457.txt",
+  "body_sha256": "e4aa35a454577036ae9605dd474e58c0dcc27f2b4030bb68b61e8f322f1bb856",
+  "bytes": 4508599,
+  "captured_at": "2026-09-03T04:08:41.215785+00:00",
+  "metadata_path": "data/raw/football/2026-09-05/20260903T040841.215785+0000_e4aa35a45457.json",
+  "receipt_path": "data/reports/capture_2026-09-05.json",
+  "route": "relay_markdown",
+  "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-05&ord=0&tz=0&tzs=&tze=",
+  "status": "CAPTURE_COMPLETE",
+  "target_date": "2026-09-05"
+}

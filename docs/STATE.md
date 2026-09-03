@@ -1,13 +1,10 @@
 # Slumdog State — Canonical Current Truth
 
-**Last verified:** 2026-09-03 (UTC) — **PR #13 MERGED INTO `main` (`main` @ `b086eae`)** / **CLOUD BACKUP WORKFLOW DISPATCHED SUCCESSFULLY (synthetic)** / **REAL SHADOW RUNS EXIST IN CODESPACE** (run `acd78872019300ff` target 2026-09-02, settled 2026-09-03 via manual binding, primary SUCCESS, top-3 1/3; forward batch froze targets 2026-09-05..09, runs `4353ca88…`/`8d9a696c…`/`43ae7cea…`/`0879f649…`/`c9ed00de…`, all `BUNDLE_VERIFIED`) / **SHADOW SETTLEMENT MODULE IMPLEMENTED (P1)** / **FORWARD BATCH WORKFLOW CREATED (P3)** / **TIMING-V2 PROPOSAL DRAFTED (P6)** / **DRAW-AVOIDANCE ANALYSIS MODULE CREATED (P7)** / **PRODUCTION NOT AUTHORIZED** / **SHORTLIST POLICY NOT AUTHORIZED**. 694 tests pass (622 on `main` + 41 settlement + 20 forward batch + 11 draw analysis, zero skips); canonical declaration SHA-256 `dd08976a…4d597`; frozen baseline SHA-256 `666dabe7…00a1` MATCH (unchanged); full suite green; `py_compile` / `git diff --check` clean; pyflakes clean on all new/changed files.
+**Last verified:** 2026-09-03 (UTC) — **PR #15 MERGED INTO `main` (`main` @ `3b57464`)** / **FORWARD SHADOW WORKFLOW LIVE** (`.github/workflows/forward_shadow.yml`, `contents: write`, `actions: read`) / **SHADOW EVIDENCE IN GIT** (27 files) / **CONTRACT AMENDED** (owner directive 2026-09-03 "no ledgers in Codespace") / **CODESPACE DEV-ONLY** / **PRODUCTION NOT AUTHORIZED** / **SHORTLIST POLICY NOT AUTHORIZED**. 694 tests pass (zero skips).
 
-**PR #13 merged. Cloud backup dispatched (synthetic). Real shadow runs exist in Codespace (not in Arena sandbox). Settlement module implemented. Forward batch workflow created. Production not authorized. Shortlist policy not authorized.**
-
-**Branch:** `arena/01a066f2-slumdog` (from `main` @ `b086eae`); `main` is only permanent branch
+**Branch:** `arena/01a066f2-slumdog` (from `main` @ `3b57464`); `main` is only permanent branch
 **Doc canonical path:** `docs/STATE.md`
-**Base commit:** `b086eae9b7ed860fc9ab2d6edb1e72a1089ac898` (PR #13 — M7D — merged)
-
+**Base commit:** `3b57464ef36181519f26c34ad7018aca561a5c99` (PR #15 merged)
 ## Permanent Product Mission
 
 > **Slumdog identifies a small daily shortlist of participants that Forebet considers underdogs but whose available pre-event evidence indicates a credible outright-win upset.**

@@ -7,6 +7,8 @@ venv/
 .env
 
 # Immutable captures and generated ledgers stay runtime data.
+# Raw bodies and tar.gz bundles are NEVER committed (they live in
+# Actions artifacts with 30-day retention).
 data/raw/*
 data/interim/*
 data/ledgers/*
@@ -15,6 +17,12 @@ data/reports/*
 !data/interim/.gitkeep
 !data/ledgers/.gitkeep
 !data/reports/.gitkeep
+
+# Shadow evidence git policy (owner amendment 2026-09-03):
+!data/reports/capture_*.json
+!data/reports/shadow/
+data/reports/shadow/**/raw_bodies/*
+data/reports/shadow/**/*.tar.gz
 
 # Settlement evidence: commit receipts, exclude raw capture bodies.
 data/settlement_evidence/*

@@ -1,0 +1,11 @@
+{
+  "artifact_dir": "/workspaces/Slumdog/data/reports/shadow/2026-09-08/0879f6497f1b4a1c",
+  "decision_committed_at": "2026-09-03T04:14:34Z",
+  "decision_digest": "e1569738d08770d4f28c9a4f81c32bf2038fc84388d56d9fbd8c2f9a3bc38361",
+  "durability_status": "LOCAL_CODESPACE_ONLY_NOT_BACKED_UP",
+  "input_digest": "0015693eee3d8aeff93ebc2635e30f781af66cdb61b913bc080e448148c555a7",
+  "payload_file_sha256": "4d2c58103193222fb31f00f7698f0dd999cbe04d0ed432e947dbddbb268353b3",
+  "run_id": "0879f6497f1b4a1c",
+  "run_status": "SHADOW_SELECTIONS_EMITTED",
+  "target_date": "2026-09-08"
+}

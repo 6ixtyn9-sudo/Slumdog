@@ -60,6 +60,14 @@ This is NOT a value-betting, odds-first, EV, de-vigging, Kelly, or bookmaker-cov
 - Separate filesystems. Uncommitted files, ignored files, captures, ledgers do not cross.
 - Tracked Git changes transfer only via commit/push/pull.
 - Never commit raw captures, ledgers, temporary archives, or secrets.
+- **Scoped waiver (2026-09-03, owner directive "no ledgers in Codespace"):**
+  small shadow evidence IS committed to git: `shadow_selections.json`,
+  `manifest.json`, `capture_*.json` receipts, `*.settlement.json` +
+  `.sha256` markers, `*.bundle.json` receipts, `*.tar.gz.sha256` markers,
+  and `status.tsv` under `data/reports/shadow/`. This waiver covers ONLY
+  these small JSON/text files — never raw capture bodies (HTML/JSON),
+  never `*.tar.gz` bundle archives, never history ledgers. Those remain
+  in Actions artifacts (30-day retention) or durable object storage.
 
 ## Change Control
 

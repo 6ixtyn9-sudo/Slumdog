@@ -1,17 +1,13 @@
-name: Slumdog \u00b7 Forward Shadow Batch
-run-name: "Slumdog \u00b7 Forward Shadow \u00b7 #${{ github.run_number }}"
-
+name: Slumdog · Forward Shadow Batch
+run-name: "Slumdog · Forward Shadow · #${{ github.run_number }}"
 on:
   workflow_dispatch: {}
-
 permissions:
   contents: write
   actions: read
-
 concurrency:
   group: slumdog-forward-shadow
   cancel-in-progress: false
-
 jobs:
   forward-batch:
     runs-on: ubuntu-latest
@@ -33,8 +29,12 @@ jobs:
           mkdir -p data/reports depth-history
           RUN_ID=$(gh run list --workflow pipeline.yml --status success --limit 1 --json databaseId -q '.[0].databaseId') || RUN_ID=""
           if [ -n "$RUN_ID" ]; then
-            gh run download "$RUN_ID" --pattern 'slumdog-history-football' --dir depth-history || echo "no history artifact (first run after depth pipeline)"
-            find depth-history -type f \( -name 'history_*' \) -exec cp {} data/reports/ \; || true
+            echo "Seeding history from pipeline run $RUN_ID"
+            gh run download "$RUN_ID" --pattern 'slumdog-history-*' --dir depth-history 2>&1 || echo "::warning::no history artifacts found"
+            find depth-history -type f \( -name 'history_*.jsonl.gz' -o -name 'history_*.json' \) -exec cp {} data/reports/ \; 2>/dev/null || true
+            echo "Seeded $(find data/reports -name 'history_*' -type f | wc -l) history files"
+          else
+            echo "::warning::no successful pipeline.yml run found"
           fi
       - name: Run forward batch (D+2..D+6, timing-v1)
         env:
@@ -45,13 +45,12 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          find data/reports/shadow -type f \( -name shadow_selections.json -o -name manifest.json -o -name '*.settlement.json' -o -name '*.settlement.json.sha256' -o -name '*.bundle.json' -o -name '*.tar.gz.sha256' \) | xargs -r git add -f
+          find data/reports/shadow -type f \( -name 'shadow_selections.json' -o -name 'manifest.json' -o -name '*.settlement.json' -o -name '*.settlement.json.sha256' -o -name '*.bundle.json' -o -name '*.tar.gz.sha256' -o -name 'status.tsv' \) | xargs -r git add -f
           git add -f data/reports/capture_*.json 2>/dev/null || true
-          find data/reports/shadow -name 'status.tsv' | xargs -r git add -f
           if git diff --cached --quiet; then echo "no new evidence"; exit 0; fi
           git commit -m "chore: shadow evidence (run ${{ github.run_id }})"
-          git pull --rebase --autostash || (git rebase --abort 2>/dev/null || true; echo "persist race; evidence lives in artifacts this run"; exit 0)
-          git push || (git pull --rebase --autostash && git push) || true
+          git pull --rebase --autostash origin main || { git rebase --abort 2>/dev/null || true; exit 0; }
+          git push origin HEAD:main || { git pull --rebase --autostash origin main && git push origin HEAD:main; } || true
       - name: Upload full evidence as artifacts (30d retention)
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

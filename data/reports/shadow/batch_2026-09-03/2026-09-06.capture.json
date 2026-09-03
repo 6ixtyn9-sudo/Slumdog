@@ -1,0 +1,11 @@
+{
+  "body_path": "data/raw/football/2026-09-06/20260903T041132.879073+0000_1599bee652f4.txt",
+  "body_sha256": "1599bee652f428d2d97ae8c573c1c74aa15b1fc4bd6991b72b1b4c19f548a0a6",
+  "bytes": 1299202,
+  "captured_at": "2026-09-03T04:11:32.879073+00:00",
+  "metadata_path": "data/raw/football/2026-09-06/20260903T041132.879073+0000_1599bee652f4.json",
+  "receipt_path": "data/reports/capture_2026-09-06.json",
+  "route": "relay_markdown",
+  "status": "CAPTURE_COMPLETE",
+  "target_date": "2026-09-06"
+}

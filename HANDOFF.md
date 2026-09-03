@@ -1,12 +1,17 @@
 # Slumdog Living Handoff
 
-**Last updated:** 2026-09-03 (UTC) — **PR #13 MERGED INTO `main` (`main` @ `b086eae`)** / **CLOUD BACKUP DISPATCHED (synthetic)** / **REAL SHADOW RUNS EXIST IN CODESPACE** (run `acd78872` target 2026-09-02 settled via manual binding; forward batch 2026-09-05..09 all `BUNDLE_VERIFIED`) / **SETTLEMENT MODULE IMPLEMENTED (P1, 41 tests)** / **FORWARD BATCH WORKFLOW CREATED (P3, 20 tests)** / **DRAW-AVOIDANCE ANALYSIS CREATED (P7, 11 tests)** / **TIMING-V2 PROPOSAL DRAFTED (P6)** / **PRODUCTION NOT AUTHORIZED** / **SHORTLIST POLICY NOT AUTHORIZED**. 694 tests pass (622 on `main` + 41 + 20 + 11); canonical declaration SHA-256 `dd08976a…4d597`; frozen baseline SHA-256 `666dabe7…00a1` MATCH (unchanged); full suite green, `py_compile` clean, pyflakes clean on all new files.
+**Last updated:** 2026-09-03 (UTC) — **PR #15 MERGED** (`main` @ `3b57464`) / **FORWARD WORKFLOW LIVE** / **EVIDENCE IN GIT** (27 files) / **CONTRACT AMENDED** / **CODESPACE DEV-ONLY** / **PRODUCTION NOT AUTHORIZED**. 694 tests, zero skips.
 
-**Branch:** `arena/01a066f2-slumdog` (from `main` @ `b086eae`)
-**Base commit:** `b086eae9b7ed860fc9ab2d6edb1e72a1089ac898`
-**Mission:** Slumdog identifies a small daily shortlist of participants that Forebet considers underdogs but whose available pre-event evidence indicates a credible outright-win upset.
-**Training:** FROZEN (`feature_contracts.py: MODEL_TRAINING_ALLOWED=False`)
-**Tests:** 694 passed (verified 2026-09-03 in Arena sandbox)
+**Branch:** `arena/01a066f2-slumdog` (from `main` @ `3b57464`)
+**Base commit:** `3b57464ef36181519f26c34ad7018aca561a5c99` (PR #15 merged)
+**Tests:** 694 passed
+
+## Cloud-Native Evidence Architecture
+
+Forward workflow is single source of truth. Codespace is dev-only.
+Dispatch: `gh workflow run forward_shadow.yml --ref main`
+
+Pending: (1) automated settlement trigger, (2) durable storage beyond 30d artifacts.
 
 ## Milestone 7B — COMPLETE LOCALLY (shadow bundle; PR opened, NOT merged)
 
