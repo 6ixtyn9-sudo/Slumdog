@@ -1,15 +1,12 @@
 # Slumdog Living Handoff
 
-**Last updated:** 2026-08-30 (UTC) — **MILESTONE 7B MERGED INTO `main` VIA PR #12 (`main` @ `41b345f`)** / **MILESTONE 7C SYNTHETIC TRANSPORT PROOF EXECUTED IN THE ARENA SANDBOX** / **MILESTONE 7D IMPLEMENTED/TESTED LOCALLY (cloud-only bundle backup workflow; workflow COMMITTED on PR #13; 12 workflow-contract tests pass with ZERO skips; workflow NOT dispatched on GitHub — pending merge + manual dispatch)** / **NO REAL SHADOW BUNDLE CREATED** / **NO REAL FOREBET CAPTURE** / **NO REAL SHADOW RUN** / **PRODUCTION NOT AUTHORIZED** / **SHORTLIST POLICY NOT AUTHORIZED**. 622 tests pass on the M7D branch (601 on `main` + 9 fixture + 12 workflow-contract); canonical declaration SHA-256 `dd08976a…4d597`; frozen baseline SHA-256 `666dabe7…00a1` MATCH (unchanged); full suite `python -m pytest` green, `git diff --check` clean, `py_compile` clean, pyflakes clean on all new files. See **Milestone 7D** below and `docs/MILESTONE7D_CLOUD_BACKUP.md`.
+**Last updated:** 2026-09-03 (UTC) — **PR #13 MERGED INTO `main` (`main` @ `b086eae`)** / **CLOUD BACKUP DISPATCHED (synthetic)** / **REAL SHADOW RUNS EXIST IN CODESPACE** (run `acd78872` target 2026-09-02 settled via manual binding; forward batch 2026-09-05..09 all `BUNDLE_VERIFIED`) / **SETTLEMENT MODULE IMPLEMENTED (P1, 41 tests)** / **FORWARD BATCH WORKFLOW CREATED (P3, 20 tests)** / **DRAW-AVOIDANCE ANALYSIS CREATED (P7, 11 tests)** / **TIMING-V2 PROPOSAL DRAFTED (P6)** / **PRODUCTION NOT AUTHORIZED** / **SHORTLIST POLICY NOT AUTHORIZED**. 694 tests pass (622 on `main` + 41 + 20 + 11); canonical declaration SHA-256 `dd08976a…4d597`; frozen baseline SHA-256 `666dabe7…00a1` MATCH (unchanged); full suite green, `py_compile` clean, pyflakes clean on all new files.
 
-Prior state (2026-08-29): MILESTONE 7B IMPLEMENTED/TESTED LOCALLY (PR opened; subsequently merged as PR #12); 601 tests passed.
-
-**Branch:** `arena/01a0512f-slumdog` (M7D delivery from `main` @ `41b345f`); `main` is only permanent branch
-**Base commit:** `41b345f749169dd2faa04fcaad11ce46c3eaecad`
-**Phase:** Milestones 0–7B COMPLETE AND MERGED. Milestone 7C synthetic transport proof executed in the Arena sandbox (2026-08-30): fully synthetic run through the real evaluator, production-CLI bundle, `BUNDLE_VERIFIED`, byte-identical determinism archives, repository/retained data untouched. **Milestone 7D (cloud-only second-copy procedure) IMPLEMENTED/TESTED LOCALLY** — manual-dispatch workflow + synthetic fixture generator + 19 tests. First real shadow run still BLOCKED on (1) one successful end-to-end manual dispatch of the cloud backup workflow and (2) an authorized gentle future-date capture. Training FROZEN. Production NOT AUTHORIZED. Shortlist policy NOT AUTHORIZED.
+**Branch:** `arena/01a066f2-slumdog` (from `main` @ `b086eae`)
+**Base commit:** `b086eae9b7ed860fc9ab2d6edb1e72a1089ac898`
 **Mission:** Slumdog identifies a small daily shortlist of participants that Forebet considers underdogs but whose available pre-event evidence indicates a credible outright-win upset.
 **Training:** FROZEN (`feature_contracts.py: MODEL_TRAINING_ALLOWED=False`)
-**Tests:** 620 passed on the M7D branch (verified 2026-08-30 in the Arena sandbox venv: full suite, focused bundle+evaluator tests, fixture-generator and workflow-contract tests, `py_compile`, `git diff --check`; Codespace should re-run `python -m pytest -q` before merge per AGENTS.md)
+**Tests:** 694 passed (verified 2026-09-03 in Arena sandbox)
 
 ## Milestone 7B — COMPLETE LOCALLY (shadow bundle; PR opened, NOT merged)
 

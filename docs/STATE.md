@@ -1,13 +1,12 @@
 # Slumdog State — Canonical Current Truth
 
-**Last verified:** 2026-08-30 (UTC) — **MILESTONE 7B MERGED INTO `main` (PR #12; `main` @ `41b345f`)** / **MILESTONE 7C SYNTHETIC TRANSPORT PROOF EXECUTED IN THE ARENA SANDBOX** (fully synthetic bundle created via the real evaluator + production CLI, `BUNDLE_VERIFIED`, byte-identical determinism archives; the owner-local download leg was superseded by the cloud-only second-copy decision) / **MILESTONE 7D IMPLEMENTED/TESTED LOCALLY (cloud-only bundle backup workflow COMMITTED on PR #13; 12 workflow-contract tests pass with ZERO skips; workflow NOT yet dispatched on GitHub — pending merge + manual dispatch)** / **NO REAL SHADOW BUNDLE CREATED** / **NO REAL FOREBET CAPTURE** / **NO REAL SHADOW RUN** / **PRODUCTION NOT AUTHORIZED** / **SHORTLIST POLICY NOT AUTHORIZED**. 622 tests pass with the M7D PR (601 on `main` + 9 fixture + 12 workflow-contract, zero skips); canonical declaration SHA-256 `dd08976a…4d597`; frozen baseline SHA-256 `666dabe7…00a1` MATCH (unchanged); full suite green; `py_compile` / `git diff --check` clean; pyflakes clean on all new/changed files (pre-existing warnings in old test files untouched). See `docs/MILESTONE7D_CLOUD_BACKUP.md`.
+**Last verified:** 2026-09-03 (UTC) — **PR #13 MERGED INTO `main` (`main` @ `b086eae`)** / **CLOUD BACKUP WORKFLOW DISPATCHED SUCCESSFULLY (synthetic)** / **REAL SHADOW RUNS EXIST IN CODESPACE** (run `acd78872019300ff` target 2026-09-02, settled 2026-09-03 via manual binding, primary SUCCESS, top-3 1/3; forward batch froze targets 2026-09-05..09, runs `4353ca88…`/`8d9a696c…`/`43ae7cea…`/`0879f649…`/`c9ed00de…`, all `BUNDLE_VERIFIED`) / **SHADOW SETTLEMENT MODULE IMPLEMENTED (P1)** / **FORWARD BATCH WORKFLOW CREATED (P3)** / **TIMING-V2 PROPOSAL DRAFTED (P6)** / **DRAW-AVOIDANCE ANALYSIS MODULE CREATED (P7)** / **PRODUCTION NOT AUTHORIZED** / **SHORTLIST POLICY NOT AUTHORIZED**. 694 tests pass (622 on `main` + 41 settlement + 20 forward batch + 11 draw analysis, zero skips); canonical declaration SHA-256 `dd08976a…4d597`; frozen baseline SHA-256 `666dabe7…00a1` MATCH (unchanged); full suite green; `py_compile` / `git diff --check` clean; pyflakes clean on all new/changed files.
 
-**Milestone 7D implemented/tested locally. Cloud backup workflow NOT yet dispatched. No real shadow bundle created. No real Forebet capture. No real shadow run. Production not authorized. Shortlist policy not authorized.**
+**PR #13 merged. Cloud backup dispatched (synthetic). Real shadow runs exist in Codespace (not in Arena sandbox). Settlement module implemented. Forward batch workflow created. Production not authorized. Shortlist policy not authorized.**
 
-**Branch:** `arena/01a0512f-slumdog` (M7D delivery from `main` @ `41b345f`); `main` is only permanent branch
+**Branch:** `arena/01a066f2-slumdog` (from `main` @ `b086eae`); `main` is only permanent branch
 **Doc canonical path:** `docs/STATE.md`
-**PR:** #13 opened into `main` (NOT merged) — workflow file COMMITTED on the PR branch (owner push from the Codespace; the Arena delivery App token cannot push `.github/workflows/*` — resolved, historical note) plus generator/tests/docs; workflow NOT executed on GitHub yet
-**Base commit:** `41b345f749169dd2faa04fcaad11ce46c3eaecad` (PR #12 — M7B — merged)
+**Base commit:** `b086eae9b7ed860fc9ab2d6edb1e72a1089ac898` (PR #13 — M7D — merged)
 
 ## Permanent Product Mission
 
@@ -94,18 +93,21 @@ Temporary artifacts (not committed):
 ## Current Status
 
 ```
-Milestones 0–6A: COMPLETE AND MERGED (PR #9 merged at 09a56dc, 396 tests)
-Milestone 6B (baseline analyzer): IMPLEMENTED — two-pass non-trained baseline analyzer
-Milestone 7 (shadow pick evaluator): IMPLEMENTED LOCALLY — R2-frozen, R1-ranking, 4-ID split, 89 new focused tests
+Milestones 0–7D: COMPLETE AND MERGED (PR #13 merged at b086eae, 622 tests)
+Settlement module (P1): IMPLEMENTED — shadow_settle.py + 41 focused tests
+Forward batch workflow (P3): CREATED — forward_shadow.yml + driver script + 20 contract tests
+Draw-avoidance analysis (P7): CREATED — draw_analysis.py + 11 focused tests
+Timing-V2 proposal (P6): DRAFTED — docs/TIMING_V2_PROPOSAL.md (not implemented)
+Real shadow runs: EXIST IN CODESPACE (5 forward dates 2026-09-05..09, all BUNDLE_VERIFIED)
+Real settlement: 2026-09-02 settled 2026-09-03 (primary SUCCESS, top-3 1/3)
 Canonical config SHA-256: 666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1 (VERIFIED)
 New shadow declaration canonical SHA-256: dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597 (VERIFIED)
-Tests: 515 passed (426 + 89 Milestone 7 tests)
-Golden regression: build_price_free_examples canonical output byte-for-byte identical to base commit b87784fdb590c17b55d4fa1c2bd6c3275dce0f6d on synthetic 15-row fixture (audit procedure in /tmp/golden_audit/README.md)
+Tests: 694 passed (622 + 41 + 20 + 11)
 Training: FROZEN
 Production: NOT AUTHORIZED
 Shortlist policy: NOT AUTHORIZED
-Shadow pick: IMPLEMENTED LOCALLY (no real run); first real shadow run BLOCKED on full-payload backup and authorized future capture; no commit, push, or PR for M7 in this session
-Next: owner-authorized first real shadow run (with separately approved durability / capture-parsing / history-loader adapters) and M7 commit+PR after uncommitted review
+Selection width: 1 primary + rank-2/3 cohort (FROZEN; grading all ranks 1..N is authorized)
+Next: settle 2026-09-05..09 as each date's matches complete (P1 continuation)
 ```
 
 ## Training / Production
@@ -196,16 +198,32 @@ Next: owner-authorized first real shadow run (with separately approved durabilit
 - Safe atomic output finalization under `/tmp` (`baselines.json` with embedded config and recomputation match, `summary.md` human-readable summary)
 - Real-data 6B execution pending Codespace run against the 654,011 research dataset.
 
+## Settlement Evidence Git Policy
+
+`data/settlement_evidence/` holds post-event Forebet captures used for
+settlement grading. Policy:
+
+- **Small receipts** (`settlement_capture_receipt.json`): commit to git.
+- **Large raw bodies** (HTML/JSON capture files): keep out of git; back up
+  via GitHub Actions artifacts (30-day retention) or durable object storage.
+- Settlement artifacts (`settlement.json` + `.sha256`) live inside the
+  prediction run directory and are committed to git (they are small JSON).
+
+This mirrors the existing raw-capture policy: raw bytes are large and
+immutable; receipts and summaries are small and valuable for
+reproducibility.
+
 ## Verification
 
-- pytest → 512 passed (426 + 86 Milestone 7 focused tests)
-- pyflakes src/slumdog scripts tests/test_shadow_evaluator.py → clean
+- pytest → 694 passed (622 + 41 settlement + 20 forward batch + 11 draw analysis)
+- pyflakes src/slumdog scripts tests → clean on all new/changed files
 - py_compile scripts/*.py src/slumdog/*.py tests/*.py → ok
 - git diff --check → ok
 - Frozen baseline config SHA-256 → `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1` MATCH
-- New shadow declaration canonical SHA-256 → `dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597` (unchanged by recovery)
-- Golden regression → `1a97cb81fc6521a99f1055a873975d562cae33fefce7468ceca929739f8fca0d` (15 examples, 21430 bytes; base and current byte-for-byte identical)
+- New shadow declaration canonical SHA-256 → `dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597` (unchanged)
+- Golden regression → `1a97cb81fc6521a99f1055a873975d562cae33fefce7468ceca929739f8fca0d` (unchanged)
 - CLI: `python -m slumdog.shadow_evaluator --help` → exit 0
+- CLI: `python -m slumdog.shadow_settle --help` → exit 0
 
 ## Links
 
