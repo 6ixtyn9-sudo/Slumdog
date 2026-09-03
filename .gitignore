@@ -31,3 +31,5 @@ data/settlement_evidence/*
 
 # Trained artifacts are generated from frozen ledgers.
 models/
+data/reports/shadow/batch_*/*.log
+data/reports/shadow/batch_*/*.capture.json
