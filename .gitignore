@@ -16,5 +16,10 @@ data/reports/*
 !data/ledgers/.gitkeep
 !data/reports/.gitkeep
 
+# Settlement evidence: commit receipts, exclude raw capture bodies.
+data/settlement_evidence/*
+!data/settlement_evidence/.gitkeep
+!data/settlement_evidence/**/settlement_capture_receipt.json
+
 # Trained artifacts are generated from frozen ledgers.
 models/
