@@ -11,7 +11,13 @@ concurrency:
 jobs:
   forward-batch:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Raised from 15 (owner decision 2026-09-06): the driver now also
+    # settles any overdue (D+1) prediction runs before the forward-capture
+    # pass, and a multi-date backlog can exceed a short budget. 350 mirrors
+    # the existing precedent in pipeline.yml (GitHub's practical ceiling for
+    # hosted runners is 360 min) so time is not a constraint on clearing the
+    # backlog or on future multi-sport settlement growth.
+    timeout-minutes: 350
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -36,7 +42,7 @@ jobs:
           else
             echo "::warning::no successful pipeline.yml run found"
           fi
-      - name: Run forward batch (D+2..D+6, timing-v1)
+      - name: Settle overdue predictions (D+1) then run forward batch (D+2..D+6, timing-v1)
         env:
           PYTHONPATH: src
         run: python scripts/forward_shadow_batch.py --root .
@@ -45,7 +51,8 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          find data/reports/shadow -type f \( -name 'shadow_selections.json' -o -name 'manifest.json' -o -name '*.settlement.json' -o -name '*.settlement.json.sha256' -o -name '*.bundle.json' -o -name '*.tar.gz.sha256' -o -name 'status.tsv' \) | xargs -r git add -f
+          find data/reports/shadow -type f \( -name 'shadow_selections.json' -o -name 'manifest.json' -o -name 'settlement.json' -o -name 'settlement.json.sha256' -o -name '*.settlement.json' -o -name '*.settlement.json.sha256' -o -name '*.bundle.json' -o -name '*.tar.gz.sha256' -o -name 'status.tsv' \) | xargs -r git add -f
+          find data/settlement_evidence -type f -name 'settlement_capture_receipt.json' 2>/dev/null | xargs -r git add -f
           git add -f data/reports/capture_*.json 2>/dev/null || true
           if git diff --cached --quiet; then echo "no new evidence"; exit 0; fi
           git commit -m "chore: shadow evidence (run ${{ github.run_id }})"
