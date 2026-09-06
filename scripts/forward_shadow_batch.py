@@ -316,15 +316,29 @@ def run_evaluator(
     if not config_path.is_file():
         raise RuntimeError(f"shadow evaluator config not found: {config_path}")
 
-    # Find history files
+    # Find history files. The evaluator's load_valid_history() only
+    # supports two on-disk shapes: gzipped JSONL ledgers
+    # (history_<sport>.jsonl.gz) and the single JSON-list interim
+    # ledger named exactly settled_history.json. It does NOT support
+    # history_<sport>.json — that filename is the backfill *manifest*
+    # (daily_receipts/settled_rows bookkeeping, not settled events),
+    # written alongside the ledger by slumdog.backfill and seeded into
+    # data/reports/ by the forward_shadow.yml "Seed history ledgers"
+    # step. Passing a manifest file as --history previously raised
+    # HistoryPathError ("unsupported history format") inside
+    # load_valid_history, which evaluate_from_disk converts to a
+    # SHADOW_RUN_BLOCKED / HISTORY_LOAD_FAILED failure receipt — a
+    # deterministic, pre-existing bug that blocked every forward-batch
+    # date once history seeding was in place (not caused by omitting
+    # a real ledger; caused by including a real *manifest*).
     history_args = []
     reports_dir = repo_root / "data" / "reports"
     if reports_dir.is_dir():
         for hf in sorted(reports_dir.glob("history_*.jsonl.gz")):
             history_args.extend(["--history", str(hf)])
-        for hf in sorted(reports_dir.glob("history_*.json")):
-            if hf.name != f"capture_{target_date}.json":
-                history_args.extend(["--history", str(hf)])
+        interim_ledger = reports_dir / "settled_history.json"
+        if interim_ledger.is_file():
+            history_args.extend(["--history", str(interim_ledger)])
 
     cmd = [
         sys.executable, "-m", "slumdog.shadow_evaluator",

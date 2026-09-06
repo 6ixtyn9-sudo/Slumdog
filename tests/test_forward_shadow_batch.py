@@ -214,6 +214,151 @@ class TestForwardBatchDriver:
 
 
 # ---------------------------------------------------------------------------
+# run_evaluator() history-file selection (regression: SHADOW_RUN_BLOCKED /
+# HISTORY_LOAD_FAILED, owner-reported 2026-09-06, live on 3/5 forward-batch
+# dates across two production dispatches)
+#
+# Root cause: forward_shadow.yml's "Seed history ledgers" step copies BOTH
+# history_<sport>.jsonl.gz (the real gzipped settled-events ledger,
+# supported by shadow_evaluator's load_valid_history) AND history_<sport>.json
+# (the backfill *manifest* — daily_receipts/settled_rows bookkeeping, NOT
+# settled events) into data/reports/. run_evaluator() used to glob
+# "history_*.json" and pass every match as --history, so the manifest files
+# were fed straight into load_valid_history(), which raises
+# HistoryPathError("unsupported history format: ... (supported: .jsonl.gz,
+# settled_history.json)") for anything that isn't exactly settled_history.json
+# or a .jsonl.gz. evaluate_from_disk() catches that and blocks the whole run
+# with SHADOW_RUN_BLOCKED / HISTORY_LOAD_FAILED — deterministically, on every
+# date that reached the evaluator once seeding was in place.
+# ---------------------------------------------------------------------------
+
+
+class TestRunEvaluatorHistorySelection:
+    """run_evaluator() must only pass --history paths the evaluator's
+    load_valid_history() actually supports: history_*.jsonl.gz ledgers and
+    the single settled_history.json interim ledger. It must never pass a
+    history_<sport>.json backfill manifest — those are seeded into
+    data/reports/ alongside the real ledgers and are not settled-event data.
+    """
+
+    def _make_receipt_and_config(self, repo_root: Path, target_date: str) -> None:
+        reports_dir = repo_root / "data" / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        (reports_dir / f"capture_{target_date}.json").write_text(
+            json.dumps({"target_date": target_date, "captured": [], "failures": []})
+        )
+        config_dir = repo_root / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "shadow_evaluator_v1.json").write_text("{}")
+
+    def _capture_history_args(self, monkeypatch, repo_root: Path, target_date: str) -> list[str]:
+        import scripts.forward_shadow_batch as fsb
+
+        captured_cmd: dict[str, list[str]] = {}
+
+        def fake_run(cmd, **kwargs):
+            captured_cmd["cmd"] = cmd
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout=json.dumps({"run_id": "x", "run_status": "SHADOW_NO_SELECTION"}), stderr="",
+            )
+
+        monkeypatch.setattr(fsb.subprocess, "run", fake_run)
+        fsb.run_evaluator(target_date, repo_root)
+        cmd = captured_cmd["cmd"]
+        history_args = []
+        for i, tok in enumerate(cmd):
+            if tok == "--history":
+                history_args.append(cmd[i + 1])
+        return history_args
+
+    def test_excludes_backfill_manifest_json(self, tmp_path, monkeypatch):
+        """history_<sport>.json (the manifest) must NOT be passed as --history."""
+        self._make_receipt_and_config(tmp_path, "2026-09-10")
+        reports_dir = tmp_path / "data" / "reports"
+        (reports_dir / "history_football.json").write_text(
+            json.dumps({"sport": "football", "daily_receipts": [], "settled_rows": 0})
+        )
+        history_args = self._capture_history_args(monkeypatch, tmp_path, "2026-09-10")
+        assert not any(a.endswith("history_football.json") for a in history_args)
+
+    def test_includes_jsonl_gz_ledger(self, tmp_path, monkeypatch):
+        """history_<sport>.jsonl.gz ledgers must still be passed through."""
+        self._make_receipt_and_config(tmp_path, "2026-09-10")
+        reports_dir = tmp_path / "data" / "reports"
+        (reports_dir / "history_football.jsonl.gz").write_bytes(b"")
+        history_args = self._capture_history_args(monkeypatch, tmp_path, "2026-09-10")
+        assert any(a.endswith("history_football.jsonl.gz") for a in history_args)
+
+    def test_includes_settled_history_json_interim_ledger(self, tmp_path, monkeypatch):
+        """The one JSON-list interim ledger the evaluator DOES support
+        (data/reports/settled_history.json) must still be passed through."""
+        self._make_receipt_and_config(tmp_path, "2026-09-10")
+        reports_dir = tmp_path / "data" / "reports"
+        (reports_dir / "settled_history.json").write_text("[]")
+        history_args = self._capture_history_args(monkeypatch, tmp_path, "2026-09-10")
+        assert any(a.endswith("settled_history.json") for a in history_args)
+
+    def test_manifest_and_ledger_coexist_only_ledger_passed(self, tmp_path, monkeypatch):
+        """Realistic seeded state: both history_<sport>.json manifests and
+        history_<sport>.jsonl.gz ledgers present (as forward_shadow.yml's
+        seed step produces for every pipeline.yml sport). Only the ledgers
+        may be passed to --history."""
+        self._make_receipt_and_config(tmp_path, "2026-09-10")
+        reports_dir = tmp_path / "data" / "reports"
+        for sport in ("football", "basketball", "mma"):
+            (reports_dir / f"history_{sport}.json").write_text(
+                json.dumps({"sport": sport, "daily_receipts": [], "settled_rows": 0})
+            )
+            (reports_dir / f"history_{sport}.jsonl.gz").write_bytes(b"")
+        history_args = self._capture_history_args(monkeypatch, tmp_path, "2026-09-10")
+        assert all(a.endswith(".jsonl.gz") or a.endswith("settled_history.json") for a in history_args)
+        assert len(history_args) == 3
+        assert not any(a.endswith("history_football.json") for a in history_args)
+        assert not any(a.endswith("history_basketball.json") for a in history_args)
+        assert not any(a.endswith("history_mma.json") for a in history_args)
+
+    def test_real_evaluator_does_not_block_on_seeded_manifests(self, tmp_path):
+        """End-to-end regression: run the REAL shadow_evaluator CLI (no
+        subprocess mocking) against a data/reports/ layout that matches what
+        forward_shadow.yml's seed step produces (manifest .json + ledger
+        .jsonl.gz per sport, empty capture receipt). Before the fix this
+        deterministically produced SHADOW_RUN_BLOCKED / HISTORY_LOAD_FAILED
+        for every sport whose manifest sorted before its own ledger, or
+        whenever any history_<sport>.json existed at all. After the fix it
+        must complete without a HISTORY_LOAD_FAILED block (SHADOW_NO_SELECTION
+        here, since the capture receipt is empty by design).
+        """
+        import shutil
+        import gzip
+        import scripts.forward_shadow_batch as fsb
+
+        repo_root = Path(__file__).resolve().parents[1]
+        (tmp_path / "config").mkdir()
+        shutil.copy(
+            repo_root / "config" / "shadow_evaluator_v1.json",
+            tmp_path / "config" / "shadow_evaluator_v1.json",
+        )
+        shutil.copy(
+            repo_root / "config" / "research_baselines_v1.json",
+            tmp_path / "config" / "research_baselines_v1.json",
+        )
+        reports_dir = tmp_path / "data" / "reports"
+        reports_dir.mkdir(parents=True)
+        (reports_dir / "capture_2026-09-10.json").write_text(
+            json.dumps({"target_date": "2026-09-10", "captured": [], "failures": []})
+        )
+        for sport in ("football", "basketball", "mma"):
+            (reports_dir / f"history_{sport}.json").write_text(
+                json.dumps({"sport": sport, "daily_receipts": [], "settled_rows": 0})
+            )
+            with gzip.open(reports_dir / f"history_{sport}.jsonl.gz", "wt") as f:
+                pass
+
+        result = fsb.run_evaluator("2026-09-10", tmp_path)
+        assert result["run_status"] != "SHADOW_RUN_BLOCKED"
+
+
+# ---------------------------------------------------------------------------
 # D+1 automated settlement backlog (owner-confirmed 2026-09-06)
 # ---------------------------------------------------------------------------
 
