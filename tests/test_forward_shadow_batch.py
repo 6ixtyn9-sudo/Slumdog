@@ -370,6 +370,35 @@ class TestSportsInRun:
         from scripts.forward_shadow_batch import _sports_in_run
         assert _sports_in_run("2026-09-05", "doesnotexist0000", tmp_path) == []
 
+    def test_selections_file_is_a_list_not_a_dict_does_not_raise(self, tmp_path):
+        # Regression: valid JSON but the wrong top-level shape (e.g. a bare
+        # list instead of {"selections": [...]}) must be treated the same
+        # as unparseable input, not raise AttributeError/TypeError out of
+        # this helper -- run_settlement_for_date's "never raises" contract
+        # depends on it.
+        from scripts.forward_shadow_batch import _sports_in_run
+        run_dir = tmp_path / "data" / "reports" / "shadow" / "2026-09-05" / "run0001aaaaaaaaaa"
+        run_dir.mkdir(parents=True)
+        (run_dir / "shadow_selections.json").write_text(json.dumps([1, 2, 3]))
+        assert _sports_in_run("2026-09-05", "run0001aaaaaaaaaa", tmp_path) == []
+
+    def test_selection_entry_not_a_dict_does_not_raise(self, tmp_path):
+        from scripts.forward_shadow_batch import _sports_in_run
+        run_dir = tmp_path / "data" / "reports" / "shadow" / "2026-09-05" / "run0001aaaaaaaaaa"
+        run_dir.mkdir(parents=True)
+        (run_dir / "shadow_selections.json").write_text(
+            json.dumps({"selections": ["not-a-dict"]})
+        )
+        assert _sports_in_run("2026-09-05", "run0001aaaaaaaaaa", tmp_path) == []
+
+    def test_manifest_wrong_shape_does_not_raise(self, tmp_path):
+        from scripts.forward_shadow_batch import _sports_in_run
+        run_dir = tmp_path / "data" / "reports" / "shadow" / "2026-09-05" / "run0001aaaaaaaaaa"
+        run_dir.mkdir(parents=True)
+        (run_dir / "shadow_selections.json").write_text(json.dumps({"selections": []}))
+        (run_dir / "manifest.json").write_text(json.dumps(["not", "a", "dict"]))
+        assert _sports_in_run("2026-09-05", "run0001aaaaaaaaaa", tmp_path) == []
+
 
 class TestRunSettlementForDate:
     def test_no_sports_resolved_when_run_missing(self, tmp_path):
@@ -377,6 +406,17 @@ class TestRunSettlementForDate:
         result = run_settlement_for_date("2026-09-05", "doesnotexist0000", tmp_path)
         assert result["status"] == "NO_SPORTS_RESOLVED"
         assert result["error"]
+
+    def test_never_raises_on_malformed_selections_file(self, tmp_path):
+        # End-to-end version of the _sports_in_run regression above: a
+        # malformed-but-valid-JSON run must resolve to NO_SPORTS_RESOLVED,
+        # never propagate an exception out of run_settlement_for_date.
+        from scripts.forward_shadow_batch import run_settlement_for_date
+        run_dir = tmp_path / "data" / "reports" / "shadow" / "2026-09-05" / "run0001aaaaaaaaaa"
+        run_dir.mkdir(parents=True)
+        (run_dir / "shadow_selections.json").write_text(json.dumps([1, 2, 3]))
+        result = run_settlement_for_date("2026-09-05", "run0001aaaaaaaaaa", tmp_path)
+        assert result["status"] == "NO_SPORTS_RESOLVED"
 
     def test_settlement_error_isolated_not_raised(self, tmp_path, monkeypatch):
         from scripts.forward_shadow_batch import run_settlement_for_date

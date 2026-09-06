@@ -178,7 +178,10 @@ def _sports_in_run(target_date: str, run_id: str, repo_root: Path) -> list[str]:
             sport = sel.get("sport")
             if sport:
                 sports.add(sport)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+        # Malformed/unexpected shape (e.g. top-level JSON is a list, or a
+        # selection entry isn't a dict) must not raise here -- this helper
+        # feeds run_settlement_for_date's "never raises" contract.
         pass
     manifest_path = run_dir / "manifest.json"
     if manifest_path.is_file():
@@ -188,7 +191,7 @@ def _sports_in_run(target_date: str, run_id: str, repo_root: Path) -> list[str]:
                 sport = cp.get("sport")
                 if sport:
                     sports.add(sport)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError, AttributeError, TypeError):
             pass
     return sorted(sports)
 

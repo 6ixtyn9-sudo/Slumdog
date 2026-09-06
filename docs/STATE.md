@@ -110,8 +110,10 @@ Automated D+1 settlement (P1 continuation, 2026-09-06): IMPLEMENTED, NOT YET
   `sports` parameter, backward-compatible (omitted = original
   fetch-everything behavior). New: find_settleable_run,
   find_settleable_dates, _sports_in_run, run_settlement_for_date,
-  run_settlement_backlog in scripts/forward_shadow_batch.py (24 new
-  tests). Workflow job timeout-minutes raised 15 -> 350 (owner decision
+  run_settlement_backlog in scripts/forward_shadow_batch.py (27 new
+  tests, including 4 regression tests added after independent review for
+  a malformed-run-file edge case — see the note below). Workflow job
+  timeout-minutes raised 15 -> 350 (owner decision
   2026-09-06, mirrors the existing pipeline.yml precedent) specifically so
   clearing a multi-date backlog, or settling additional sports once they
   go live, is never time-constrained; the workflow's own contract test
@@ -139,9 +141,11 @@ Real settlement (manual/ad-hoc, NOT shadow_settle.py output): 2026-09-02 settled
   2026-09-03 (primary SUCCESS, top-3 1/3) — see IMPORTANT note above
 Canonical config SHA-256: 666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1 (VERIFIED)
 New shadow declaration canonical SHA-256: dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597 (VERIFIED)
-Tests: 709 passed, 12 deselected (694 prior + 27 new sport-scoping/D+1 tests,
-  12 deselected are the pre-existing test_cloud_backup_workflow.py failures —
-  that workflow file was never committed to main, unrelated to this change)
+Tests: 713 passed, 12 deselected (694 prior + 4 sport-scoping + 27 D+1
+  orchestration/robustness tests, including 4 added post-review to cover a
+  malformed-run-file edge case; 12 deselected are the pre-existing
+  test_cloud_backup_workflow.py failures — that workflow file was never
+  committed to main, unrelated to this change)
 Training: FROZEN
 Production: NOT AUTHORIZED
 Shortlist policy: NOT AUTHORIZED
