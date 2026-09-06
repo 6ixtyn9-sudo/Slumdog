@@ -10,10 +10,20 @@ contract). For each date:
 3. Evaluate: run the frozen shadow evaluator.
 4. Bundle + verify: create a deterministic bundle and verify it.
 
+Before the forward pass, this driver also settles any overdue past
+predictions (D+1 rule): a prediction run's ``target_date`` is treated
+as safe to settle starting the day after that date, once Forebet's
+final results should exist. See ``find_settleable_dates`` and
+``run_settlement_for_date`` below. Settlement never mutates a
+prediction run, never blocks the forward pass, and is fully isolated
+per date — one date's settlement failure does not affect any other
+date or the forward capture that follows.
+
 CLI::
 
     python scripts/forward_shadow_batch.py [--dates N] [--root ROOT]
         [--pause-seconds 62] [--capture-timeout 45] [--dry-run]
+        [--skip-settlement]
 """
 from __future__ import annotations
 
@@ -52,6 +62,223 @@ def has_existing_evidence(target_date: str, repo_root: Path) -> bool:
             if (child / "shadow_selections.json").exists():
                 return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# Automated D+1 settlement (owner-confirmed 2026-09-06)
+#
+# A prediction run's target_date is treated as safe to settle starting
+# the day after that date (D+1): by then Forebet's final results for
+# that date should exist. This is intentionally simple (a fixed
+# calendar offset, not a kickoff-time check) — the same conservative
+# posture as the frozen timing-v1 pre-event cutoff, applied to the
+# other end of the run's lifecycle. Settlement is fully idempotent and
+# additive: it only ever considers runs that have selections but no
+# settlement.json yet, and never touches a run that is already
+# settled or still blocked.
+# ---------------------------------------------------------------------------
+
+
+NON_DATE_SHADOW_DIRS = frozenset({"BLOCKED", "bundles", "settlements"})
+
+
+def _is_target_date_dir(name: str) -> bool:
+    """True if ``name`` looks like a target-date directory (YYYY-MM-DD).
+
+    Excludes known non-date siblings under ``data/reports/shadow/``
+    (``bundles``, ``settlements``) and any ``batch_*`` driver-log
+    directory, without assuming an exhaustive denylist — any name that
+    does not parse as an ISO date is excluded too.
+    """
+    if name in NON_DATE_SHADOW_DIRS:
+        return False
+    try:
+        dt.date.fromisoformat(name)
+    except ValueError:
+        return False
+    return True
+
+
+def find_settleable_run(target_date: str, repo_root: Path) -> str | None:
+    """Return the run_id of the one completed, unsettled run for a date.
+
+    Returns ``None`` if the date has no completed run, or if its
+    completed run already has a ``settlement.json``. Prediction runs
+    are frozen and immutable once written (per the shadow evaluator's
+    no-overwrite contract), so at most one completed run per date is
+    expected in current operation; if more than one existed, the first
+    completed, unsettled one found (sorted by run_id) is returned so
+    behavior stays deterministic.
+    """
+    shadow_dir = repo_root / "data" / "reports" / "shadow" / target_date
+    if not shadow_dir.is_dir():
+        return None
+    candidates = []
+    for child in sorted(shadow_dir.iterdir()):
+        if not child.is_dir() or child.name == "BLOCKED":
+            continue
+        if not (child / "shadow_selections.json").is_file():
+            continue
+        if (child / "settlement.json").exists():
+            continue  # already settled — nothing to do
+        candidates.append(child.name)
+    return candidates[0] if candidates else None
+
+
+def find_settleable_dates(
+    repo_root: Path,
+    *,
+    as_of: dt.date | None = None,
+) -> list[tuple[str, str]]:
+    """Return ``(target_date, run_id)`` pairs eligible for D+1 settlement.
+
+    A date is eligible when:
+    - it is a target-date directory under ``data/reports/shadow/``;
+    - ``target_date <= as_of - 1 day`` (the D+1 rule: settle starting
+      the day after the predicted date, never the same day or before);
+    - it has exactly one completed run without an existing
+      ``settlement.json`` (see :func:`find_settleable_run`).
+
+    Returned in ascending date order (oldest first), so a backlog
+    clears from the oldest overdue date forward.
+    """
+    as_of = as_of or dt.datetime.now(dt.timezone.utc).date()
+    cutoff = as_of - dt.timedelta(days=1)
+    shadow_root = repo_root / "data" / "reports" / "shadow"
+    if not shadow_root.is_dir():
+        return []
+    out: list[tuple[str, str]] = []
+    for child in sorted(shadow_root.iterdir()):
+        if not child.is_dir() or not _is_target_date_dir(child.name):
+            continue
+        target_date = child.name
+        if dt.date.fromisoformat(target_date) > cutoff:
+            continue
+        run_id = find_settleable_run(target_date, repo_root)
+        if run_id is not None:
+            out.append((target_date, run_id))
+    return out
+
+
+def _sports_in_run(target_date: str, run_id: str, repo_root: Path) -> list[str]:
+    """Return the distinct sports actually present in a prediction run.
+
+    Reads both ``selections[]`` and the manifest's ``considered_pool[]``
+    (settlement grades both), so the settlement capture fetches exactly
+    the sports it needs — no more, no less. Falls back to an empty list
+    (which callers should treat as "settle with the fetch-everything
+    default") if the run's files cannot be parsed; this keeps a
+    corrupted or unexpected run from silently skipping settlement.
+    """
+    run_dir = repo_root / "data" / "reports" / "shadow" / target_date / run_id
+    sports: set[str] = set()
+    try:
+        selections = json.loads((run_dir / "shadow_selections.json").read_text())
+        for sel in selections.get("selections", []):
+            sport = sel.get("sport")
+            if sport:
+                sports.add(sport)
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+        # Malformed/unexpected shape (e.g. top-level JSON is a list, or a
+        # selection entry isn't a dict) must not raise here -- this helper
+        # feeds run_settlement_for_date's "never raises" contract.
+        pass
+    manifest_path = run_dir / "manifest.json"
+    if manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text())
+            for cp in manifest.get("considered_pool", []):
+                sport = cp.get("sport")
+                if sport:
+                    sports.add(sport)
+        except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+            pass
+    return sorted(sports)
+
+
+def run_settlement_for_date(
+    target_date: str,
+    run_id: str,
+    repo_root: Path,
+    *,
+    pause_seconds: int = 62,
+    timeout: int = 45,
+) -> dict:
+    """Settle one overdue prediction run. Never raises.
+
+    Returns a result dict with ``status`` one of:
+    ``SETTLED`` (success), ``SETTLEMENT_FAILED`` (the settlement
+    module raised — logged, not fatal to the caller), or
+    ``NO_SPORTS_RESOLVED`` (the run's files could not be read to
+    determine which sports to fetch; settlement is skipped for this
+    date rather than guessing).
+    """
+    from slumdog.shadow_settle import SettlementError, settle_run
+
+    result: dict = {
+        "target_date": target_date,
+        "run_id": run_id,
+        "status": "PENDING",
+        "error": None,
+    }
+    sports = _sports_in_run(target_date, run_id, repo_root)
+    if not sports:
+        result["status"] = "NO_SPORTS_RESOLVED"
+        result["error"] = "could not determine sports from run files"
+        return result
+    result["sports"] = sports
+    try:
+        settled = settle_run(
+            target_date=target_date,
+            run_id=run_id,
+            repo_root=repo_root,
+            pause_seconds=pause_seconds,
+            timeout=timeout,
+            sports=sports,
+        )
+        result["status"] = "SETTLED"
+        result["settlement_artifact_path"] = settled.settlement_artifact_path
+        result["settlement_artifact_sha256"] = settled.settlement_artifact_sha256
+        result["primary_hit_rate"] = settled.summary.get("primary_hit_rate")
+    except SettlementError as exc:
+        result["status"] = "SETTLEMENT_FAILED"
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    except Exception as exc:  # never let one date's failure abort the batch
+        result["status"] = "SETTLEMENT_FAILED"
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+def run_settlement_backlog(
+    repo_root: Path,
+    *,
+    as_of: dt.date | None = None,
+    pause_seconds: int = 62,
+    timeout: int = 45,
+    dry_run: bool = False,
+) -> list[dict]:
+    """Settle every overdue (D+1) prediction run, oldest date first.
+
+    Isolated per date: one date's failure is recorded and the loop
+    continues to the next date. Never touches an already-settled run
+    (idempotent — safe to call on every scheduled invocation).
+    """
+    pending = find_settleable_dates(repo_root, as_of=as_of)
+    results = []
+    for i, (target_date, run_id) in enumerate(pending):
+        if dry_run:
+            results.append({
+                "target_date": target_date, "run_id": run_id,
+                "status": "DRY_RUN", "error": None,
+            })
+            continue
+        if i > 0:
+            time.sleep(pause_seconds)
+        results.append(run_settlement_for_date(
+            target_date, run_id, repo_root,
+            pause_seconds=pause_seconds, timeout=timeout,
+        ))
+    return results
 
 
 def run_capture(target_date: str, repo_root: Path, *, pause_seconds: int = 62, timeout: int = 45) -> dict:
@@ -248,9 +475,33 @@ def main(argv: list[str] | None = None) -> int:
                         help="Per-request timeout (default: 45)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Show what would be done without executing")
+    parser.add_argument("--skip-settlement", action="store_true",
+                        help="Skip the D+1 settlement backlog pass "
+                             "(forward capture only)")
     args = parser.parse_args(argv)
 
     repo_root = args.root.resolve()
+
+    # Settlement pass first: grade any overdue (D+1) prediction runs
+    # before capturing/ranking new ones. Isolated per date and fully
+    # idempotent — safe on every invocation, including this one.
+    settlement_results: list[dict] = []
+    if not args.skip_settlement:
+        settlement_results = run_settlement_backlog(
+            repo_root,
+            pause_seconds=args.pause_seconds,
+            timeout=args.capture_timeout,
+            dry_run=args.dry_run,
+        )
+        if settlement_results:
+            print(f"Settlement backlog: {len(settlement_results)} overdue date(s)", file=sys.stderr)
+            for sr in settlement_results:
+                print(f"  {sr['target_date']} ({sr['run_id']}): {sr['status']}", file=sys.stderr)
+                if sr.get("error"):
+                    print(f"    Error: {sr['error']}", file=sys.stderr)
+        else:
+            print("Settlement backlog: nothing overdue", file=sys.stderr)
+
     targets = compute_target_dates(args.dates)
     print(f"Forward shadow batch: {len(targets)} dates starting from {targets[0]}", file=sys.stderr)
     print(f"Repository root: {repo_root}", file=sys.stderr)
@@ -282,12 +533,20 @@ def main(argv: list[str] | None = None) -> int:
         "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "target_dates": targets,
         "results": results,
+        "settlement_backlog": settlement_results,
         "summary": {
             "total": len(results),
             "completed": sum(1 for r in results if r["status"] == "COMPLETED"),
             "skipped_existing": sum(1 for r in results if r["status"] == "SKIPPED_EXISTING"),
             "failed": sum(1 for r in results if r["status"] == "FAILED"),
             "bundle_verified": sum(1 for r in results if r.get("bundle_verified")),
+            "settlement_backlog_total": len(settlement_results),
+            "settlement_backlog_settled": sum(
+                1 for r in settlement_results if r["status"] == "SETTLED"
+            ),
+            "settlement_backlog_failed": sum(
+                1 for r in settlement_results if r["status"] == "SETTLEMENT_FAILED"
+            ),
         },
     }
     receipt_path = repo_root / "data" / "reports" / "shadow" / "forward_batch_receipt.json"

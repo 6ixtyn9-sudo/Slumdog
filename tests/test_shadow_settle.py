@@ -839,3 +839,105 @@ class TestVoidAndSpecialDispositions:
         g = grades[0]
         assert g.grade == GRADE_UNRESOLVED
         assert g.disposition == "VOID"
+
+
+# ---------------------------------------------------------------------------
+# Sport-scoped settlement capture (D+1 automation support, 2026-09-06)
+# ---------------------------------------------------------------------------
+
+
+class TestFetchSettlementCaptureSportScoping:
+    """``fetch_settlement_capture(sports=...)`` restricts which sports are
+    fetched during the network settlement pass. Grading itself is
+    unaffected — it only ever grades sports present in the prediction
+    run's own entries; this parameter is purely a fetch-cost control so
+    an automated D+1 job does not pay the ``pause_seconds`` politeness
+    delay for sports with nothing to grade.
+    """
+
+    def test_default_fetches_all_non_current_only_sports(self, tmp_path, monkeypatch):
+        from slumdog.shadow_settle import fetch_settlement_capture
+        from slumdog.sports import SPORTS
+        import slumdog.forebet as forebet_mod
+
+        monkeypatch.setattr(
+            forebet_mod, "relay_get_markdown",
+            lambda relay, target, *, timeout: b"<html>ok</html>",
+        )
+        monkeypatch.setattr(
+            forebet_mod, "fetch_with_fallback",
+            lambda relay, target, *, timeout, max_retries: (b"<html>ok</html>", "fake_route"),
+        )
+        monkeypatch.setattr(forebet_mod, "validate_capture_body", lambda *a, **k: None)
+
+        receipt = fetch_settlement_capture(
+            "2026-09-05", tmp_path, pause_seconds=0, timeout=1,
+        )
+        expected = [s for s in SPORTS if not SPORTS[s].current_only]
+        assert len(receipt["captured"]) == len(expected)
+
+    def test_sports_subset_only_fetches_requested(self, tmp_path, monkeypatch):
+        from slumdog.shadow_settle import fetch_settlement_capture
+        import slumdog.forebet as forebet_mod
+
+        def _relay_get_markdown(relay, target, *, timeout):
+            return b"<html>ok</html>"
+
+        def _fetch_with_fallback(relay, target, *, timeout, max_retries):
+            return b"<html>ok</html>", "fake_route"
+
+        monkeypatch.setattr(forebet_mod, "relay_get_markdown", _relay_get_markdown)
+        monkeypatch.setattr(forebet_mod, "fetch_with_fallback", _fetch_with_fallback)
+        monkeypatch.setattr(forebet_mod, "validate_capture_body", lambda *a, **k: None)
+
+        receipt = fetch_settlement_capture(
+            "2026-09-05", tmp_path, pause_seconds=0, timeout=1,
+            sports=["football"],
+        )
+        assert len(receipt["captured"]) == 1
+        assert receipt["captured"][0]["sport"] == "football"
+
+    def test_sports_subset_drops_unknown_and_current_only(self, tmp_path, monkeypatch):
+        from slumdog.shadow_settle import fetch_settlement_capture
+        import slumdog.forebet as forebet_mod
+
+        monkeypatch.setattr(
+            forebet_mod, "relay_get_markdown",
+            lambda relay, target, *, timeout: b"<html>ok</html>",
+        )
+        monkeypatch.setattr(
+            forebet_mod, "fetch_with_fallback",
+            lambda relay, target, *, timeout, max_retries: (b"<html>ok</html>", "fake_route"),
+        )
+        monkeypatch.setattr(forebet_mod, "validate_capture_body", lambda *a, **k: None)
+
+        receipt = fetch_settlement_capture(
+            "2026-09-05", tmp_path, pause_seconds=0, timeout=1,
+            sports=["football", "not_a_real_sport", "esoccer"],
+        )
+        sports_fetched = {c["sport"] for c in receipt["captured"]}
+        assert "not_a_real_sport" not in sports_fetched
+        # esoccer is current_only in SPORTS — must never be fetched via
+        # the settlement path even if explicitly requested.
+        from slumdog.sports import SPORTS
+        if "esoccer" in SPORTS and SPORTS["esoccer"].current_only:
+            assert "esoccer" not in sports_fetched
+
+    def test_empty_sports_list_fetches_nothing(self, tmp_path, monkeypatch):
+        from slumdog.shadow_settle import fetch_settlement_capture
+        import slumdog.forebet as forebet_mod
+
+        calls = []
+        monkeypatch.setattr(
+            forebet_mod, "fetch_with_fallback",
+            lambda *a, **k: calls.append(1) or (b"x", "r"),
+        )
+        monkeypatch.setattr(
+            forebet_mod, "relay_get_markdown",
+            lambda *a, **k: calls.append(1) or "x",
+        )
+        receipt = fetch_settlement_capture(
+            "2026-09-05", tmp_path, pause_seconds=0, timeout=1, sports=[],
+        )
+        assert receipt["captured"] == []
+        assert calls == []
