@@ -91,20 +91,66 @@ Temporary artifacts (not committed):
 
 ```
 Milestones 0–7D: COMPLETE AND MERGED (PR #13 merged at b086eae, 622 tests)
-Settlement module (P1): IMPLEMENTED — shadow_settle.py + 41 focused tests
+Settlement module (P1): IMPLEMENTED — shadow_settle.py + 45 focused tests
+  (41 original + 4 sport-scoping, 2026-09-06)
+Automated D+1 settlement (P1 continuation, 2026-09-06): IMPLEMENTED, NOT YET
+  DISPATCHED ON GITHUB — forward_shadow.yml's existing daily job (dispatched
+  externally via cron-job.org at 06:00 SAST/04:00 UTC; NOT a native GitHub
+  `schedule:` trigger — the workflow remains workflow_dispatch-only per its
+  pinned contract test) now settles any overdue prediction run BEFORE its
+  forward-capture pass. A date is eligible once `target_date <= today - 1
+  day` (D+1 rule, owner-confirmed 2026-09-06) and has a completed run with
+  no settlement.json yet. Oldest-eligible-date-first; each date isolated
+  (one date's SettlementError or unexpected exception is recorded and the
+  loop continues — never blocks another date or the forward-capture pass
+  that follows). Settlement capture now fetches only the sport(s) actually
+  present in that run's selections + considered_pool (currently always
+  just football) instead of unconditionally polling all 12 sports —
+  fetch_settlement_capture() and settle_run() both gained an optional
+  `sports` parameter, backward-compatible (omitted = original
+  fetch-everything behavior). New: find_settleable_run,
+  find_settleable_dates, _sports_in_run, run_settlement_for_date,
+  run_settlement_backlog in scripts/forward_shadow_batch.py (24 new
+  tests). Workflow job timeout-minutes raised 15 -> 350 (owner decision
+  2026-09-06, mirrors the existing pipeline.yml precedent) specifically so
+  clearing a multi-date backlog, or settling additional sports once they
+  go live, is never time-constrained; the workflow's own contract test
+  updated to match (ceiling only, not the requirement that every job
+  declare an explicit timeout). No new GitHub Actions workflow file was
+  added — this rides entirely on the existing forward_shadow.yml job,
+  per owner instruction. First scheduled dispatch will attempt to clear
+  the existing backlog (2026-09-02, 2026-09-05..09) automatically before
+  proceeding to that day's forward capture.
+  IMPORTANT: the settlement.json this module writes lives at
+  data/reports/shadow/<date>/<run_id>/settlement.json with schema
+  "settlement_schema_version": "shadow_settlement_v1". This is DIFFERENT
+  from the pre-existing data/reports/shadow/settlements/2026-09-02/
+  acd78872019300ff.settlement.json, whose schema is
+  "version": "shadow_settlement_v1_manual_binding" — that file was a
+  manual/ad-hoc grading, not produced by shadow_settle.py. Once the
+  automated job runs, 2026-09-02 will additionally get a real
+  shadow_settle.py-produced settlement.json at its own run directory;
+  the two are not the same artifact and must not be conflated.
 Forward batch workflow (P3): CREATED — forward_shadow.yml + driver script + 20 contract tests
 Draw-avoidance analysis (P7): CREATED — draw_analysis.py + 11 focused tests
 Timing-V2 proposal (P6): DRAFTED — docs/TIMING_V2_PROPOSAL.md (not implemented)
 Real shadow runs: EXIST IN CODESPACE (5 forward dates 2026-09-05..09, all BUNDLE_VERIFIED)
-Real settlement: 2026-09-02 settled 2026-09-03 (primary SUCCESS, top-3 1/3)
+Real settlement (manual/ad-hoc, NOT shadow_settle.py output): 2026-09-02 settled
+  2026-09-03 (primary SUCCESS, top-3 1/3) — see IMPORTANT note above
 Canonical config SHA-256: 666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1 (VERIFIED)
 New shadow declaration canonical SHA-256: dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597 (VERIFIED)
-Tests: 694 passed (622 + 41 + 20 + 11)
+Tests: 709 passed, 12 deselected (694 prior + 27 new sport-scoping/D+1 tests,
+  12 deselected are the pre-existing test_cloud_backup_workflow.py failures —
+  that workflow file was never committed to main, unrelated to this change)
 Training: FROZEN
 Production: NOT AUTHORIZED
 Shortlist policy: NOT AUTHORIZED
 Selection width: 1 primary + rank-2/3 cohort (FROZEN; grading all ranks 1..N is authorized)
-Next: settle 2026-09-05..09 as each date's matches complete (P1 continuation)
+Next: first scheduled forward_shadow.yml dispatch will exercise D+1 settlement
+  automation for real (backlog clear + steady-state); confirm results before
+  claiming the automation "works" end-to-end (same evidence standard as
+  Milestone 7D's cloud backup — implemented/tested locally is not the same
+  as a proven real dispatch)
 ```
 
 ## System Maturity: EARLY STAGE (~10% complete)

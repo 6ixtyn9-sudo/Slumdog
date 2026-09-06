@@ -215,13 +215,25 @@ def fetch_settlement_capture(
     workers: int = 1,
     pause_seconds: int = 62,
     timeout: int = 45,
+    sports: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Fetch post-event Forebet listings for all sports on ``target_date``.
+    """Fetch post-event Forebet listings for sports on ``target_date``.
 
     Uses the existing :class:`ForebetCollector` with ``workers=1`` and
     ``62s`` pauses between sports. The capture is written under
     ``data/settlement_evidence/<target_date>/`` (separate from pre-event
     captures).
+
+    By default fetches every non-``current_only`` sport in ``SPORTS``
+    (the original, exhaustive behavior). Pass ``sports`` to restrict the
+    fetch to a specific subset — e.g. only the sports that actually
+    appear in a given prediction run's selections. Fetching sports with
+    no predictions to grade wastes the ``pause_seconds`` politeness
+    delay for no benefit, so callers that know which sports they need
+    (such as the automated D+1 settlement step) should pass ``sports``
+    explicitly. Unknown or ``current_only`` sport names in ``sports``
+    are silently dropped (never fetched), matching the unrestricted
+    default's exclusion of ``current_only`` sports.
 
     Returns a receipt dict with the same shape as the collector's
     capture receipt.
@@ -238,7 +250,13 @@ def fetch_settlement_capture(
 
     captured: list[RawCapture] = []
     failures: list[str] = []
-    sports_to_fetch = [s for s in SPORTS if not SPORTS[s].current_only]
+    all_fetchable = [s for s in SPORTS if not SPORTS[s].current_only]
+    if sports is None:
+        sports_to_fetch = all_fetchable
+    else:
+        allowed = set(all_fetchable)
+        # Preserve SPORTS registry order; drop unknown/current_only names.
+        sports_to_fetch = [s for s in all_fetchable if s in set(sports) & allowed]
 
     for i, sport in enumerate(sports_to_fetch):
         if i > 0:
@@ -788,6 +806,7 @@ def settle_run(
     pause_seconds: int = 62,
     timeout: int = 45,
     settled_at: str | None = None,
+    sports: list[str] | None = None,
 ) -> SettlementResult:
     """Settle a frozen shadow prediction run.
 
@@ -803,6 +822,13 @@ def settle_run(
         pause_seconds: Pause between sport fetches (62s default).
         timeout: Per-request timeout in seconds.
         settled_at: Override the settlement timestamp.
+        sports: Optional subset of sports to fetch during the network
+            settlement capture (ignored when ``offline`` is True, since
+            an offline run reuses a pre-existing receipt). Defaults to
+            every non-``current_only`` sport when omitted, matching
+            :func:`fetch_settlement_capture`'s default. Grading itself
+            is unaffected: only sports present in the prediction run's
+            own entries are ever graded regardless of this parameter.
 
     Returns:
         A :class:`SettlementResult` with artifact paths and checksums.
@@ -832,6 +858,7 @@ def settle_run(
         settlement_receipt = fetch_settlement_capture(
             target_date, repo_root,
             workers=workers, pause_seconds=pause_seconds, timeout=timeout,
+            sports=sports,
         )
 
     # Step 4: Parse settled results
@@ -883,11 +910,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    help="Pause between sport fetches (default: 62)")
     p.add_argument("--timeout", type=int, default=45,
                    help="Per-request timeout seconds (default: 45)")
+    p.add_argument("--sports", default=None,
+                   help="Comma-separated subset of sports to fetch during "
+                        "settlement capture (default: all non-current_only "
+                        "sports). Grading is unaffected by this flag; it "
+                        "only limits which post-event listings are fetched.")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
+    sports = None
+    if args.sports:
+        sports = [s.strip() for s in args.sports.split(",") if s.strip()]
     try:
         result = settle_run(
             target_date=args.date,
@@ -897,6 +932,7 @@ def main(argv: list[str] | None = None) -> int:
             settlement_receipt_path=args.settlement_receipt,
             pause_seconds=args.pause_seconds,
             timeout=args.timeout,
+            sports=sports,
         )
     except SettlementError as e:
         print(f"SETTLEMENT_FAILED: {e}", file=sys.stderr)
