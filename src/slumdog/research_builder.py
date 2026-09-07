@@ -44,10 +44,10 @@ class ExampleSink(Protocol):
     def emit(self, example: PriceFreeUnderdogExample) -> None: ...
 
 
-RESEARCH_FEATURE_CONTRACT_VERSION = "price-free-v2-incremental-valid-history"
+RESEARCH_FEATURE_CONTRACT_VERSION = "price-free-incremental-valid-history"
 
 
-RESEARCH_INPUT_DIGEST_DOMAIN = "slumdog-research-input-v2"
+RESEARCH_INPUT_DIGEST_DOMAIN = "slumdog-research-input"
 
 
 def research_history_eligible(row: SettledEvent) -> bool:
@@ -192,7 +192,7 @@ def _compute_research_input_digest(
     """Research input digests: per-sport SHA-256 over the LF-terminated
     _canonical_event_repr JSONL (rows sorted by (event_date, event_id));
     combined SHA-256 over the exact bytes
-    ``slumdog-research-input-v2\\n`` + per-sport ``sport\\nrow_count\\ndigest\\n``
+    ``slumdog-research-input\\n`` + per-sport ``sport\\nrow_count\\ndigest\\n``
     blocks sorted by sport. Full 64-hex digests, never truncated.
 
     Returns (combined_input_digest, sport_digests).

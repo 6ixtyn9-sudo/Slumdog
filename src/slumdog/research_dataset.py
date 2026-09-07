@@ -8,8 +8,8 @@ aggregates -> streaming deterministic artifacts (examples gz streamed as
 produced, bounded sample = first N emitted, receipt last, safe
 no-overwrite finalization).
 
-Feature contract price-free-v2-incremental-valid-history on every emitted
-example, sample, and receipt; label contract unchanged (price-free-v1).
+Feature contract price-free-incremental-valid-history on every emitted
+example, sample, and receipt; label contract unchanged (price-free).
 NOT authorized here: models, ranking, production, wagering. Must never be
 imported by production pipeline modules (pipeline, training, backfill,
 depth_sweep, research, forebet, cli).

@@ -459,7 +459,7 @@ def test_no_pick_daily_shortlist_serializes_with_zero_candidates():
         strong_candidates=(),
         watchlist_candidates=(),
         rejection_counts={"INSUFFICIENT_EVIDENCE": 10, "EQUAL_PROBABILITY": 5},
-        assessment_version="price-free-v1",
+        assessment_version="test-version-x",
         source_receipt="capture_2026-08-24.json",
     )
     assert daily.status == DailyShortlistStatus.NO_STRONG_UNDERDOG

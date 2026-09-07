@@ -101,8 +101,8 @@ def make_example_row(
         "missingness": missingness,
         "source_url": f"/en/{sport}/matches/x/y/{event_id}",
         "raw_sha256": "a" * 64,
-        "feature_contract_version": "price-free-v2-incremental-valid-history",
-        "label_contract_version": "price-free-v1",
+        "feature_contract_version": "price-free-incremental-valid-history",
+        "label_contract_version": "price-free",
         "exclusion_reason": None,
         "legacy_provenance_missing": False,
     }

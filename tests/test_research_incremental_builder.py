@@ -51,7 +51,7 @@ from slumdog.research_dataset import (
 )
 
 RESEARCH_FEATURE_CONTRACT = RESEARCH_FEATURE_CONTRACT_VERSION
-BASELINE_LABEL_CONTRACT = "price-free-v1"
+BASELINE_LABEL_CONTRACT = "price-free"
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +413,7 @@ def test_research_input_digest_exact_bytes():
         h.update((json.dumps(canon, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8"))
     expected_sport = h.hexdigest()
     expected_combined = hashlib.sha256(
-        b"slumdog-research-input-v2\n"
+        b"slumdog-research-input\n"
         + f"hockey\n{len(rows_by_sport['hockey'])}\n{expected_sport}\n".encode("utf-8")
     ).hexdigest()
     assert sport_digests["hockey"] == expected_sport

@@ -32,6 +32,8 @@ from pathlib import Path
 from typing import Any
 
 from .dataset import (
+    FEATURE_CONTRACT_VERSION,
+    LABEL_CONTRACT_VERSION,
     ValidEventWithSource,
     build_conflict_census,
     build_dataset_with_raw_accounting,
@@ -346,8 +348,8 @@ def audit_dataset(
             "eligible_date_max": None,
             "date_min": None,
             "date_max": None,
-            "feature_contract_version": "price-free-v1-minimal-2026-08-24",
-            "label_contract_version": "price-free-v1",
+            "feature_contract_version": FEATURE_CONTRACT_VERSION,
+            "label_contract_version": LABEL_CONTRACT_VERSION,
             "input_digest": "no-input",
             "per_sport": {},
             "conflicting_composite_keys": 0,

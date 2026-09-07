@@ -58,6 +58,7 @@ from slumdog.shadow_evaluator import (
     safe_cutoff_utc,
     validate_event_identity,
 )
+from slumdog.research_builder import RESEARCH_FEATURE_CONTRACT_VERSION
 from slumdog.shadow_contracts import PreEventRecord
 
 
@@ -90,10 +91,22 @@ FROZEN_CONFIG_PATH = REPO_ROOT / "config" / "research_baselines.json"
 # obtained ONLY after the base-vs-current comparison above. If the
 # current digest ever stops matching, this test will fail BEFORE the
 # hardcoded value is updated.
+#
+# ONE-TIME RE-BASELINE (2026-09-07, owner sign-off): the dataset-contract
+# version strings were de-suffixed per explicit owner directive
+# (price-free-v1-minimal-2026-08-24 -> price-free-minimal-2026-08-24,
+# price-free-v1 -> price-free). Those two fields are embedded in every
+# serialized example, so the golden digest and byte count were re-anchored:
+#   digest: 1a97cb81...fca0d (above) -> ff8acd0be142d8793a06f5112498a0864
+#           f27be588897dfee26dd0b657da249b9
+#   bytes : 21430 -> 21340 (exactly -90 = 15 examples x 6 removed chars;
+#           the ONLY byte difference — example count and all feature values
+#           are unchanged). This re-anchor covers the rename ONLY; the
+#           digest must not be regenerated for any other change.
 GOLDEN_SHARED_FEATURE_DIGEST = (
-    "1a97cb81fc6521a99f1055a873975d562cae33fefce7468ceca929739f8fca0d"
+    "ff8acd0be142d8793a06f5112498a0864f27be588897dfee26dd0b657da249b9"
 )
-GOLDEN_CANONICAL_BYTE_COUNT = 21430
+GOLDEN_CANONICAL_BYTE_COUNT = 21340
 GOLDEN_EXAMPLE_COUNT = 15
 
 
@@ -1348,7 +1361,7 @@ def test_input_digest_commits_to_required_evidence(tmp_root, monkeypatch):
     assert len(ip["sidecar_digests"]) >= 1
     assert len(ip["raw_body_digests"]) >= 1
     # History feature contract version present
-    assert ip["history_feature_contract"] == "price-free-v2-incremental-valid-history"
+    assert ip["history_feature_contract"] == RESEARCH_FEATURE_CONTRACT_VERSION
     # At least one record tuple
     assert len(ip["capture_record_tuples"]) >= 1
     # input_digest is a 64-char hex
