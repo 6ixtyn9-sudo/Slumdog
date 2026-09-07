@@ -329,7 +329,7 @@ After R2 eligibility and R1 ranking, each `(sport, event_date)` group is
 sorted by `r1_sort_key`. Statuses are assigned:
 
 - `rank 1` → `PRIMARY_SHADOW_SELECTION`
-- `rank 2..3` → `TOP3_EVALUATION_COHORT`
+- `rank 2..N` → `TOP3_EVALUATION_COHORT` (as originally implemented, N=3; UNCAPPED since the 2026-09-07 owner amendment — every remaining eligible-ranked event now gets this status, so `ELIGIBLE_RANKED_BEYOND_TOP3` below is unreachable unless the config sets a positive integer cap)
 - `rank 4+` → `ELIGIBLE_RANKED_BEYOND_TOP3`
 
 Sport-days with **zero** eligible events get
