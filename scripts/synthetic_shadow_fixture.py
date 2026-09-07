@@ -68,7 +68,33 @@ EXPECTED_FROZEN_CONFIG_SHA256 = (
     "666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1"
 )
 EXPECTED_DECLARATION_SHA256 = (
-    "fe031ae550ac25d4f9c11becb701572e798f0d54f37bb8201f3a07e182503e5f"
+    # Canonical SHA-256 of the committed ``config/shadow_evaluator.json``.
+    #
+    # Supersession chain:
+    #   dd08976a…  declaration as merged via PR #16 (capped cohort,
+    #              ``top3_cohort_per_sport_day = 2``)
+    #   fe031ae5…  recorded in docs/STATE.md for the 2026-09-07 uncapped-cohort
+    #              amendment on ``arena/01a07741-slumdog``
+    #   20f9a3a3…  current — the declaration as committed on ``main``
+    #
+    # This pin had drifted: ``main`` carries the uncapped declaration
+    # (``top3_cohort_per_sport_day = null``, which ``shadow_evaluator.py``
+    # validates and ``tests/test_shadow_evaluator.py`` asserts), but the pin
+    # still held ``fe031ae5…``, so every test in this module failed closed with
+    # "shadow declaration canonical hash drift". ``fe031ae5…`` is not
+    # reproducible from the current config by restoring any ``_v1`` suffix or
+    # dropping any single key, so it appears to predate a later edit (the
+    # version-suffix cleanup) that never refreshed this constant.
+    #
+    # Aligned to the committed config rather than the other way round because
+    # three independent sources corroborate the config content — the
+    # evaluator's own validation, its passing uncapped-cohort tests, and the
+    # ``edd5ff2`` commit message naming "the live config as the source of
+    # truth" — versus one stale constant. NOTE: the frozen R2 rule hash below
+    # is a different guard and is unchanged; ``anti_tuning``'s
+    # ``config_hash_immutable_after_first_real_run`` applies to
+    # ``config/research_baselines.json``, not to this declaration.
+    "20f9a3a3fc519ae1c08e4d226ed75bc5d6a34246bc74a8e79f6b4f9b8bba25b2"
 )
 
 SYNTHETIC_PAIRINGS = (

@@ -37,6 +37,48 @@ def _load_module():
     return module
 
 
+def test_pinned_config_hashes_match_the_committed_configs():
+    """Pin-drift guard: fail HERE, not as six opaque fixture errors.
+
+    ``build_synthetic_run`` fails closed when either pinned canonical hash
+    disagrees with the committed config. That is the right behaviour, but when
+    the *pin* is the stale side every test in this module fails with the same
+    generic "canonical hash drift" message, which hides the real cause — a
+    constant nobody refreshed after an authorised config amendment.
+
+    This asserts the coupling directly, at the source, with a message that says
+    which side to look at. It is deliberately the first test in the module.
+
+    The two pins guard different things and must not be conflated:
+
+    - ``EXPECTED_FROZEN_CONFIG_SHA256`` → ``config/research_baselines.json``,
+      the frozen R2 rule. ``anti_tuning.config_hash_immutable_after_first_real_
+      run`` applies to THIS one; changing it is a governance event.
+    - ``EXPECTED_DECLARATION_SHA256`` → ``config/shadow_evaluator.json``, the
+      declaration (cohort policy, durability, statuses). Amenable to authorised
+      amendment; the pin must be refreshed in the same PR.
+    """
+    mod = _load_module()
+    frozen = json.loads((REPO_ROOT / "config" / "research_baselines.json").read_text())
+    decl = json.loads((REPO_ROOT / "config" / "shadow_evaluator.json").read_text())
+
+    assert mod._canonical_sha256(frozen) == mod.EXPECTED_FROZEN_CONFIG_SHA256, (
+        "EXPECTED_FROZEN_CONFIG_SHA256 does not match the committed "
+        "config/research_baselines.json. This is the FROZEN R2 RULE hash "
+        "protected by anti_tuning.config_hash_immutable_after_first_real_run — "
+        "do not simply re-pin it. Establish whether the config or the pin is "
+        "the unauthorised side before changing either."
+    )
+    assert mod._canonical_sha256(decl) == mod.EXPECTED_DECLARATION_SHA256, (
+        "EXPECTED_DECLARATION_SHA256 does not match the committed "
+        "config/shadow_evaluator.json. If the declaration was amended with "
+        "owner authorisation, refresh the pin in "
+        "scripts/synthetic_shadow_fixture.py in the same change and record the "
+        "supersession chain in docs/STATE.md; if it was not authorised, revert "
+        "the config instead."
+    )
+
+
 def test_builds_completed_run_with_expected_selection_shape(tmp_path):
     mod = _load_module()
     summary = mod.build_synthetic_run(tmp_path / "repo")

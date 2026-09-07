@@ -46,6 +46,7 @@ import argparse
 import datetime as _dt
 import hashlib
 import json
+import math
 import os
 import sys
 import time
@@ -64,6 +65,7 @@ from .settlement import (
 )
 from .shadow_contracts import key_of
 from .sports import SPORTS
+from .underdog import identify_forebet_underdog
 
 
 # ---------------------------------------------------------------------------
@@ -87,8 +89,8 @@ GRADE_UNSETTLED = "UNSETTLED"
 
 def grade_underdog_win(
     *,
-    underdog_index: int,
-    winner_index: int,
+    underdog_index: int | None,
+    winner_index: int | None,
     disposition: str,
     sport: str,
 ) -> str:
@@ -108,16 +110,33 @@ def grade_underdog_win(
       or ``UNRESOLVED`` (two-way sports where draw is anomalous)
     - ``winner_index == underdog_index`` → ``SUCCESS``
     - Otherwise → ``FAILURE``
+
+    Ungradable inputs are reported as ``UNRESOLVED``, never as ``FAILURE``:
+
+    - ``winner_index is None`` → ``UNRESOLVED``. There is no result to grade.
+      (Previously this fell through both equality tests — ``None == 0`` and
+      ``None == underdog_index`` are both False — and silently returned
+      ``FAILURE``, manufacturing a decided loss out of a missing result.)
+    - ``underdog_index`` not in {1, 2} → ``UNRESOLVED`` *when a winner exists*.
+      ``0`` is the draw sentinel, so comparing a real winner against a missing
+      identity can never yield ``SUCCESS``; it can only fabricate ``FAILURE``.
+      Refusing to grade is the honest outcome. Note the draw branches above run
+      first and are unaffected: a draw is a failed ``UNDERDOG_WIN`` regardless
+      of which participant was the underdog, so those stay ``FAILURE``.
     """
     disp = (disposition or "SETTLED").upper()
     if disp in ("VOID", "NO_CONTEST", "CANCELLED", "ABANDONED", "ABANDON"):
         return GRADE_UNRESOLVED
     if disp in ("SETTLED_DRAW",):
         return GRADE_FAILURE
+    if winner_index is None:
+        return GRADE_UNRESOLVED
     if winner_index == 0:
         spec = SPORTS.get(sport)
         if spec and spec.draw_possible:
             return GRADE_FAILURE
+        return GRADE_UNRESOLVED
+    if underdog_index not in (1, 2):
         return GRADE_UNRESOLVED
     if winner_index == underdog_index:
         return GRADE_SUCCESS
@@ -379,9 +398,9 @@ class SettlementGrade:
     source: str  # "selections" or "considered_pool"
     considered_status: str
     rank_within_sport_day: int | None
-    underdog_index: int
+    underdog_index: int | None
     underdog_probability: float | None
-    favorite_index: int
+    favorite_index: int | None
     favorite_probability: float | None
     grade: str  # SUCCESS, FAILURE, UNRESOLVED, UNSETTLED
     winner_index: int | None
@@ -391,6 +410,12 @@ class SettlementGrade:
     settled_participant_1: str
     settled_participant_2: str
     match_method: str  # "exact_event_id", "identity_match", "no_match"
+    # Where the underdog identity came from: "entry" (carried by the prediction
+    # run), "capture_record_tuples" (re-derived from committed pre-event
+    # probabilities), or "unavailable" (no identity, so the row cannot grade
+    # SUCCESS or FAILURE). Recorded so a reader can tell a graded row from a
+    # recovered one without re-deriving anything.
+    underdog_index_provenance: str = ""
 
 
 def _match_settled(
@@ -453,6 +478,68 @@ def _entry_participants(entry: dict[str, Any]) -> tuple[str, str]:
     return entry.get("_p1", ""), entry.get("_p2", "")
 
 
+def _to_float_or_none(value: Any) -> float | None:
+    """Coerce a stored probability to float, or None if absent/invalid."""
+    if value is None:
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _resolve_underdog_identity(
+    entry: dict[str, Any],
+    prob_lookup: dict[str, tuple[Any, Any, Any]],
+    composite_key: str,
+) -> tuple[int | None, float | None, int | None, float | None, str]:
+    """Resolve the underdog/favorite identity for one graded entry.
+
+    Returns ``(underdog_index, underdog_probability, favorite_index,
+    favorite_probability, provenance)`` where ``provenance`` is one of
+    ``entry`` (carried by the prediction run), ``capture_record_tuples``
+    (re-derived), or ``unavailable``.
+
+    ``selections[]`` entries carry the identity directly. ``considered_pool[]``
+    entries written before the identity-serialisation fix carry only six keys,
+    so the identity is re-derived from the **pre-event** probabilities already
+    committed in the manifest's ``input_provenance.capture_record_tuples``,
+    using the same frozen rule the evaluator uses
+    (:func:`~slumdog.underdog.identify_forebet_underdog` — higher probability is
+    the favorite, lower is the underdog).
+
+    This never consults a post-event fact and never invents a value. When the
+    probabilities are absent, or the identity is genuinely undecidable (equal
+    probabilities), the result is ``None`` — never the ``0`` draw sentinel that
+    made a rank-4+ ``SUCCESS`` structurally unreachable.
+    """
+    if entry.get("underdog_index") in (1, 2):
+        return (
+            entry["underdog_index"],
+            _to_float_or_none(entry.get("underdog_probability")),
+            entry.get("favorite_index"),
+            _to_float_or_none(entry.get("favorite_probability")),
+            "entry",
+        )
+    probs = prob_lookup.get(composite_key)
+    if probs is not None:
+        identity = identify_forebet_underdog(
+            _to_float_or_none(probs[0]),
+            _to_float_or_none(probs[1]),
+            _to_float_or_none(probs[2]),
+        )
+        if identity.underdog_index in (1, 2):
+            return (
+                identity.underdog_index,
+                _to_float_or_none(identity.underdog_probability),
+                identity.favorite_index,
+                _to_float_or_none(identity.favorite_probability),
+                "capture_record_tuples",
+            )
+    return (None, None, None, None, "unavailable")
+
+
 def grade_all_entries(
     event_index: dict[str, dict[str, Any]],
     settled_rows: list[SettledEvent],
@@ -481,12 +568,19 @@ def grade_all_entries(
 
     # Try to enrich from capture_record_tuples in input_provenance
     input_prov = manifest.get("input_provenance", {})
+    prob_lookup: dict[str, tuple[Any, Any, Any]] = {}
     for tup in input_prov.get("capture_record_tuples", []):
         if isinstance(tup, (list, tuple)) and len(tup) >= 4:
             sport, eid, edate, p1 = tup[0], tup[1], tup[2], tup[3]
             p2 = tup[4] if len(tup) > 4 else ""
             key = f"{sport}:{eid}:{edate}"
             name_lookup[key] = (str(p1), str(p2))
+            # Tuple layout (see shadow_evaluator.capture_record_tuples):
+            # 0 sport, 1 event_id, 2 event_date, 3 participant_1,
+            # 4 participant_2, 5 probability_1, 6 probability_2,
+            # 7 draw_probability, 8 raw_sha256, 9 captured_at, ...
+            if len(tup) >= 8:
+                prob_lookup[key] = (tup[5], tup[6], tup[7])
 
     grades: list[SettlementGrade] = []
     for composite_key, entry in sorted(event_index.items()):
@@ -497,11 +591,17 @@ def grade_all_entries(
         considered_status = entry.get("status", entry.get("considered_status", ""))
         rank = entry.get("rank_within_sport_day")
 
-        # Extract underdog/favorite info
-        underdog_index = entry.get("underdog_index", 0)
-        underdog_prob = entry.get("underdog_probability")
-        favorite_index = entry.get("favorite_index", 0)
-        favorite_prob = entry.get("favorite_probability")
+        # Extract underdog/favorite info. A missing identity is NEVER defaulted
+        # to ``0`` — that is the draw sentinel, and silently substituting it
+        # made a rank-4+ SUCCESS structurally unreachable (see
+        # _resolve_underdog_identity).
+        (
+            underdog_index,
+            underdog_prob,
+            favorite_index,
+            favorite_prob,
+            identity_provenance,
+        ) = _resolve_underdog_identity(entry, prob_lookup, composite_key)
 
         # Get participant names for identity matching
         names = name_lookup.get(composite_key, ("", ""))
@@ -524,6 +624,7 @@ def grade_all_entries(
                 score_1=None, score_2=None,
                 settled_participant_1="", settled_participant_2="",
                 match_method=match_method,
+                underdog_index_provenance=identity_provenance,
             ))
             continue
 
@@ -548,6 +649,7 @@ def grade_all_entries(
             settled_participant_1=settled.participant_1,
             settled_participant_2=settled.participant_2,
             match_method=match_method,
+            underdog_index_provenance=identity_provenance,
         ))
     return grades
 
@@ -730,6 +832,7 @@ def write_settlement_artifact(
             "settled_participant_1": g.settled_participant_1,
             "settled_participant_2": g.settled_participant_2,
             "match_method": g.match_method,
+            "underdog_index_provenance": g.underdog_index_provenance,
         })
 
     settlement_payload = {
@@ -742,6 +845,11 @@ def write_settlement_artifact(
             "draw_is_failure": True,
             "void_is_unresolved": True,
             "not_found_is_unsettled": True,
+            # An entry whose underdog identity cannot be resolved to 1 or 2 has
+            # no basis for a SUCCESS/FAILURE decision and is reported
+            # UNRESOLVED. It is never compared against the 0 draw sentinel.
+            "missing_underdog_identity_is_unresolved": True,
+            "missing_winner_is_unresolved": True,
         },
         "grades": sorted(
             grade_dicts,

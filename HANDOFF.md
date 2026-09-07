@@ -1,10 +1,96 @@
 # Slumdog Living Handoff
 
-**Last updated:** 2026-09-07 (UTC) — **TWO CHANGES IMPLEMENTED ON `arena/01a07741-slumdog`, PR PENDING OWNER SIGN-OFF** — (1) uncapped-cohort amendment: `cohort_policy.top3_cohort_per_sport_day = null` so every R2-eligible, R1-ranked event per sport-day is recorded (downstream recording width ONLY — R2 thresholds and R1 ranking untouched/frozen); (2) Milestone 7D retired: orphaned `tests/test_cloud_backup_workflow.py` deleted (its workflow was owner-deleted from `main` 2026-09-03, `5641111`, leaving 12 tests failing and masked by `--deselect` ever since). Full suite now **718 passed, 0 deselected, 0 skipped**. Prior state: Milestone 7E (automated D+1 settlement) MERGED VIA PR #16 (`c06659c`) AND PROVEN IN PRODUCTION — three dates settled by real dispatches (2026-09-02, 09-05, 09-06); `972b79a` fixed the `SHADOW_RUN_BLOCKED` history-selection bug; review + addendum docs archived. Training FROZEN, PRODUCTION NOT AUTHORIZED.
+**Last updated:** 2026-09-07 (UTC) — **RANK-4+ SETTLEMENT GRADING DEFECT FOUND, QUANTIFIED AND REMEDIATED ON `arena/01a07b8b-slumdog`** — every rank-4+ grade in the three committed `settlement.json` files was fabricated: `considered_pool[]` never carried `underdog_index`, settlement defaulted the gap to `0` (the draw sentinel), and a rank-4+ `SUCCESS` was therefore structurally unreachable. True rate is **270/820 = 32.9%**, not the reported 0/798. Fixed forward, erratum published append-only, originals untouched. Full suite now **744 passed, 0 failed, 0 deselected, 0 skipped** (was 718, plus 6 pre-existing failures from a stale declaration-hash pin, now fixed). See `## Rank-4+ Settlement Grading Defect` below and `docs/ADVERSARIAL_REVIEW_RANK4_SETTLEMENT_FINDINGS.md`.
 
-**Branch:** `arena/01a07741-slumdog` (uncapped-cohort + Milestone 7D retirement session, from `main` @ `02cce6f`)
-**Base commit:** `02cce6f0f74478062d86f8dab210ebdf3d7454cd` (main tip at this verification)
-**Tests:** 718 passed, 0 deselected, 0 skipped (`python -m pytest` — see launch-invocation note in Milestone 7F section)
+Prior state: **TWO CHANGES IMPLEMENTED ON `arena/01a07741-slumdog`, PR PENDING OWNER SIGN-OFF** — (1) uncapped-cohort amendment: `cohort_policy.top3_cohort_per_sport_day = null` so every R2-eligible, R1-ranked event per sport-day is recorded (downstream recording width ONLY — R2 thresholds and R1 ranking untouched/frozen); (2) Milestone 7D retired: orphaned `tests/test_cloud_backup_workflow.py` deleted (its workflow was owner-deleted from `main` 2026-09-03, `5641111`, leaving 12 tests failing and masked by `--deselect` ever since). Before that: Milestone 7E (automated D+1 settlement) MERGED VIA PR #16 (`c06659c`) AND PROVEN IN PRODUCTION — three dates settled by real dispatches (2026-09-02, 09-05, 09-06); `972b79a` fixed the `SHADOW_RUN_BLOCKED` history-selection bug; review + addendum docs archived. Training FROZEN, PRODUCTION NOT AUTHORIZED.
+
+**Branch:** `arena/01a07b8b-slumdog` (adversarial review + rank-4+ remediation session, from `main` @ `edd5ff2`)
+**Base commit:** `edd5ff22bd5ad499247b6dcb97d3aee11e5807d1` (main tip at this verification; shallow clone — only this one commit is present locally)
+**Tests:** 744 passed, 0 failed, 0 deselected, 0 skipped (`python -m pytest`)
+**Working tree:** committed on `arena/01a07b8b-slumdog`. **Push blocked** — this sandbox has no GitHub credential path (`git push` → `could not read Username for 'https://github.com'`); the owner must reconnect GitHub in Arena or push from the Codespace. Changes: `src/slumdog/shadow_evaluator.py`, `src/slumdog/shadow_settle.py`, `scripts/synthetic_shadow_fixture.py` (stale declaration-hash pin), new `scripts/rank4_settlement_erratum.py`, new `tests/test_rank4_settlement_erratum.py`, extended `tests/test_shadow_settle.py` + `tests/test_shadow_evaluator.py` + `tests/test_synthetic_shadow_fixture.py`, new `docs/ADVERSARIAL_REVIEW_RANK4_SETTLEMENT_FINDINGS.md`, new `data/reports/shadow/errata/**`, `docs/STATE.md` + this file refreshed. **No committed evidence, config, or workflow file was modified.**
+
+## Rank-4+ Settlement Grading Defect
+
+Found during an adversarial review of a Wilson-lower-bound "certification" tool
+(the tool itself — `src/slumdog/certification.py`, commits `e720973`/`3051df2` —
+is **not present** in this clone; only its inputs and the upstream grading path
+could be audited).
+
+**Defect.** `shadow_evaluator.py` built `considered_pool[]` entries with six
+keys and dropped the underdog identity that was in scope at that exact point
+(it serialises that same identity into `selections[]`). `shadow_settle.py` then
+did `entry.get("underdog_index", 0)`, and `0` is this schema's draw sentinel.
+`grade_underdog_win` intercepts `winner_index == 0` before the
+`winner_index == underdog_index` test, so with `underdog_index == 0` **no
+input can ever produce SUCCESS** — verified exhaustively over 768
+sport × disposition × winner combinations. All 867 rank-4+ rows across the
+three settled dates carry `underdog_index == 0`; all 820 decided rows graded
+`FAILURE`.
+
+**Why tests missed it.** `tests/test_shadow_settle.py`'s fixture hand-supplied
+`underdog_index: 2` for the pool entry — a field production never emitted — so
+the suite graded a fictional schema and passed. `test_r4plus_from_pool`
+asserted only `_source`, never a grade. `tests/test_shadow_evaluator.py`
+asserted the rank-4+ branch was unreachable while committed manifests held
+1317 such rows.
+
+**Corrected numbers.** Identity re-derived from pre-event probabilities already
+committed in each manifest's `input_provenance.capture_record_tuples`, using the
+frozen `identify_forebet_underdog` rule (higher prob = favorite). Method
+validated 9/9 against `selections[]` rows whose identity is known; all 270
+corrected rows independently audited against raw probabilities *and* scorelines.
+
+| date | decided | committed SUCCESS | corrected SUCCESS |
+|---|---|---|---|
+| 2026-09-02 | 22 | 0 | 6 |
+| 2026-09-05 | 480 | 0 | 168 |
+| 2026-09-06 | 318 | 0 | 96 |
+| **total** | **820** | **0 (0.0%)** | **270 (32.9%)** |
+
+Wilson 95% corrected: [0.298, 0.362]. Ranks 1–3 unaffected (9/9 re-grade
+identically). The previously reported "n=798 across 3 dates" was wrong twice:
+798 = 480 + 318, so **2026-09-02 was never read** — two settlement artifacts
+exist for run `acd78872019300ff` under different schemas
+(`<run>/settlement.json`, 27 rows, vs `settlements/<date>/<run>.settlement.json`,
+3 rows) and the glob resolved to the wrong one.
+
+**Remediation.**
+- `scripts/rank4_settlement_erratum.py` → `data/reports/shadow/errata/<date>/<run_id>.rank4_erratum.json` + `.sha256`. Verifies each original against its marker, **fails closed** on overwrite (`--check`/`--stdout` write nothing). Originals confirmed byte-identical before and after.
+- `shadow_evaluator.py`: identity serialised into every eligible pool entry (`None` when undecidable, never `0`). Digest-safe — `pool_for_digest` projects a fixed 6-field tuple, so `decision_digest`/`run_id` are unchanged.
+- `shadow_settle.py`: `_resolve_underdog_identity` recovers identity from `capture_record_tuples` for legacy manifests; rows record `underdog_index_provenance` (`entry` / `capture_record_tuples` / `unavailable`); `grade_underdog_win` returns `UNRESOLVED` rather than fabricating `FAILURE` when identity or winner is missing.
+- Schema pinned both sides via `CONSIDERED_POOL_ELIGIBLE_KEYS`.
+
+**Governance.** Instrument correction, not a rule change: `grading_contract`,
+the grading function's contract and the frozen R2 rule are untouched, and
+`config/research_baselines.json` — the hash `anti_tuning` protects — is
+unchanged at `666dabe7…`. Only pre-event data already in git was read, so no
+post-event fact enters a feature and nothing missing is zero-filled.
+**The corrected numbers restate the record; they must not be used to justify
+any threshold, rule, or config amendment.**
+
+**Open items for the owner.**
+1. `data/reports/shadow/errata/` is a new artifact type **not enumerated in the
+   `AGENTS.md` scoped commit waiver**. Small JSON (5–86 KB), same spirit — but
+   extend the waiver explicitly or relocate.
+2. The declaration-hash pin in `scripts/synthetic_shadow_fixture.py` was stale
+   (`fe031ae5…` vs the committed config's `20f9a3a3…`), failing all 6 tests in
+   that module on `main`. Aligned to the committed config, because three
+   sources corroborate the config content (evaluator validation, its passing
+   uncapped tests, the `edd5ff2` commit message) versus one stale constant.
+   `fe031ae5…` is not reproducible from the current config by restoring any
+   `_v1` suffix or dropping any single key — **reconcile against full git
+   history**; this shallow clone has one commit.
+3. Forward consequence: with `top3_cohort_per_sport_day = null` the rank-4+
+   branch is unreachable, so `ranks_4_plus` will read **n = 0 for every future
+   date** while the 867 historical rows stay corrected only via the erratum.
+   Any tool reporting that tier must treat n=0 as "tier no longer produced",
+   not "no data yet".
+4. If the Wilson "certification" tool is revived, it needs a **validity gate**,
+   not a sample-size gate: assert every graded row has
+   `underdog_index ∈ {1, 2}` and refuse to emit a bound for a tier whose
+   numerator is unreachable. A confidence interval quantifies sampling error
+   only — on this data it produced a beautifully tight bound around a
+   structurally forced zero.
 **Working tree:** committed on `arena/01a07741-slumdog`, pushed, PR #17 against `main` open for owner sign-off. Changes: `config/shadow_evaluator.json` (renamed, `top3_cohort_per_sport_day: null` = UNCAPPED), `src/slumdog/shadow_evaluator.py`, `scripts/synthetic_shadow_fixture.py`, `tests/test_shadow_evaluator.py`, deleted `tests/test_cloud_backup_workflow.py`, version-suffix cleanup across code/config/docs (config renames + de-suffixed artifact schema tags), sport-eligibility findings folded into this file (standalone addendum file deleted per owner directive — no doc bloat), `docs/STATE.md` refreshed. No workflow files touched.
 
 ## Cloud-Native Evidence Architecture

@@ -76,6 +76,35 @@ FROZEN_R2_PATH = (
 
 
 # ---------------------------------------------------------------------------
+# considered_pool[] schema contract
+# ---------------------------------------------------------------------------
+# Single source of truth for the manifest's ``considered_pool[]`` entry shape.
+# Both sides are pinned to these so a fixture cannot silently diverge from what
+# production emits: ``tests/test_shadow_evaluator.py`` asserts real manifests
+# match, and ``tests/test_shadow_settle.py`` asserts its fixture matches.
+#
+# The eligible shape MUST carry the underdog identity. Omitting it left the
+# settlement stage with no underdog to compare the real winner against, so it
+# defaulted to ``0`` — the draw sentinel — and a rank-4+ SUCCESS became
+# structurally unreachable (every such row graded FAILURE regardless of the
+# actual result). Identity values are ``None`` when genuinely undecidable,
+# never ``0``: missing stays missing.
+#
+# Adding or removing a key here does NOT change ``decision_digest`` or
+# ``run_id``: ``pool_for_digest`` projects a fixed 6-field tuple.
+CONSIDERED_POOL_ELIGIBLE_KEYS = frozenset({
+    "sport", "event_id", "event_date", "considered_status", "eligible",
+    "rank_within_sport_day",
+    "underdog_index", "underdog_probability",
+    "favorite_index", "favorite_probability", "draw_probability",
+})
+CONSIDERED_POOL_INELIGIBLE_KEYS = frozenset({
+    "sport", "event_id", "event_date", "considered_status", "eligible",
+    "rank_within_sport_day",
+})
+
+
+# ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
 
@@ -946,6 +975,10 @@ def _emit_run(
     #    rank loop (identity-ineligible, feature-incomplete).
     for ev in per_record_evals:
         cs = ev.get("considered_status") or ev.get("status")
+        # Bound per-iteration on purpose: the rank loop above also uses the name
+        # ``identity``, and relying on that binding leaking would attach the
+        # LAST event's identity to every pool entry.
+        identity = ev.get("identity")
         if cs in (
             "PRIMARY_SHADOW_SELECTION",
             "TOP3_EVALUATION_COHORT",
@@ -958,6 +991,25 @@ def _emit_run(
                 "considered_status": cs,
                 "eligible": True,
                 "rank_within_sport_day": ev.get("rank_within_sport_day"),
+                # The underdog identity is serialised for EVERY eligible pool
+                # entry, not just the top-3 ``selections[]``. Without it the
+                # settlement stage has no underdog to compare the real winner
+                # against, and defaulting the gap to ``0`` collides with the
+                # draw sentinel — which made a rank-4+ SUCCESS structurally
+                # unreachable. ``identity`` is already in scope here (the rank
+                # loop above dereferences it to build ``selections[]``).
+                # Missing stays missing: these are ``None``, never ``0``.
+                # Digest-safe: ``pool_for_digest`` projects a fixed 6-field
+                # tuple, so ``decision_digest``/``run_id`` are unchanged.
+                "underdog_index": getattr(identity, "underdog_index", None),
+                "underdog_probability": getattr(
+                    identity, "underdog_probability", None
+                ),
+                "favorite_index": getattr(identity, "favorite_index", None),
+                "favorite_probability": getattr(
+                    identity, "favorite_probability", None
+                ),
+                "draw_probability": getattr(identity, "draw_probability", None),
             })
         else:
             considered_pool_dicts.append({

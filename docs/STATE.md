@@ -1,6 +1,6 @@
 # Slumdog State — Canonical Current Truth
 
-**Last verified:** 2026-09-07 (UTC) — **`main` @ `02cce6f`** / **AUTOMATED D+1 SETTLEMENT LIVE AND PROVEN IN PRODUCTION** (three dates settled by real dispatches so far: 2026-09-02, 09-05, 09-06; artifacts on `main`) / **UNCAPPED-COHORT AMENDMENT + MILESTONE 7D RETIREMENT + VERSION-SUFFIX CLEANUP (owner directive 2026-09-07: no `_v1`/`_v2` naming, incl. dataset-contract version strings per owner sign-off; addendum folded into HANDOFF.md; sole exception: historical-file compatibility list in `dataset.py`) IMPLEMENTED ON `arena/01a07741-slumdog`, PR PENDING OWNER SIGN-OFF** / **FORWARD SHADOW WORKFLOW LIVE** (`.github/workflows/forward_shadow.yml`, `contents: write`, `actions: read`) / **SHADOW EVIDENCE IN GIT** (runs 2026-09-05..13 + settlements + bundles) / **CONTRACT AMENDED** (owner directive 2026-09-03 "no ledgers in Codespace") / **CODESPACE DEV-ONLY** / **PRODUCTION NOT AUTHORIZED** / **SHORTLIST POLICY NOT AUTHORIZED**. 718 tests pass, zero skips, zero deselects (the orphaned Milestone 7D test file was removed 2026-09-07 — see that milestone's entry).
+**Last verified:** 2026-09-07 (UTC) — **`main` @ `02cce6f`** / **AUTOMATED D+1 SETTLEMENT LIVE AND PROVEN IN PRODUCTION** (three dates settled by real dispatches so far: 2026-09-02, 09-05, 09-06; artifacts on `main`) / **UNCAPPED-COHORT AMENDMENT + MILESTONE 7D RETIREMENT + VERSION-SUFFIX CLEANUP (owner directive 2026-09-07: no `_v1`/`_v2` naming, incl. dataset-contract version strings per owner sign-off; addendum folded into HANDOFF.md; sole exception: historical-file compatibility list in `dataset.py`) IMPLEMENTED ON `arena/01a07741-slumdog`, PR PENDING OWNER SIGN-OFF** / **FORWARD SHADOW WORKFLOW LIVE** (`.github/workflows/forward_shadow.yml`, `contents: write`, `actions: read`) / **SHADOW EVIDENCE IN GIT** (runs 2026-09-05..13 + settlements + bundles) / **CONTRACT AMENDED** (owner directive 2026-09-03 "no ledgers in Codespace") / **CODESPACE DEV-ONLY** / **PRODUCTION NOT AUTHORIZED** / **SHORTLIST POLICY NOT AUTHORIZED**. 744 tests pass, zero skips, zero deselects, zero errors (the orphaned Milestone 7D test file was removed 2026-09-07 — see that milestone's entry).
 
 **Branch:** `arena/01a07741-slumdog` (uncapped-cohort amendment + Milestone 7D retirement session, from `main` @ `02cce6f`); `main` is only permanent branch
 **Doc canonical path:** `docs/STATE.md`
@@ -167,8 +167,8 @@ Real settlement (AUTOMATED, shadow_settle.py output, on main): 2026-09-02
   see docs/REVIEW_2026-09-06_STATUS_PERFORMANCE_RECOMMENDATIONS.md §5 and
   the "Sport Eligibility Findings" section of HANDOFF.md.
 Canonical config SHA-256: 666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1 (VERIFIED)
-New shadow declaration canonical SHA-256: fe031ae550ac25d4f9c11becb701572e798f0d54f37bb8201f3a07e182503e5f (VERIFIED, on branch arena/01a07741-slumdog after the uncapped-cohort amendment; supersedes dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597 which remains the hash of the declaration as merged via PR #16)
-Tests: 718 passed, 0 deselected, 0 skipped (2026-09-07: orphaned
+New shadow declaration canonical SHA-256: 20f9a3a3fc519ae1c08e4d226ed75bc5d6a34246bc74a8e79f6b4f9b8bba25b2 (matches the committed config/shadow_evaluator.json on main; supersedes fe031ae550ac25d4f9c11becb701572e798f0d54f37bb8201f3a07e182503e5f recorded for the uncapped-cohort amendment on arena/01a07741-slumdog, which in turn superseded dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597 as merged via PR #16 — see Verification for why the pin had drifted)
+Tests: 744 passed, 0 deselected, 0 skipped, 0 errors (2026-09-07: orphaned
   Milestone 7D test file removed — its 12 tests had failed on main since
   2026-09-03 when the owner deleted the workflow they police; previously
   masked by --deselect. Uncapped-cohort amendment renames/rewrites 1 test,
@@ -337,14 +337,85 @@ This mirrors the existing raw-capture policy: raw bytes are large and
 immutable; receipts and summaries are small and valuable for
 reproducibility.
 
+## Rank-4+ Settlement Erratum (2026-09-07)
+
+**Every rank-4+ grade in the three committed `settlement.json` files is wrong.**
+Full findings: `docs/ADVERSARIAL_REVIEW_RANK4_SETTLEMENT_FINDINGS.md`.
+
+Mechanism: `manifest.json`'s `considered_pool[]` entries never carried
+`underdog_index`, so `shadow_settle.grade_all_entries` defaulted the gap to
+`0` — this schema's **draw sentinel**. `grade_underdog_win` compares
+`winner_index == underdog_index`, and `winner_index == 0` is intercepted by an
+earlier branch, so with `underdog_index == 0` a rank-4+ `SUCCESS` was
+**structurally unreachable** (verified exhaustively: 0 of 768
+sport × disposition × winner combinations). Every rank-4+ row graded `FAILURE`
+regardless of the actual result.
+
+Why tests missed it: `tests/test_shadow_settle.py`'s fixture hand-supplied
+`underdog_index` for pool entries — a field production never emitted — so the
+suite validated a schema that did not exist. `test_r4plus_from_pool` asserted
+only `_source`, never a grade, and `test_shadow_evaluator.py` asserted the
+rank-4+ branch was unreachable while committed manifests held 1317 such rows.
+
+Corrected figures, re-derived from pre-event probabilities already committed in
+each manifest's `input_provenance.capture_record_tuples` via the frozen
+`identify_forebet_underdog` rule (method validated 9/9 against `selections[]`
+rows whose identity is known):
+
+| date | rank-4+ decided | committed SUCCESS | corrected SUCCESS |
+|---|---|---|---|
+| 2026-09-02 | 22 | 0 | 6 |
+| 2026-09-05 | 480 | 0 | 168 |
+| 2026-09-06 | 318 | 0 | 96 |
+| **total** | **820** | **0 (0.0%)** | **270 (32.9%)** |
+
+Wilson 95% for the corrected rate: [0.298, 0.362]. Primary/cohort tiers
+(ranks 1–3) verified **unaffected** — all 9 rows re-grade identically.
+
+Note the earlier "ranks_4_plus n=798 across 3 dates" figure was itself wrong
+twice over: 798 = 480 + 318, i.e. **2026-09-02 was never read** (two
+settlement artifacts exist for run `acd78872019300ff` under different schemas —
+see Current Status), and the numerator was forced to zero by the defect above.
+
+Remediation (append-only; no committed evidence was modified):
+
+- `scripts/rank4_settlement_erratum.py` regenerates the correction and writes
+  `data/reports/shadow/errata/<date>/<run_id>.rank4_erratum.json` + `.sha256`.
+  It verifies each original against its marker and **fails closed** rather than
+  overwriting. Originals confirmed byte-identical before and after.
+- Forward fixes: `shadow_evaluator.py` now serialises the identity into every
+  eligible pool entry (`None` when genuinely undecidable, never `0`);
+  `shadow_settle.py` recovers identity from `capture_record_tuples` for legacy
+  manifests, records `underdog_index_provenance` per row, and
+  `grade_underdog_win` returns `UNRESOLVED` instead of fabricating `FAILURE`
+  when identity or winner is missing.
+- Schema pinned on both sides via `CONSIDERED_POOL_ELIGIBLE_KEYS` so fixture and
+  production cannot silently diverge again.
+
+Governance: this is an **instrument correction, not a rule change**.
+`grading_contract`, `grade_underdog_win`'s contract and the frozen R2 rule are
+untouched; `config/research_baselines.json` (the hash `anti_tuning` protects) is
+unchanged at `666dabe7…`. The correction reads only pre-event data already in
+git, so no post-event fact enters a feature and nothing missing is zero-filled.
+**The corrected numbers restate the record and must not be used to justify any
+threshold, rule, or config amendment** — that would be exactly the
+result-driven tuning `anti_tuning` prohibits.
+
+Caveat on artifact scope: `data/reports/shadow/errata/` is a **new artifact
+type not enumerated in the `AGENTS.md` scoped commit waiver** (which lists
+`shadow_selections.json`, `manifest.json`, `capture_*.json`, `*.settlement.json`
++ markers, `*.bundle.json`, `*.tar.gz.sha256`, `status.tsv`). They are small
+JSON (5–86 KB) in the same spirit, but the owner should either extend the
+waiver explicitly or relocate them.
+
 ## Verification
 
-- pytest → 718 passed, 0 deselected, 0 skipped (verified 2026-09-07 via `python -m pytest` on `arena/01a07741-slumdog` @ uncapped-cohort amendment; bare `pytest` invocation NOT recommended — see Next section)
-- pyflakes src/slumdog scripts tests → clean on all new/changed files
+- pytest → **744 passed, 0 deselected, 0 skipped, 0 errors** (verified 2026-09-07 on `arena/01a07b8b-slumdog`: 718 baseline + 14 rank-4+/pin-drift regression tests + 12 erratum integrity tests)
+- pyflakes src/slumdog scripts tests → clean on all new/changed files (14 pre-existing warnings remain in untouched `tests/test_dataset_*`, `test_forward_shadow_batch`, `test_research_incremental_builder`)
 - py_compile scripts/*.py src/slumdog/*.py tests/*.py → ok
 - git diff --check → ok
-- Frozen baseline config SHA-256 → `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1` MATCH
-- New shadow declaration canonical SHA-256 → `fe031ae550ac25d4f9c11becb701572e798f0d54f37bb8201f3a07e182503e5f` (changed 2026-09-07 by the uncapped-cohort amendment on `arena/01a07741-slumdog`; previous: `dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597`)
+- Frozen baseline config SHA-256 → `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1` MATCH (unchanged — this is the hash `anti_tuning` protects)
+- Shadow declaration canonical SHA-256 → **`20f9a3a3fc519ae1c08e4d226ed75bc5d6a34246bc74a8e79f6b4f9b8bba25b2`** (matches the committed `config/shadow_evaluator.json` on `main`). Supersession: `dd08976a…` (as merged via PR #16, capped cohort) → `fe031ae5…` (recorded here for the uncapped-cohort amendment on `arena/01a07741-slumdog`) → `20f9a3a3…` (current). `fe031ae5…` is **not reproducible** from the current config by restoring any `_v1` suffix or dropping any single key, so it appears to predate a later edit (version-suffix cleanup) that never refreshed the pin in `scripts/synthetic_shadow_fixture.py`. That stale pin made all 6 `tests/test_synthetic_shadow_fixture.py` tests fail closed on `main`; the pin is now aligned to the committed config and `test_pinned_config_hashes_match_the_committed_configs` fails at the source with an actionable message if either side drifts again. **Owner should reconcile against full git history** — this shallow clone has one commit, so the intermediate content could not be inspected.
 - Golden regression → `1a97cb81fc6521a99f1055a873975d562cae33fefce7468ceca929739f8fca0d` (unchanged)
 - CLI: `python -m slumdog.shadow_evaluator --help` → exit 0
 - CLI: `python -m slumdog.shadow_settle --help` → exit 0

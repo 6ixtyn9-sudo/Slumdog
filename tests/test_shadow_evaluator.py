@@ -1594,6 +1594,34 @@ def test_uncapped_cohort_records_every_eligible_ranked_event(tmp_root, capsys, m
             "PRIMARY_SHADOW_SELECTION", "TOP3_EVALUATION_COHORT"
         ), f"pool status wrong while uncapped: {p}"
 
+    # SCHEMA PIN (production side). Eligible pool entries must carry the
+    # underdog identity. Omitting it is what made a rank-4+ SUCCESS
+    # structurally unreachable: settlement had no underdog to compare the real
+    # winner against, defaulted the gap to the ``0`` draw sentinel, and graded
+    # every such row FAILURE regardless of the result. Pinned here and by
+    # tests/test_shadow_settle.py::
+    # test_fixture_pool_entry_never_exceeds_production_schema (fixture side) so
+    # the two can never silently diverge again.
+    from slumdog.shadow_evaluator import CONSIDERED_POOL_ELIGIBLE_KEYS
+
+    eligible_pool = [p for p in pool if p.get("eligible")]
+    assert len(eligible_pool) == 8, f"expected 8 eligible pool entries: {pool}"
+    sel_by_id = {s["event_id"]: s for s in payload["selections"]}
+    for p in eligible_pool:
+        drift = set(p) ^ set(CONSIDERED_POOL_ELIGIBLE_KEYS)
+        assert not drift, f"considered_pool schema drift: {sorted(drift)}"
+        # ``0`` is the draw sentinel, not a participant — never a valid identity
+        assert p["underdog_index"] != 0, f"draw sentinel as underdog: {p}"
+        assert p["favorite_index"] != 0, f"draw sentinel as favorite: {p}"
+        # and it must agree with the identity already committed in selections[]
+        s = sel_by_id[p["event_id"]]
+        assert p["underdog_index"] == s["underdog_index"], (
+            f"pool/selection identity disagree for {p['event_id']}: "
+            f"pool={p['underdog_index']} selections={s['underdog_index']}"
+        )
+        assert p["underdog_probability"] == s["underdog_probability"]
+        assert p["favorite_probability"] == s["favorite_probability"]
+
     # Accounting: the beyond-top3 bucket is permanently 0 while uncapped
     acc = manifest["decision_accounting"]
     assert acc["eligible_ranked_beyond_top3"] == 0, (
@@ -1611,6 +1639,25 @@ def test_uncapped_cohort_records_every_eligible_ranked_event(tmp_root, capsys, m
     # ``considered_pool``, just in tuple form).
     assert "considered_pool" in manifest["decision_provenance"]
     assert "selections" in manifest["decision_provenance"]
+
+
+def test_considered_pool_schema_constants_are_pinned():
+    """The eligible shape must be the ineligible shape plus the identity.
+
+    Guards the contract itself: if someone dropped an identity field from
+    ``CONSIDERED_POOL_ELIGIBLE_KEYS`` the schema pin above would still pass
+    with a narrower shape, so the delta is asserted explicitly here.
+    """
+    from slumdog.shadow_evaluator import (
+        CONSIDERED_POOL_ELIGIBLE_KEYS,
+        CONSIDERED_POOL_INELIGIBLE_KEYS,
+    )
+
+    assert CONSIDERED_POOL_INELIGIBLE_KEYS < CONSIDERED_POOL_ELIGIBLE_KEYS
+    assert CONSIDERED_POOL_ELIGIBLE_KEYS - CONSIDERED_POOL_INELIGIBLE_KEYS == {
+        "underdog_index", "underdog_probability",
+        "favorite_index", "favorite_probability", "draw_probability",
+    }
 
 
 def test_cli_main_successful_run_produces_selections(tmp_root, capsys, monkeypatch):
