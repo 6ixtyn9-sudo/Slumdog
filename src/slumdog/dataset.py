@@ -76,6 +76,7 @@ ALLOWED_FEATURES = REQUIRED_IDENTITY_FEATURES + ALLOWED_PRIOR_FEATURES
 PROHIBITED_KEYS = {
     "odds_1",
     "odds_2",
+    "odds_draw",
     "price",
     "overround",
     "fair_market_probability",
@@ -1136,6 +1137,7 @@ def _validate_settled_dict(d: dict[str, Any]) -> SettledEvent:
     # Odds — allowed in raw but must not affect new dataset (documented exclusion)
     odds1 = d.get("odds_1")
     odds2 = d.get("odds_2")
+    odds_draw = d.get("odds_draw")
 
     # Build SettledEvent — this will validate some fields further
     try:
@@ -1154,6 +1156,7 @@ def _validate_settled_dict(d: dict[str, Any]) -> SettledEvent:
             forebet_pick=d.get("forebet_pick"),
             odds_1=odds1,
             odds_2=odds2,
+            odds_draw=odds_draw,
             league=league,
             period_scores_1=tuple(d.get("period_scores_1", ())),
             period_scores_2=tuple(d.get("period_scores_2", ())),

@@ -50,7 +50,7 @@ import math
 import os
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +85,76 @@ GRADE_SUCCESS = "SUCCESS"
 GRADE_FAILURE = "FAILURE"
 GRADE_UNRESOLVED = "UNRESOLVED"
 GRADE_UNSETTLED = "UNSETTLED"
+
+# Facets from the post-event capture that are safe to persist as inert display /
+# audit metadata. Every other key in SettledEvent.facets is withheld, and the
+# withheld names are recorded under "facets_omitted" in the artifact so the
+# exclusion is visible rather than silent.
+#
+# "kelly" is deliberately NOT listed. AGENTS.md invariant 10 forbids turning the
+# project into EV / de-vigging / Kelly / staking work, and Forebet's published
+# Kelly fractions are exactly the raw material that drift needs, so they stop at
+# the parser boundary. See EXCLUDED_FACET_KEYS.
+PERSISTED_FACET_KEYS: tuple[str, ...] = (
+    "host_stadium",
+    "weather_high", "weather_low", "weather_code", "weather_temp_f",
+    "goalsavg",
+    "Round", "host_pos", "guest_pos",
+    "move_1", "move_X", "move_2",
+    "isCup", "is_international_club_cup", "is_nationalteam_cup",
+    "code", "host_short", "guest_short",
+    "Host_SC_HT", "Guest_SC_HT", "extra_time_score", "penalty_score",
+    "trend_en",
+    "best_odd_1_am", "best_odd_X_am", "best_odd_2_am",
+)
+
+# Withheld on governance grounds, not by accident. Named explicitly so a future
+# reader does not have to diff two lists to find out what was dropped and why.
+EXCLUDED_FACET_KEYS: tuple[str, ...] = ("kelly",)
+
+
+def _settled_context(settled: SettledEvent | None) -> dict[str, Any]:
+    """Curated post-event display/audit context for one graded row.
+
+    Carries through the SettledEvent fields that used to be dropped entirely
+    between parse and artifact: Forebet's own pick, the league, all three board
+    prices (including the draw price, which ``parsers._participant_odds`` never
+    returned), the published probabilities, period scores and a facet subset.
+
+    This is metadata, not signal. Odds are display-only (invariant 11) and are
+    never model features or gates (invariants 8-9); Kelly-style fractions are
+    excluded outright (invariant 10). Nothing downstream may grade on these
+    values, and the artifact says so in its ``metadata_policy`` block.
+    """
+    if settled is None:
+        return {}
+    facets = dict(settled.facets or {})
+    kept = {key: facets[key] for key in PERSISTED_FACET_KEYS if key in facets}
+    omitted = sorted(key for key in facets if key not in kept)
+    return {
+        "forebet_pick": settled.forebet_pick,
+        "league": settled.league or None,
+        "league_id": settled.league_id or None,
+        "participant_1_id": settled.participant_1_id or None,
+        "participant_2_id": settled.participant_2_id or None,
+        "odds_1": settled.odds_1,
+        "odds_2": settled.odds_2,
+        "odds_draw": settled.odds_draw,
+        "probability_1": settled.probability_1,
+        "probability_2": settled.probability_2,
+        "draw_probability": settled.draw_probability,
+        "period_scores_1": list(settled.period_scores_1),
+        "period_scores_2": list(settled.period_scores_2),
+        "source_url": settled.source_url or None,
+        "reconstruction": settled.reconstruction,
+        "disposition": settled.disposition,
+        "facets": kept,
+        # Auditable record of what was withheld, including governance exclusions.
+        "facets_omitted": omitted,
+        "facets_excluded_by_policy": [
+            key for key in EXCLUDED_FACET_KEYS if key in facets
+        ],
+    }
 
 
 def grade_underdog_win(
@@ -416,6 +486,12 @@ class SettlementGrade:
     # SUCCESS or FAILURE). Recorded so a reader can tell a graded row from a
     # recovered one without re-deriving anything.
     underdog_index_provenance: str = ""
+    # Post-event display/audit context carried through from the matched
+    # SettledEvent: Forebet's own pick, league, prices, published probabilities
+    # and a curated facet subset. This is METADATA ONLY — see _settled_context
+    # and the metadata_policy block in write_settlement_artifact. None of it may
+    # be read back as a feature, a gate or a staking input.
+    settled_context: dict[str, Any] = field(default_factory=dict)
 
 
 def _match_settled(
@@ -493,13 +569,16 @@ def _resolve_underdog_identity(
     entry: dict[str, Any],
     prob_lookup: dict[str, tuple[Any, Any, Any]],
     composite_key: str,
+    conflicted_keys: frozenset[str] = frozenset(),
 ) -> tuple[int | None, float | None, int | None, float | None, str]:
     """Resolve the underdog/favorite identity for one graded entry.
 
     Returns ``(underdog_index, underdog_probability, favorite_index,
     favorite_probability, provenance)`` where ``provenance`` is one of
     ``entry`` (carried by the prediction run), ``capture_record_tuples``
-    (re-derived), or ``unavailable``.
+    (re-derived), ``unavailable`` (no identity to re-derive from), or
+    ``unavailable_conflicting_capture`` (two capture records disagree about the
+    pre-event probabilities, so no single one may decide the grade).
 
     ``selections[]`` entries carry the identity directly. ``considered_pool[]``
     entries written before the identity-serialisation fix carry only six keys,
@@ -522,6 +601,13 @@ def _resolve_underdog_identity(
             _to_float_or_none(entry.get("favorite_probability")),
             "entry",
         )
+    if composite_key in conflicted_keys:
+        # Two capture records for this sport/event/date disagree about the
+        # pre-event probabilities. Dict assignment would have kept whichever
+        # arrived last, so the identity — and therefore the grade — would have
+        # been decided by capture ordering. Refuse instead: the row grades
+        # UNRESOLVED and says why.
+        return (None, None, None, None, "unavailable_conflicting_capture")
     probs = prob_lookup.get(composite_key)
     if probs is not None:
         identity = identify_forebet_underdog(
@@ -569,6 +655,12 @@ def grade_all_entries(
     # Try to enrich from capture_record_tuples in input_provenance
     input_prov = manifest.get("input_provenance", {})
     prob_lookup: dict[str, tuple[Any, Any, Any]] = {}
+    # Keys where two capture records disagree about the pre-event probabilities.
+    # Last-write-wins would silently decide which one grades the row, so those
+    # keys are collected here and the identity is refused for them instead: an
+    # ambiguous lookup must never be the thing that turns a row into a SUCCESS
+    # or a FAILURE.
+    prob_conflicts: set[str] = set()
     for tup in input_prov.get("capture_record_tuples", []):
         if isinstance(tup, (list, tuple)) and len(tup) >= 4:
             sport, eid, edate, p1 = tup[0], tup[1], tup[2], tup[3]
@@ -580,7 +672,11 @@ def grade_all_entries(
             # 4 participant_2, 5 probability_1, 6 probability_2,
             # 7 draw_probability, 8 raw_sha256, 9 captured_at, ...
             if len(tup) >= 8:
-                prob_lookup[key] = (tup[5], tup[6], tup[7])
+                values = (tup[5], tup[6], tup[7])
+                previous = prob_lookup.get(key)
+                if previous is not None and previous != values:
+                    prob_conflicts.add(key)
+                prob_lookup[key] = values
 
     grades: list[SettlementGrade] = []
     for composite_key, entry in sorted(event_index.items()):
@@ -601,7 +697,9 @@ def grade_all_entries(
             favorite_index,
             favorite_prob,
             identity_provenance,
-        ) = _resolve_underdog_identity(entry, prob_lookup, composite_key)
+        ) = _resolve_underdog_identity(
+            entry, prob_lookup, composite_key, frozenset(prob_conflicts)
+        )
 
         # Get participant names for identity matching
         names = name_lookup.get(composite_key, ("", ""))
@@ -625,6 +723,7 @@ def grade_all_entries(
                 settled_participant_1="", settled_participant_2="",
                 match_method=match_method,
                 underdog_index_provenance=identity_provenance,
+                settled_context={},  # nothing matched, so nothing to carry
             ))
             continue
 
@@ -650,6 +749,7 @@ def grade_all_entries(
             settled_participant_2=settled.participant_2,
             match_method=match_method,
             underdog_index_provenance=identity_provenance,
+            settled_context=_settled_context(settled),
         ))
     return grades
 
@@ -657,6 +757,37 @@ def grade_all_entries(
 # ---------------------------------------------------------------------------
 # Rolling summary
 # ---------------------------------------------------------------------------
+
+# ``per_rank`` keeps every individual rank because it is the audit view, but on a
+# 500-event sport-day almost every rank holds exactly one row — a per-rank hit
+# rate there is n=1 noise dressed up as a statistic (09-05 produced 507 such
+# cells). These bands are the reportable view: they pool enough rows to be
+# readable while still showing ``n`` per cell, so a reader can see which bands
+# clear the n>=30 bar and which do not.
+RANK_BANDS: tuple[tuple[str, int, int | None], ...] = (
+    ("1", 1, 1),
+    ("2-3", 2, 3),
+    ("4-10", 4, 10),
+    ("11-25", 11, 25),
+    ("26-50", 26, 50),
+    ("51+", 51, None),
+)
+
+
+def _rank_band(rank: Any) -> str:
+    """Band label for a rank; ``"none"`` when the rank is missing or invalid."""
+    if not isinstance(rank, int) or rank < 1:
+        return "none"
+    for label, low, high in RANK_BANDS:
+        if rank >= low and (high is None or rank <= high):
+            return label
+    return RANK_BANDS[-1][0]
+
+
+def _rank_sort_key(item: tuple[str, Any]) -> tuple[int, int]:
+    """Numeric ordering for per-rank keys, with the ``none`` bucket last."""
+    key = item[0]
+    return (0, int(key)) if key.isdigit() else (1, 0)
 
 
 def compute_rolling_summary(
@@ -692,12 +823,27 @@ def compute_rolling_summary(
     # Ranks 4+ (considered_pool)
     r4plus = [g for g in grades if g.source == "considered_pool"]
 
-    # Per-rank
-    per_rank: dict[str, dict[str, Any]] = {}
+    # Per-rank — audit view. Every individual rank is kept, including the n=1
+    # cells; see per_rank_band below for the pooled, reportable view.
+    per_rank: dict[str, list[SettlementGrade]] = {}
     for g in grades:
         rank_key = str(g.rank_within_sport_day or "none")
         per_rank.setdefault(rank_key, []).append(g)
-    per_rank_summary = {k: _hit_rate(v) for k, v in sorted(per_rank.items())}
+    per_rank_summary = {
+        k: _hit_rate(v)
+        for k, v in sorted(per_rank.items(), key=_rank_sort_key)
+    }
+
+    # Per-rank band — reportable view over the same rows.
+    per_band: dict[str, list[SettlementGrade]] = {}
+    for g in grades:
+        per_band.setdefault(_rank_band(g.rank_within_sport_day), []).append(g)
+    band_order = [label for label, _, _ in RANK_BANDS] + ["none"]
+    per_rank_band_summary = {
+        label: _hit_rate(per_band[label])
+        for label in band_order
+        if label in per_band
+    }
 
     # By underdog-probability band
     bands = [
@@ -746,6 +892,7 @@ def compute_rolling_summary(
         "top3_combined_hit_rate": _hit_rate(top3),
         "ranks_4plus_hit_rate": _hit_rate(r4plus),
         "per_rank": per_rank_summary,
+        "per_rank_band": per_rank_band_summary,
         "by_underdog_probability_band": by_band,
         "per_sport": per_sport_summary,
         "cohort_cumulative": {
@@ -833,6 +980,10 @@ def write_settlement_artifact(
             "settled_participant_2": g.settled_participant_2,
             "match_method": g.match_method,
             "underdog_index_provenance": g.underdog_index_provenance,
+            # Post-event display/audit context (Forebet pick, league, all three
+            # board prices, published probabilities, period scores, curated
+            # facets). Metadata only — see metadata_policy below.
+            "settled_context": g.settled_context,
         })
 
     settlement_payload = {
@@ -850,6 +1001,29 @@ def write_settlement_artifact(
             # UNRESOLVED. It is never compared against the 0 draw sentinel.
             "missing_underdog_identity_is_unresolved": True,
             "missing_winner_is_unresolved": True,
+        },
+        # Governance note bound to the data this artifact now carries, so the
+        # policy travels with the numbers instead of living only in AGENTS.md.
+        "metadata_policy": {
+            "settled_context_is_metadata_only": True,
+            "odds_used_in_grading": False,
+            "odds_used_as_model_features": False,
+            "odds_gate_candidates": False,
+            "missing_odds_lower_confidence": False,
+            "kelly_excluded": True,
+            "excluded_facet_keys": list(EXCLUDED_FACET_KEYS),
+            "invariants": {
+                "odds_are_display_only": "AGENTS.md invariant 11",
+                "odds_never_a_feature_or_gate": "AGENTS.md invariants 8-9",
+                "no_ev_devig_kelly_or_staking": "AGENTS.md invariant 10",
+            },
+            "note": (
+                "settled_context records what the post-event page said, so a "
+                "reader can audit a grade without re-fetching. It is not "
+                "signal: no grading rule, feature, gate or staking calculation "
+                "may read it, and a missing price must never change a grade or "
+                "a confidence."
+            ),
         },
         "grades": sorted(
             grade_dicts,

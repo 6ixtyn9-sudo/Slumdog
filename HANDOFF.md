@@ -1,13 +1,107 @@
 # Slumdog Living Handoff
 
-**Last updated:** 2026-09-07 (UTC) — **RANK-4+ SETTLEMENT GRADING DEFECT FOUND, QUANTIFIED AND REMEDIATED ON `arena/01a07b8b-slumdog`** — every rank-4+ grade in the three committed `settlement.json` files was fabricated: `considered_pool[]` never carried `underdog_index`, settlement defaulted the gap to `0` (the draw sentinel), and a rank-4+ `SUCCESS` was therefore structurally unreachable. True rate is **270/820 = 32.9%**, not the reported 0/798. Fixed forward, erratum published append-only, originals untouched. Full suite now **744 passed, 0 failed, 0 deselected, 0 skipped** (was 718, plus 6 pre-existing failures from a stale declaration-hash pin, now fixed). See `## Rank-4+ Settlement Grading Defect` below and `docs/ADVERSARIAL_REVIEW_RANK4_SETTLEMENT_FINDINGS.md`.
+**Last updated:** 2026-09-07 (UTC) — **DISCARD AUDIT ACTIONED: the settlement lineage stopped throwing away collected data** — the draw price (`best_odd_X` / `odds_draw`) was discarded twice over (`parsers._participant_odds` reads `parsed[1]` and drops it; `parse_football_settled` never read `best_odd_X`), even though the **pre-event** path kept it — and `SettledEvent.facets` (Forebet's pick, league, weather, HT/ET/penalty scores, odds movement, cup flags) was assembled by the parser and then dropped by `write_settlement_artifact`. Both closed; every grade row now carries a curated `settled_context` and every artifact carries a `metadata_policy` block binding the recovered data to AGENTS.md invariants 8–11. `kelly` is the one facet **deliberately withheld** (invariant 10) with the exclusion recorded per row. Also: `per_rank_band` pools the n=1 per-rank explosion, and conflicting `capture_record_tuples` no longer decide a grade by capture ordering. **No grading rule, threshold, or config changed.** Full suite **789 passed, 0 failed, 0 deselected, 0 skipped**. See `## Discarded Settlement Metadata` below and `docs/STATE.md`.
+
+Prior state (same session): **RANK-4+ SETTLEMENT GRADING DEFECT FOUND, QUANTIFIED AND REMEDIATED** — every rank-4+ grade in the three committed `settlement.json` files was fabricated: `considered_pool[]` never carried `underdog_index`, settlement defaulted the gap to `0` (the draw sentinel), and a rank-4+ `SUCCESS` was therefore structurally unreachable. True rate is **270/820 = 32.9%**, not the reported 0/798. Fixed forward, erratum published append-only, originals untouched. See `## Rank-4+ Settlement Grading Defect` below and `docs/ADVERSARIAL_REVIEW_RANK4_SETTLEMENT_FINDINGS.md`.
 
 Prior state: **TWO CHANGES IMPLEMENTED ON `arena/01a07741-slumdog`, PR PENDING OWNER SIGN-OFF** — (1) uncapped-cohort amendment: `cohort_policy.top3_cohort_per_sport_day = null` so every R2-eligible, R1-ranked event per sport-day is recorded (downstream recording width ONLY — R2 thresholds and R1 ranking untouched/frozen); (2) Milestone 7D retired: orphaned `tests/test_cloud_backup_workflow.py` deleted (its workflow was owner-deleted from `main` 2026-09-03, `5641111`, leaving 12 tests failing and masked by `--deselect` ever since). Before that: Milestone 7E (automated D+1 settlement) MERGED VIA PR #16 (`c06659c`) AND PROVEN IN PRODUCTION — three dates settled by real dispatches (2026-09-02, 09-05, 09-06); `972b79a` fixed the `SHADOW_RUN_BLOCKED` history-selection bug; review + addendum docs archived. Training FROZEN, PRODUCTION NOT AUTHORIZED.
 
 **Branch:** `arena/01a07b8b-slumdog` (adversarial review + rank-4+ remediation session, from `main` @ `edd5ff2`)
 **Base commit:** `edd5ff22bd5ad499247b6dcb97d3aee11e5807d1` (main tip at this verification; shallow clone — only this one commit is present locally)
-**Tests:** 744 passed, 0 failed, 0 deselected, 0 skipped (`python -m pytest`)
-**Working tree:** committed on `arena/01a07b8b-slumdog`. **Push blocked** — this sandbox has no GitHub credential path (`git push` → `could not read Username for 'https://github.com'`); the owner must reconnect GitHub in Arena or push from the Codespace. Changes: `src/slumdog/shadow_evaluator.py`, `src/slumdog/shadow_settle.py`, `scripts/synthetic_shadow_fixture.py` (stale declaration-hash pin), new `scripts/rank4_settlement_erratum.py`, new `tests/test_rank4_settlement_erratum.py`, extended `tests/test_shadow_settle.py` + `tests/test_shadow_evaluator.py` + `tests/test_synthetic_shadow_fixture.py`, new `docs/ADVERSARIAL_REVIEW_RANK4_SETTLEMENT_FINDINGS.md`, new `data/reports/shadow/errata/**`, `docs/STATE.md` + this file refreshed. **No committed evidence, config, or workflow file was modified.**
+**Tests:** 789 passed, 0 failed, 0 deselected, 0 skipped (`python -m pytest`)
+**Working tree:** committed and **pushed** on `arena/01a07b8b-slumdog` — **PR #18 OPEN against `main`, NOT merged** (owner sign-off still required; `AGENTS.md` forbids merging without explicit authorization). The earlier "push blocked / no GitHub credential path" note is **superseded**: `origin` is reachable and the remote branch tip is `2136535`.
+
+**Sandbox git caveat (verified 2026-09-07):** the Arena sandbox reset the local `arena/01a07b8b-slumdog` pointer back to the base commit `edd5ff2` while leaving the working tree intact, so all prior work appeared uncommitted and `git log` showed one commit. Recovered with `git fetch origin arena/01a07b8b-slumdog` + `git reset --mixed 2136535` after proving every "untracked" file was byte-identical to the committed version. **Check `git log` against the remote before assuming work is missing.**
+
+Discard-audit changes (this increment): `src/slumdog/contracts.py` (`SettledEvent.odds_draw`), `src/slumdog/settlement.py` (`_draw_odds` helper + all four parser paths + American-format facets), `src/slumdog/dataset.py` (rehydration + `PROHIBITED_KEYS`), `src/slumdog/facets.py` (catalogue entry), `src/slumdog/shadow_contracts.py` (barred record field), `src/slumdog/shadow_settle.py` (`_settled_context`, `PERSISTED_FACET_KEYS`/`EXCLUDED_FACET_KEYS`, `RANK_BANDS`/`per_rank_band`, conflict detection, `metadata_policy`), new `tests/test_discarded_settlement_metadata.py` (45 tests), `docs/STATE.md` + this file refreshed.
+
+Prior increment (already in `2136535`): `src/slumdog/shadow_evaluator.py`, `src/slumdog/shadow_settle.py`, `scripts/synthetic_shadow_fixture.py` (stale declaration-hash pin), new `scripts/rank4_settlement_erratum.py`, new `tests/test_rank4_settlement_erratum.py`, extended `tests/test_shadow_settle.py` + `tests/test_shadow_evaluator.py` + `tests/test_synthetic_shadow_fixture.py`, new `docs/ADVERSARIAL_REVIEW_RANK4_SETTLEMENT_FINDINGS.md`, new `data/reports/shadow/errata/**`. **No committed evidence, config, or workflow file was modified in either increment** — `settlement.json` + `.sha256` remain byte-identical, and the frozen baseline config hash is unchanged.
+
+## Discarded Settlement Metadata
+
+Owner instruction: "action everything that you would action now", with two
+specific reminders — "don't forget odds_X / there's odds_X" and "look at
+everything that's being discarded". A full audit of what each stage *collects*
+versus what it *keeps* found the settlement path discarding data it had already
+parsed.
+
+**Discard 1 — the draw price, lost twice.** `parsers._participant_odds` returns
+`(odds_1, odds_2, values)`; on a three-way board it evaluates `parsed[1]` (the
+draw price) and returns `parsed[0], parsed[2], values`, so the draw price
+survived only as raw text inside `values` — which both call sites discarded via
+`_`. Separately, `settlement.parse_football_settled` read only `best_odd_1` and
+`best_odd_2`, never `best_odd_X`. The asymmetry that hid this: the **pre-event**
+path *does* capture it (`parsers.py` → `facets["odds_draw"]` from `best_odd_X`,
+and `best_odd_X_am` → `odds_draw_am`), so the number existed before kickoff and
+disappeared after the match.
+
+Fix: `SettledEvent.odds_draw`, populated on every settlement parser — the JSON
+football path, the HTML path, and the shared `**base` dict feeding
+mma/esoccer/cricket — plus `dataset.py` rehydration. `_draw_odds` deliberately
+mirrors `_participant_odds`' branch conditions so the two can never disagree
+about which cell is which: for draw-capable sports whose board leaves the draw
+cell blank or dashed (handball, cricket — verified behaviour) it returns `None`
+rather than reading `parsed[1]` positionally and reporting the **away** price as
+a draw. Missing stays missing; nothing is zero-filled.
+
+**Discard 2 — `SettledEvent.facets` built then dropped.**
+`parse_football_settled` assembles a rich facet dict (stadium, weather,
+goalsavg, Round, league positions, `move_1/move_X/move_2` odds movement, cup
+flags, HT/ET/penalty scores, `trend_en`) and passes it to `SettledEvent` — but
+`write_settlement_artifact` serialised a fixed list of grade fields, so all of it
+was lost at the last step. Likewise the pre-event `EventSnapshot.facets` are
+consumed into 17 derived features and then not persisted (`shadow_evaluator.py`
+has no reference to `.facets` at all). Each grade row now carries a curated
+`settled_context`.
+
+**Governance binding.** Everything recovered is metadata, not signal, and the
+artifact now says so itself: a `metadata_policy` block asserts
+`odds_used_in_grading: false`, `odds_used_as_model_features: false`,
+`odds_gate_candidates: false`, `missing_odds_lower_confidence: false`, and names
+AGENTS.md invariants 8–11 — so the policy travels with the numbers instead of
+living only in a doc a future agent may not read. `odds_draw` was added to
+`dataset.PROHIBITED_KEYS` and `shadow_contracts._FORBIDDEN_RECORD_FIELDS` and
+declared in the facet catalogue as `PRE_EVENT`, barring it as a feature at every
+layer it could otherwise enter.
+
+**`kelly` is deliberately withheld.** `parse_football_settled` captures Forebet's
+published Kelly fraction into facets. AGENTS.md invariant 10 forbids turning the
+project into EV / de-vigging / Kelly / staking work, and those fractions are
+exactly the raw material such drift needs — so they stop at the parser boundary
+and never reach the graded evidence. Parser behaviour is unchanged (still
+captured in memory); only persistence is refused. The refusal is recorded per
+row under `facets_excluded_by_policy`, and any other unlisted facet is named
+under `facets_omitted`, so nothing vanishes silently. **If the owner wants Kelly
+retained as inert audit metadata, this is a one-line change to
+`PERSISTED_FACET_KEYS` — but it should be an explicit decision, not a default.**
+
+**Two further fixes actioned from the same review:**
+
+- `per_rank_band` — `per_rank` is kept as the audit view, but on a ~500-event
+  sport-day nearly every rank holds exactly one row (2026-09-05: 507 cells), so a
+  per-rank hit rate there is n=1 noise formatted as a statistic. Six bands
+  (`1`, `2-3`, `4-10`, `11-25`, `26-50`, `51+`) pool the same rows and expose
+  `n` per cell. `per_rank` keys now sort numerically, not lexicographically.
+- Conflicting capture records — `prob_lookup[key] = (…)` was last-write-wins, so
+  two `capture_record_tuples` rows sharing a `sport:event_id:event_date` key with
+  **different** pre-event probabilities would grade using whichever arrived last,
+  i.e. capture ordering would decide the grade. Such keys are now detected and
+  the identity refused with provenance `unavailable_conflicting_capture` →
+  `UNRESOLVED`. Identical duplicates — the case actually present in the 09-12
+  data — still resolve normally, and a regression test pins both behaviours.
+
+**Flagged, not changed:** `american_football.py`, `baseball.py`, `basketball.py`,
+`cricket.py` and `esports.py` each already export `calculate_overround_*` and
+`devig_probabilities_*`. De-vigging is named in invariant 10. These predate this
+work, sit outside the shadow/certification lineage, and were left untouched —
+reported to the owner rather than amended unilaterally.
+
+**Scope discipline:** no grading rule, threshold, ranking, or config changed.
+`config/research_baselines.json` remains `666dabe7…` and
+`config/shadow_evaluator.json` remains `20f9a3a3…`. The committed `settlement.json`
+files and their `.sha256` markers are byte-identical; this change affects only
+artifacts written **from now on**. No corrected or newly-recovered number is used
+to justify any rule change.
 
 ## Rank-4+ Settlement Grading Defect
 
@@ -426,6 +520,13 @@ The original 6A implementation was found not to scale (it materialized all examp
 - **Tests:** `tests/test_baseline_analyzer.py` (30 focused tests). Total suite: 426 passed.
 
 ## PR State
+
+- **Active branch:** `arena/01a07b8b-slumdog` — adversarial review, rank-4+ settlement remediation, append-only erratum, and the discard audit (base `main` @ `edd5ff2`; remote tip `2136535` + this increment).
+- **Pull request:** #18 https://github.com/6ixtyn9-sudo/Slumdog/pull/18 — "Fix rank-4+ settlement grading (sentinel default made SUCCESS unreachable); append-only erratum; unbreak 6 stale-pin tests" — **OPEN into `main`, NOT merged** (awaiting owner sign-off; `AGENTS.md` forbids merging without explicit authorization).
+- **Merge approves only:** (a) the rank-4+ identity-resolution fix and the 6 stale declaration-hash pin tests; (b) publication of the append-only erratum as a **new artifact type**; (c) recording-width recovery of already-collected settlement metadata — `odds_draw`, `settled_context`, `per_rank_band`, capture-conflict refusal — plus their governance bindings.
+- **Merge does NOT approve:** any change to grading rules, thresholds, ranking, R1/R2 policy, or frozen config; model training; threshold optimization; production publication; real Forebet capture; use of odds, Kelly, or any `settled_context` value as a feature, gate, or staking input; any restatement of the committed `settlement.json` files (left byte-identical).
+- **Owner decisions requested:** (1) extend the `AGENTS.md` scoped-commit waiver to cover `data/reports/shadow/errata/**`, or relocate those artifacts; (2) reconcile the unreproducible `fe031ae5…` declaration pin against full git history (this clone is shallow); (3) confirm whether `kelly` should stay withheld from persisted evidence (currently withheld per invariant 10) ; (4) rule on the pre-existing `calculate_overround_*` / `devig_probabilities_*` helpers in the per-sport modules against invariant 10.
+- **Next:** owner reviews PR #18; on approval, merge, then re-run settlement for a fresh date to produce the first artifact carrying `settled_context` + `per_rank_band`.
 
 - **Active branch:** `arena/01a0512f-slumdog` — Milestone 7D cloud-only bundle backup (base `main` @ `41b345f`).
 - **Pull request:** #13 opened into `main` (NOT merged) — "Add cloud-only shadow bundle backup workflow (Milestone 7D)". Contents: the committed workflow file (owner push `ba7d554` from the Codespace, after the Arena delivery App was refused `.github/workflows/*` writes for lacking the `workflows` permission — resolved, historical note) + synthetic fixture generator + 9 fixture tests + 12 workflow-contract tests passing with ZERO skips (missing workflow file now FAILS the suite) + docs (STATE/HANDOFF/docs README/MILESTONE7D).

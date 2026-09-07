@@ -25,6 +25,7 @@ COMMON_FACETS: tuple[FacetDefinition, ...] = (
     FacetDefinition("predicted_total", TimingClass.PRE_EVENT, "Forebet expected total"),
     FacetDefinition("odds_1", TimingClass.PRE_EVENT, "Displayed participant 1 price"),
     FacetDefinition("odds_2", TimingClass.PRE_EVENT, "Displayed participant 2 price"),
+    FacetDefinition("odds_draw", TimingClass.PRE_EVENT, "Displayed draw price on a three-way board"),
     FacetDefinition("standings", TimingClass.PRE_EVENT, "Displayed standings/ranks"),
     FacetDefinition("form", TimingClass.PRE_EVENT, "Displayed recent form"),
     FacetDefinition("home_away_form", TimingClass.PRE_EVENT, "Venue/split form"),

@@ -133,6 +133,10 @@ class SettledEvent:
     forebet_pick: int | None
     odds_1: float | None = None
     odds_2: float | None = None
+    # Draw price from a three-way board. Optional display metadata only — see
+    # AGENTS.md invariants 5-11: odds never gate a candidate, never lower
+    # confidence when missing, and are never model features.
+    odds_draw: float | None = None
     league: str = ""
     period_scores_1: tuple[float, ...] = ()
     period_scores_2: tuple[float, ...] = ()

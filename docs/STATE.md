@@ -408,9 +408,92 @@ type not enumerated in the `AGENTS.md` scoped commit waiver** (which lists
 JSON (5–86 KB) in the same spirit, but the owner should either extend the
 waiver explicitly or relocate them.
 
+## Discarded Settlement Metadata Recovered (2026-09-07)
+
+A discard audit of the whole capture → grade lineage found that the settlement
+path collected considerably more from the post-event page than it kept. Two
+classes of loss are now closed. **No grading rule, threshold, or config changed
+— this widens what is recorded, nothing else.**
+
+**1. The draw price (`odds_X`) survived nowhere in the settled record.** Two
+independent discards, which is why neither was visible on its own:
+
+- `parsers._participant_odds` returns `(home, away, raw_values)`. On a
+  three-way board it reads `parsed[1]` — the draw price — and drops it.
+- `settlement.parse_football_settled` read only `best_odd_1` / `best_odd_2`,
+  never `best_odd_X`.
+
+The **pre-event** path did keep it (`parsers.py` reads `best_odd_X` into
+`facets["odds_draw"]`, plus `best_odd_X_am` → `odds_draw_am`), so the same
+number existed before kickoff and vanished afterwards. `SettledEvent.odds_draw`
+is now populated on every settlement parser (JSON, HTML, and the
+mma/esoccer/cricket `**base` path), and rehydrated by `dataset.py`. The
+American-format prices the pre-event path keeps are now captured at settlement
+too.
+
+`_draw_odds` mirrors the branch logic of `_participant_odds` exactly, so the two
+can never disagree about which cell is which: draw-capable sports whose board
+leaves the draw cell blank or dashed (handball, cricket) yield `None`, not the
+away price read positionally. Missing stays missing; nothing is zero-filled.
+
+**2. `SettledEvent.facets` was built and then dropped.** Forebet's own pick,
+league, weather, HT/ET/penalty scores, odds movement and cup flags were
+assembled by the parser, attached to the event, and discarded by
+`write_settlement_artifact`, which serialised a fixed list of grade fields. Each
+grade row now carries a curated `settled_context`.
+
+### Governance binding on the recovered data
+
+The recovered values are **metadata, never signal**, and that is stated in the
+artifact itself rather than only in this file. Every settlement artifact now
+carries a `metadata_policy` block asserting `odds_used_in_grading: false`,
+`odds_used_as_model_features: false`, `odds_gate_candidates: false`,
+`missing_odds_lower_confidence: false`, and naming the invariants
+(AGENTS.md 8–11).
+
+`kelly` is the one facet **deliberately withheld**. AGENTS.md invariant 10
+forbids EV / de-vigging / Kelly / staking work, and Forebet's published Kelly
+fractions are exactly the raw material that drift needs, so they stop at the
+parser boundary. The parser still captures `kelly` in memory (behaviour
+unchanged); it does not reach the graded evidence. The withholding is recorded
+per row under `facets_excluded_by_policy`, and unlisted facets are named under
+`facets_omitted`, so nothing disappears silently.
+
+`odds_draw` was added to `dataset.PROHIBITED_KEYS` and to
+`shadow_contracts._FORBIDDEN_RECORD_FIELDS`, and declared in the facet catalogue
+as `PRE_EVENT` display metadata — it is barred as a feature at every layer it
+could otherwise enter. Post-event facts (HT/ET/penalty, weather) remain barred
+from `PreEventRecord` and are legitimate only in the post-event artifact.
+
+### Also in this change
+
+- **`per_rank_band`** — `per_rank` is retained as the audit view, but on a
+  ~500-event sport-day nearly every rank holds one row (2026-09-05 produced 507
+  such cells), so a per-rank hit rate there is n=1 noise presented as a
+  statistic. Six bands (`1`, `2-3`, `4-10`, `11-25`, `26-50`, `51+`) pool the
+  same rows and show `n` per cell, so a reader can see which bands clear the
+  `n>=30` bar. `per_rank` keys now sort numerically rather than
+  lexicographically (`1, 2, 10, 11` not `1, 10, 11, 2`).
+- **Conflicting capture records no longer decide a grade by ordering.**
+  `prob_lookup[key] = …` was last-write-wins: two `capture_record_tuples` rows
+  for the same `sport:event_id:event_date` with *different* pre-event
+  probabilities would silently grade using whichever arrived last. Those keys
+  are now detected and the identity is refused with provenance
+  `unavailable_conflicting_capture` → `UNRESOLVED`. Identical duplicates (the
+  case actually present in the 09-12 data) still resolve normally.
+
+Regression coverage: `tests/test_discarded_settlement_metadata.py` (45 tests).
+
+**Pre-existing observation, not changed here:** `american_football.py`,
+`baseball.py`, `basketball.py`, `cricket.py` and `esports.py` each already
+export `calculate_overround_*` and `devig_probabilities_*`. De-vigging is named
+in invariant 10. These predate this change, sit outside the shadow/certification
+lineage, and were left untouched — flagged for the owner rather than amended
+unilaterally.
+
 ## Verification
 
-- pytest → **744 passed, 0 deselected, 0 skipped, 0 errors** (verified 2026-09-07 on `arena/01a07b8b-slumdog`: 718 baseline + 14 rank-4+/pin-drift regression tests + 12 erratum integrity tests)
+- pytest → **789 passed, 0 deselected, 0 skipped, 0 errors** (verified 2026-09-07 on `arena/01a07b8b-slumdog`: 718 baseline + 14 rank-4+/pin-drift regression tests + 12 erratum integrity tests + 45 discarded-metadata regression tests)
 - pyflakes src/slumdog scripts tests → clean on all new/changed files (14 pre-existing warnings remain in untouched `tests/test_dataset_*`, `test_forward_shadow_batch`, `test_research_incremental_builder`)
 - py_compile scripts/*.py src/slumdog/*.py tests/*.py → ok
 - git diff --check → ok
