@@ -56,7 +56,7 @@
   },
 
   "history_loader": {
-    "name": "v2_loaded_priors_only",
+    "name": "loaded_priors_only",
     "use_loaded_v2_history": true,
     "strict_event_date_lt_target": true,
     "exclude_same_day": true,
