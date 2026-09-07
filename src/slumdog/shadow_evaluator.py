@@ -38,6 +38,7 @@ import argparse
 import datetime as _dt
 import hashlib
 import json
+import math
 import os
 import sys
 import tempfile
@@ -200,8 +201,19 @@ def load_shadow_declaration(path: str | Path) -> dict[str, Any]:
     cohort = obj.get("cohort_policy", {})
     if cohort.get("primary_selection_per_sport_day") != 1:
         raise ShadowEvaluatorError("cohort_policy.primary_selection_per_sport_day must be 1")
-    if cohort.get("top3_cohort_per_sport_day") != 2:
-        raise ShadowEvaluatorError("cohort_policy.top3_cohort_per_sport_day must be 2")
+    if "top3_cohort_per_sport_day" not in cohort:
+        raise ShadowEvaluatorError(
+            "cohort_policy.top3_cohort_per_sport_day is required "
+            "(null = UNCAPPED, positive integer = cap)"
+        )
+    width = cohort.get("top3_cohort_per_sport_day")
+    if width is not None and (
+        isinstance(width, bool) or not isinstance(width, int) or width < 1
+    ):
+        raise ShadowEvaluatorError(
+            "cohort_policy.top3_cohort_per_sport_day must be null (UNCAPPED) "
+            "or a positive integer"
+        )
     if cohort.get("no_global_cap") is not True:
         raise ShadowEvaluatorError("cohort_policy.no_global_cap must be True")
     durability = obj.get("durability", {})
@@ -858,6 +870,17 @@ def _emit_run(
     cohort_count = 0
     r4plus_count = 0
     sport_day_summary: list[dict[str, Any]] = []
+    # Cohort width per the declaration (owner amendment 2026-09-07):
+    # ``null`` = UNCAPPED — every R2-eligible, R1-ranked event for a
+    # sport-day is recorded as a selection (rank 1 = PRIMARY, every other
+    # rank = TOP3_EVALUATION_COHORT). A positive integer retains the
+    # legacy cap of that many non-primary ranks per sport-day. R2
+    # eligibility thresholds and R1 ranking order are untouched either
+    # way — this is a downstream recording width only.
+    cohort_width = declaration.get("cohort_policy", {}).get(
+        "top3_cohort_per_sport_day"
+    )
+    last_cohort_rank = math.inf if cohort_width is None else 1 + int(cohort_width)
     for sd in sorted(all_sport_days):
         sport, _date = sd
         evs = by_sport_day.get(sd, [])
@@ -871,17 +894,20 @@ def _emit_run(
                 status = "PRIMARY_SHADOW_SELECTION"
                 primary_count += 1
                 primary_event_id = record.event_id
-            elif rank_idx <= 3:
+            elif rank_idx <= last_cohort_rank:
                 status = "TOP3_EVALUATION_COHORT"
                 cohort_count += 1
                 cohort_ids.append(record.event_id)
             else:
+                # Unreachable while the declared width is null (UNCAPPED);
+                # retained so a positive-integer cap keeps the legacy
+                # behavior, and so the schema stays stable.
                 status = "ELIGIBLE_RANKED_BEYOND_TOP3"
                 r4plus_count += 1
                 r4plus_ids.append(record.event_id)
             ev["considered_status"] = status
             ev["rank_within_sport_day"] = rank_idx
-            if rank_idx > 3:
+            if rank_idx > last_cohort_rank:
                 continue
             selections.append({
                 "sport": sport, "event_date": _date, "event_id": record.event_id,

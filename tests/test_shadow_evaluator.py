@@ -1417,12 +1417,18 @@ def test_decision_digest_commits_to_required_evidence(tmp_root, monkeypatch):
     assert re.match(r"^[0-9a-f]{64}$", manifest["decision_digest"])
 
 
-def test_ranks_4_plus_beyond_top3_in_considered_pool_only(tmp_root, capsys, monkeypatch):
-    """Rank 4+ must appear in ``considered_pool[]`` but NOT in
-    ``selections[]``. ``considered_status = ELIGIBLE_RANKED_BEYOND_TOP3``.
-    ``decision_digest`` must commit to both arrays. Five eligible
-    events produce two rank-4+ in considered_pool; selections[] has
-    only ranks 1-3.
+def test_uncapped_cohort_records_every_eligible_ranked_event(tmp_root, capsys, monkeypatch):
+    """UNCAPPED cohort (owner amendment 2026-09-07): the declaration's
+    ``cohort_policy.top3_cohort_per_sport_day == null`` means every
+    R2-eligible, R1-ranked event for a sport-day lands in
+    ``selections[]`` — rank 1 as ``PRIMARY_SHADOW_SELECTION``, every
+    other rank as ``TOP3_EVALUATION_COHORT``. No eligible ranked event
+    is discarded, so ``ELIGIBLE_RANKED_BEYOND_TOP3`` is never produced
+    and ``decision_accounting.eligible_ranked_beyond_top3`` stays 0
+    (the status remains in the schema, permanently unreachable while
+    the width is null). ``decision_digest`` still commits to both
+    arrays. Eight eligible events must produce 1 primary + 7 cohort =
+    8 selections.
     """
     from slumdog import shadow_evaluator as se
     fixed_clock = datetime(2026, 8, 26, 12, 0, 0, tzinfo=timezone.utc)
@@ -1438,6 +1444,9 @@ def test_ranks_4_plus_beyond_top3_in_considered_pool_only(tmp_root, capsys, monk
         ("Chelsea", "Liverpool", "2024-03"),
         ("Chelsea", "ManU", "2024-04"),
         ("Arsenal", "Liverpool", "2024-05"),
+        ("ManU", "Arsenal", "2024-06"),
+        ("Liverpool", "Chelsea", "2024-07"),
+        ("ManU", "Chelsea", "2024-08"),
     ]
     for h, a, month in base_rows:
         for i in range(6):
@@ -1451,7 +1460,8 @@ def test_ranks_4_plus_beyond_top3_in_considered_pool_only(tmp_root, capsys, monk
                 "disposition": "SETTLED",
             })
     # 2 H2H per pairing
-    h2h_months = ["2024-06", "2024-07", "2024-08", "2024-09", "2024-10"]
+    h2h_months = ["2024-06", "2024-07", "2024-08", "2024-09", "2024-10",
+                  "2024-11", "2024-12", "2025-01"]
     for (h, a, _), month in zip(base_rows, h2h_months):
         for i in range(2):
             hist_rows.append({
@@ -1466,7 +1476,7 @@ def test_ranks_4_plus_beyond_top3_in_considered_pool_only(tmp_root, capsys, monk
     gz_path = reports / "history_football.jsonl.gz"
     _make_history_gz(gz_path, hist_rows)
 
-    # Build capture receipt with 5 R2-eligible future events (all gap 0.10).
+    # Build capture receipt with 8 R2-eligible future events (all gap 0.10).
     target_date = "2026-08-28"
     pairs = [
         ("1001", "Arsenal", "Chelsea", 1),
@@ -1474,6 +1484,9 @@ def test_ranks_4_plus_beyond_top3_in_considered_pool_only(tmp_root, capsys, monk
         ("1003", "Chelsea", "Liverpool", 3),
         ("1004", "Chelsea", "ManU", 4),
         ("1005", "Arsenal", "Liverpool", 5),
+        ("1006", "ManU", "Arsenal", 6),
+        ("1007", "Liverpool", "Chelsea", 7),
+        ("1008", "ManU", "Chelsea", 8),
     ]
     rows = []
     for eid, h, a, hh in pairs:
@@ -1528,51 +1541,57 @@ def test_ranks_4_plus_beyond_top3_in_considered_pool_only(tmp_root, capsys, monk
     assert len(run_dirs) == 1
     manifest = json.loads((run_dirs[0] / "manifest.json").read_text())
 
-    # Schema boundary: selections[] in the payload = ranks 1-3 only
+    # UNCAPPED boundary: selections[] records every eligible ranked
+    # event (ranks 1-8), not just ranks 1-3.
     payload = json.loads((run_dirs[0] / "shadow_selections.json").read_text())
-    assert len(payload["selections"]) == 3, (
-        f"selections[] should have exactly 3 (ranks 1-3), got {len(payload['selections'])}"
+    assert len(payload["selections"]) == 8, (
+        f"selections[] should have all 8 eligible ranked events, "
+        f"got {len(payload['selections'])}"
     )
     selection_ranks = {s["rank_within_sport_day"] for s in payload["selections"]}
-    assert selection_ranks == {1, 2, 3}, f"selections[] ranks: {selection_ranks}"
+    assert selection_ranks == {1, 2, 3, 4, 5, 6, 7, 8}, (
+        f"selections[] ranks: {selection_ranks}"
+    )
 
-    # No rank-4+ in selections[]
-    r4plus_in_selections = [s for s in payload["selections"]
-                            if s["rank_within_sport_day"] >= 4]
-    assert r4plus_in_selections == [], f"rank-4+ leaked: {r4plus_in_selections}"
+    # Exactly one primary (rank 1); every other rank is cohort —
+    # nothing may carry ELIGIBLE_RANKED_BEYOND_TOP3 while uncapped.
+    primaries = [s for s in payload["selections"]
+                 if s["status"] == "PRIMARY_SHADOW_SELECTION"]
+    cohorts = [s for s in payload["selections"]
+               if s["status"] == "TOP3_EVALUATION_COHORT"]
+    beyond = [s for s in payload["selections"]
+              if s["status"] == "ELIGIBLE_RANKED_BEYOND_TOP3"]
+    assert len(primaries) == 1 and primaries[0]["rank_within_sport_day"] == 1
+    assert len(cohorts) == 7
+    assert beyond == [], f"rank-4+ status leaked while uncapped: {beyond}"
 
-    # considered_pool[] (manifest level) has all 5 with ranks and
+    # considered_pool[] (manifest level) has all 8 with ranks and
     # explicit ``considered_status``.
     pool = manifest["considered_pool"]
-    assert len(pool) == 5, f"considered_pool should have 5, got {len(pool)}"
+    assert len(pool) == 8, f"considered_pool should have 8, got {len(pool)}"
     pool_ranks = sorted(p["rank_within_sport_day"] for p in pool)
     assert all(r is not None for r in pool_ranks), f"some pool entries unranked: {pool_ranks}"
-    assert set(pool_ranks) == {1, 2, 3, 4, 5}, f"pool ranks: {pool_ranks}"
-    # rank-4+ in pool must be marked ELIGIBLE_RANKED_BEYOND_TOP3
-    r4plus_in_pool = [p for p in pool if p["rank_within_sport_day"] >= 4]
-    assert len(r4plus_in_pool) == 2
-    for p in r4plus_in_pool:
-        assert p["considered_status"] == "ELIGIBLE_RANKED_BEYOND_TOP3", (
-            f"rank-4+ status wrong: {p}"
-        )
-    # rank 1-3 in pool must be primary/cohort
-    r123_in_pool = [p for p in pool if p["rank_within_sport_day"] <= 3]
-    assert len(r123_in_pool) == 3
-    for p in r123_in_pool:
+    assert set(pool_ranks) == {1, 2, 3, 4, 5, 6, 7, 8}, f"pool ranks: {pool_ranks}"
+    # No pool entry may be ELIGIBLE_RANKED_BEYOND_TOP3 while uncapped
+    r4plus_in_pool = [p for p in pool
+                      if p["considered_status"] == "ELIGIBLE_RANKED_BEYOND_TOP3"]
+    assert r4plus_in_pool == [], f"beyond-top3 entries while uncapped: {r4plus_in_pool}"
+    for p in pool:
         assert p["considered_status"] in (
             "PRIMARY_SHADOW_SELECTION", "TOP3_EVALUATION_COHORT"
-        ), f"rank-1/2/3 status wrong: {p}"
+        ), f"pool status wrong while uncapped: {p}"
 
-    # Accounting
+    # Accounting: the beyond-top3 bucket is permanently 0 while uncapped
     acc = manifest["decision_accounting"]
-    assert acc["eligible_ranked_beyond_top3"] == 2, (
-        f"expected 2 rank-4+, got {acc['eligible_ranked_beyond_top3']}; acc={acc}"
+    assert acc["eligible_ranked_beyond_top3"] == 0, (
+        f"expected 0 rank-4+ while uncapped, got "
+        f"{acc['eligible_ranked_beyond_top3']}; acc={acc}"
     )
     assert acc["primary_selected"] == 1
-    assert acc["top3_cohort_selected"] == 2
+    assert acc["top3_cohort_selected"] == 7
     total = (acc["primary_selected"] + acc["top3_cohort_selected"] +
              acc["eligible_ranked_beyond_top3"])
-    assert total == 5, f"accounting total {total} != 5"
+    assert total == 8, f"accounting total {total} != 8"
 
     # decision_digest commits to both arrays (digest payload's
     # ``considered_pool`` is the same set as the manifest's
