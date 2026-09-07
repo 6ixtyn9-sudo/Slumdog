@@ -242,7 +242,7 @@ def _extract_decision_fingerprint(
     - ``sport, event_date, event_id`` (composite key)
     - normalized ``participant_1, participant_2`` keys (via
       :func:`slumdog.shadow_contracts.key_of` — the same
-      alphanumeric case-folded key the v2 history identity contract
+      alphanumeric case-folded key the research history identity contract
       uses; display strings are NOT used for comparison)
     - ``probability_1, probability_2, draw_probability``
 

@@ -1,7 +1,7 @@
-"""Milestone 6A — incremental v2 price-free research builder core.
+"""Milestone 6A — incremental price-free research builder core.
 
 Strict-mode internals this module mirrors (eligibility chains, feature
-formulas, float accumulation order) with the intentional v2 difference in
+formulas, float accumulation order) with the intentional research-contract difference in
 history membership (research_history_eligible replaces the legacy implicit
 HistoryIndex filter; see PRICE_FREE_DATASET_CONTRACT.md). Research-only;
 must never be imported by production pipeline modules (pipeline, training,
@@ -51,7 +51,7 @@ RESEARCH_INPUT_DIGEST_DOMAIN = "slumdog-research-input-v2"
 
 
 def research_history_eligible(row: SettledEvent) -> bool:
-    """Explicit v2 history-eligibility predicate (replaces the implicit
+    """Explicit research history-eligibility predicate (replaces the implicit
     legacy HistoryIndex membership filter). Intentional differences from
     the legacy filter (documented in PRICE_FREE_DATASET_CONTRACT.md):
     unknown sports and void compatibility aliases excluded; incoherent
@@ -76,7 +76,7 @@ def research_history_eligible(row: SettledEvent) -> bool:
 
 @dataclass
 class _ParticipantState:
-    """Bounded per-(sport, participant-key) history state (v2 membership).
+    """Bounded per-(sport, participant-key) history state (research membership).
 
     recent_wins holds the last 5 win flags in (event_date, event_id) order —
     the same order the legacy HistoryIndex per-participant lists use, so
@@ -189,7 +189,7 @@ def _normalize_duplicates(
 def _compute_research_input_digest(
     rows_by_sport: dict[str, list[SettledEvent]],
 ) -> tuple[str, dict[str, str]]:
-    """v2 input digests: per-sport SHA-256 over the LF-terminated
+    """Research input digests: per-sport SHA-256 over the LF-terminated
     _canonical_event_repr JSONL (rows sorted by (event_date, event_id));
     combined SHA-256 over the exact bytes
     ``slumdog-research-input-v2\\n`` + per-sport ``sport\\nrow_count\\ndigest\\n``
@@ -222,7 +222,7 @@ class _IncrementalBuilder:
     phase records date-D rows after the batch's read phase. Eligibility
     chains, feature formulas, and float accumulation order mirror the
     strict builder exactly; only bounded state is kept and only
-    research_history_eligible rows feed history state (v2 membership).
+    research_history_eligible rows feed history state (research membership).
     """
 
     def __init__(self) -> None:
@@ -277,7 +277,7 @@ class _IncrementalBuilder:
             self.excluded[_exclusion_counter_name(reason)] += 1
             return
 
-        # v2 research eligibility: a row whose two sides are the same
+        # Research history eligibility: a row whose two sides are the same
         # participant is not a valid canonical settled event — never emit an
         # example and never feed history (the strict builder may emit such
         # rows; intentional difference, mirroring research_history_eligible).

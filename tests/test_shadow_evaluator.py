@@ -601,7 +601,7 @@ def test_history_loader_strict_cutoff_and_void(tmp_root):
         "disposition": r.disposition,
     } for r in rows]
     dicts.append({
-        "event_id": "v1", "sport": "football", "event_date": "2024-05-01",
+        "event_id": "ev1", "sport": "football", "event_date": "2024-05-01",
         "participant_1": "Arsenal", "participant_2": "Chelsea",
         "winner_index": 1, "score_1": 1.0, "score_2": 0.0,
         "probability_1": 0.55, "probability_2": 0.30, "draw_probability": 0.15,
@@ -690,15 +690,15 @@ def _write_one_row_gz(tmp_root: Path, row: dict, name: str = "history_football.j
     return path
 
 
-# v2 validity matrix — one row per exclusion category.
+# Ledger-validity matrix — one row per exclusion category.
 # The dataset has TWO layers of rejection:
 #   - schema layer (`_validate_settled_dict`) catches malformed fields
 #     (missing event_id, missing winner, unknown disposition, etc.)
-#   - v2 layer (`_v2_filter_one`) catches semantic issues (unknown
+#   - ledger-validity layer (`_ledger_validity_filter_one`) catches semantic issues (unknown
 #     sport, self-pair, two-way draw, prior-date violation, etc.)
-# The v2 filter is called ONLY on rows that pass schema.
+# The ledger-validity filter is called ONLY on rows that pass schema.
 # Each test row is constructed to be schema-valid so it reaches the
-# v2 filter, then is rejected at the v2 layer for the documented
+# ledger-validity filter, then is rejected at the ledger-validity layer for the documented
 # reason. The schema-invalid cases (malformed winner, malformed date,
 # empty participant, unknown disposition) are tested separately.
 #
@@ -706,11 +706,11 @@ def _write_one_row_gz(tmp_root: Path, row: dict, name: str = "history_football.j
 #   football=True, handball=True, cricket=True, esoccer=True
 #   basketball, tennis, hockey, baseball, american_football, rugby,
 #   mma, esports, volleyball, afl = False
-# The v2 filter rejects winner=0 only when the sport is NOT
+# The ledger-validity filter rejects winner=0 only when the sport is NOT
 # draw-possible. Draw-possible sports admit winner=0; the price-free
 # builder separately decides whether to use it as a training example.
 _LEDGER_INVALID_CASES = [
-    # (label, mutated_row_dict, expected_v2_reason)
+    # (label, mutated_row_dict, expected_ledger_reason)
     ("unknown_sport_unicorn", _dict_row(sport="unicorn_sport"), "UNKNOWN_SPORT"),
     ("unknown_sport_xyz", _dict_row(sport="xyz"), "UNKNOWN_SPORT"),
     ("self_pair_exact", _dict_row(p1="Arsenal", p2="Arsenal"), "SELF_PAIR"),
@@ -738,8 +738,8 @@ _LEDGER_INVALID_CASES = [
 
 @pytest.mark.parametrize("label,row,expected", _LEDGER_INVALID_CASES, ids=[c[0] for c in _LEDGER_INVALID_CASES])
 def test_history_ledger_validity_matrix(tmp_root, label, row, expected):
-    """One row per v2 validity category. Each row is REJECTED at the
-    v2 layer for the documented reason, except the two positive cases
+    """One row per ledger-validity category. Each row is REJECTED at the
+    ledger-validity layer for the documented reason, except the two positive cases
     which must be ADMITTED.
     """
     gz_path = _write_one_row_gz(tmp_root, row)
@@ -758,7 +758,7 @@ def test_history_ledger_validity_matrix(tmp_root, label, row, expected):
 
 
 # Schema-level exclusion cases (caught by _validate_settled_dict, NOT
-# by the v2 filter). These prove the dataset's first-line guard is
+# by the ledger-validity filter). These prove the dataset's first-line guard is
 # wired into the loader.
 _SCHEMA_INVALID_CASES = [
     # (label, mutated_row_dict, expected_schema_reason)
@@ -779,9 +779,9 @@ _SCHEMA_INVALID_CASES = [
 
 @pytest.mark.parametrize("label,row,expected", _SCHEMA_INVALID_CASES, ids=[c[0] for c in _SCHEMA_INVALID_CASES])
 def test_history_loader_schema_layer_excludes(tmp_root, label, row, expected):
-    """Malformed rows are caught by the schema layer before the v2
-    filter. They are counted in ``history_schema_invalid`` and never
-    reach the v2 layer or the admitted set."""
+    """Malformed rows are caught by the schema layer before the
+    ledger-validity filter. They are counted in ``history_schema_invalid`` and never
+    reach the ledger-validity layer or the admitted set."""
     gz_path = _write_one_row_gz(tmp_root, row)
     gz_bytes_before = gz_path.read_bytes()
     res = load_valid_history(target_date="2026-08-28", repo_root=tmp_root)
@@ -807,11 +807,11 @@ def test_history_loader_schema_layer_excludes(tmp_root, label, row, expected):
 
 # Coherent disposition/winner combos for SETTLED_CUP, SETTLED_DRAW
 # These all pass the schema layer (vocabulary is in SUPPORTED_DISPOSITIONS)
-# and exercise the v2 layer's sport-aware two-way-draw guard.
+# and exercise the ledger-validity layer's sport-aware two-way-draw guard.
 # Per the SPORTS registry, only football/handball/cricket/esoccer are
 # draw-possible. Other sports reject winner=0 as ANOMALOUS_TWO_WAY_DRAW
 # regardless of disposition.
-_V2_DISPOSITION_WINNER_CASES = [
+_LEDGER_DISPOSITION_WINNER_CASES = [
     # (label, sport, disposition, winner_index, should_admit)
     ("settled_home_win_football", "football", "SETTLED", 1, True),
     ("settled_away_win_football", "football", "SETTLED", 2, True),
@@ -827,8 +827,8 @@ _V2_DISPOSITION_WINNER_CASES = [
 ]
 
 
-@pytest.mark.parametrize("label,sport,disp,wi,should_admit", _V2_DISPOSITION_WINNER_CASES,
-                         ids=[c[0] for c in _V2_DISPOSITION_WINNER_CASES])
+@pytest.mark.parametrize("label,sport,disp,wi,should_admit", _LEDGER_DISPOSITION_WINNER_CASES,
+                         ids=[c[0] for c in _LEDGER_DISPOSITION_WINNER_CASES])
 def test_history_ledger_disposition_winner_coherence(tmp_root, label, sport, disp, wi, should_admit):
     """Disposition/winner combinations are coherent when admitted;
     incoherent combinations are rejected with documented reasons.
@@ -3172,7 +3172,7 @@ def test_asymmetric_conflict_eligible_vs_identity_ineligible_excludes_group(
 
 
 # ---------------------------------------------------------------------------
-# Participant normalization tests (key_of is reused as the v2 helper)
+# Participant normalization tests (key_of is reused as the ledger-validity helper)
 # ---------------------------------------------------------------------------
 
 
@@ -3180,7 +3180,7 @@ def test_fingerprint_participant_normalization_equivalent_display_variants():
     """Two observations whose participant display strings differ
     only in capitalization / punctuation but normalize to the
     same key MUST NOT be classified as a conflict. Reuses the
-    existing v2 identity helper ``key_of`` in
+    existing ledger identity helper ``key_of`` in
     ``shadow_contracts.py`` (casefold + alphanumeric only).
     """
     from slumdog.shadow_evaluator import _extract_decision_fingerprint

@@ -390,7 +390,7 @@ def test_adapter_supports_history_jsonl_gz_shape():
 
 
 def test_adapter_rejects_unknown_schema_version():
-    d = make_settled_dict(extra={"schema_version": "v2-future"})
+    d = make_settled_dict(extra={"schema_version": "unknown-future"})
     result = load_settled_events_from_dicts([d])
     assert result.schema_excluded_rows == 1
     assert result.schema_exclusion_reasons["UNKNOWN_SCHEMA_VERSION"] == 1
