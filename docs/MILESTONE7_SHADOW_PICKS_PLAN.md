@@ -105,7 +105,7 @@ at load.
 The declaration is the auditable contract for a single M7 run. Its
 top-level keys and their `load_shadow_declaration` invariants:
 
-- `declaration_version = "shadow_evaluator_v1"` (frozen).
+- `declaration_version = "shadow_evaluator"` (frozen).
 - `frozen_at` — authoring date (informational).
 - `authoring_session`, `authoring_base_commit` — informational.
 - `authorizations`:
@@ -177,9 +177,9 @@ top-level keys and their `load_shadow_declaration` invariants:
 - `durability`:
   - `status = "LOCAL_CODESPACE_ONLY_NOT_BACKED_UP"`
   - `second_copy_procedure = "DEFERRED_TO_SEPARATE_APPROVAL"`
-  - `no_compact_digest_writer_in_v1 = true`
-  - `no_external_storage_in_v1 = true`
-  - `no_force_overwrite_in_v1 = true`
+  - `no_compact_digest_writer = true`
+  - `no_external_storage = true`
+  - `no_force_overwrite = true`
   - `git_tracked_exception = false`
 - `statuses`:
   - `primary_selection = "PRIMARY_SHADOW_SELECTION"`
@@ -528,7 +528,7 @@ Digests are distinct:
 
 The run's identity is a 4-tuple:
 
-- `run_id` — `sha256(canonical_json({"version": "shadow_evaluator_v1",
+- `run_id` — `sha256(canonical_json({"version": "shadow_evaluator",
   "input_digest": ..., "decision_digest": ..., "decision_committed_at": ...}))[:16]`.
   Computed **after** `input_digest` and `decision_digest`.
 - `input_digest` — `sha256(canonical_json({"declaration_sha256": ...,
@@ -692,7 +692,7 @@ item. The first real run will have to address it explicitly.
    pre-evaluator staging. The forward evaluator's manifest schema is
    intentionally compatible with that future work.
 4. **Compact-digest writer / external storage.** Explicitly deferred
-   (`no_compact_digest_writer_in_v1`, `no_external_storage_in_v1`).
+   (`no_compact_digest_writer`, `no_external_storage`).
 5. **Real-data SHA-256 manifest of every history input.** The
    declaration's `history_loader` block requires this, but the
    in-memory `HistoryIndex(settled_history)` constructor used by

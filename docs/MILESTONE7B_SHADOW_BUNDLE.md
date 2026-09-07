@@ -96,8 +96,8 @@ original repository-relative paths are recorded in `inventory.json`.
 
 ```json
 {
-  "bundle_schema_version": "slumdog_shadow_bundle_v1",
-  "run_schema_version": "shadow_evaluator_v1",
+  "bundle_schema_version": "slumdog_shadow_bundle",
+  "run_schema_version": "shadow_evaluator",
   "run_id": "<16-hex>",
   "target_date": "YYYY-MM-DD",
   "content_member_count": <int>,
