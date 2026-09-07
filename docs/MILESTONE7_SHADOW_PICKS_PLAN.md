@@ -143,7 +143,7 @@ top-level keys and their `load_shadow_declaration` invariants:
   - `ranks_4_plus_recorded_but_not_in_cohort = true`
 - `history_loader`:
   - `name = "v2_loaded_priors_only"`
-  - `use_loaded_v2_history = true`
+  - `use_loaded_history = true`
   - `strict_event_date_lt_target = true`
   - `exclude_same_day = true`
   - `disallow_void = true`, `disallow_no_contest = true`,
