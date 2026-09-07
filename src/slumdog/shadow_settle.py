@@ -86,31 +86,24 @@ GRADE_FAILURE = "FAILURE"
 GRADE_UNRESOLVED = "UNRESOLVED"
 GRADE_UNSETTLED = "UNSETTLED"
 
-# Facets from the post-event capture that are safe to persist as inert display /
-# audit metadata. Every other key in SettledEvent.facets is withheld, and the
-# withheld names are recorded under "facets_omitted" in the artifact so the
-# exclusion is visible rather than silent.
+# Facet retention policy.
 #
-# "kelly" is deliberately NOT listed. AGENTS.md invariant 10 forbids turning the
-# project into EV / de-vigging / Kelly / staking work, and Forebet's published
-# Kelly fractions are exactly the raw material that drift needs, so they stop at
-# the parser boundary. See EXCLUDED_FACET_KEYS.
-PERSISTED_FACET_KEYS: tuple[str, ...] = (
-    "host_stadium",
-    "weather_high", "weather_low", "weather_code", "weather_temp_f",
-    "goalsavg",
-    "Round", "host_pos", "guest_pos",
-    "move_1", "move_X", "move_2",
-    "isCup", "is_international_club_cup", "is_nationalteam_cup",
-    "code", "host_short", "guest_short",
-    "Host_SC_HT", "Guest_SC_HT", "extra_time_score", "penalty_score",
-    "trend_en",
-    "best_odd_1_am", "best_odd_X_am", "best_odd_2_am",
-)
-
-# Withheld on governance grounds, not by accident. Named explicitly so a future
-# reader does not have to diff two lists to find out what was dropped and why.
-EXCLUDED_FACET_KEYS: tuple[str, ...] = ("kelly",)
+# The owner's standing instruction (2026-09-07) is that collected data must not
+# be discarded — the mission is to predict the underdog, and any tool that gets
+# us there should be retained. So facets are persisted by DEFAULT and this list
+# is a governance denylist, currently EMPTY.
+#
+# It was not always empty: `kelly` was withheld here until the owner overruled
+# that on 2026-09-07. It is retained now. Retaining the *datum* and using it as
+# a *staking input* are different acts — the first is required, the second is
+# forbidden by AGENTS.md invariant 10 — so the bar lives where the features are
+# built (`dataset.PROHIBITED_KEYS`, `shadow_contracts._FORBIDDEN_RECORD_FIELDS`)
+# rather than here at the point of recording.
+#
+# The mechanism is kept, rather than deleted, so that any future withholding is
+# a deliberate recorded act instead of a silent drop: withheld key names are
+# written to the artifact under "facets_withheld".
+WITHHELD_FACET_KEYS: tuple[str, ...] = ()
 
 
 def _settled_context(settled: SettledEvent | None) -> dict[str, Any]:
@@ -119,18 +112,25 @@ def _settled_context(settled: SettledEvent | None) -> dict[str, Any]:
     Carries through the SettledEvent fields that used to be dropped entirely
     between parse and artifact: Forebet's own pick, the league, all three board
     prices (including the draw price, which ``parsers._participant_odds`` never
-    returned), the published probabilities, period scores and a facet subset.
+    returned), the published probabilities, period scores and the facets.
+
+    Facets are retained in full by default — see WITHHELD_FACET_KEYS.
 
     This is metadata, not signal. Odds are display-only (invariant 11) and are
-    never model features or gates (invariants 8-9); Kelly-style fractions are
-    excluded outright (invariant 10). Nothing downstream may grade on these
-    values, and the artifact says so in its ``metadata_policy`` block.
+    never model features or gates (invariants 8-9); nothing here may feed an EV,
+    de-vigging, Kelly or staking calculation (invariant 10). No grading rule may
+    read these values, and the artifact says so in its ``metadata_policy`` block.
     """
     if settled is None:
         return {}
     facets = dict(settled.facets or {})
-    kept = {key: facets[key] for key in PERSISTED_FACET_KEYS if key in facets}
-    omitted = sorted(key for key in facets if key not in kept)
+    kept = {
+        key: value
+        for key, value in facets.items()
+        if key not in WITHHELD_FACET_KEYS
+    }
+    # Empty under the current policy; recorded so a future withholding is visible.
+    withheld = sorted(key for key in facets if key in WITHHELD_FACET_KEYS)
     return {
         "forebet_pick": settled.forebet_pick,
         "league": settled.league or None,
@@ -149,11 +149,7 @@ def _settled_context(settled: SettledEvent | None) -> dict[str, Any]:
         "reconstruction": settled.reconstruction,
         "disposition": settled.disposition,
         "facets": kept,
-        # Auditable record of what was withheld, including governance exclusions.
-        "facets_omitted": omitted,
-        "facets_excluded_by_policy": [
-            key for key in EXCLUDED_FACET_KEYS if key in facets
-        ],
+        "facets_withheld": withheld,
     }
 
 
@@ -1010,8 +1006,15 @@ def write_settlement_artifact(
             "odds_used_as_model_features": False,
             "odds_gate_candidates": False,
             "missing_odds_lower_confidence": False,
-            "kelly_excluded": True,
-            "excluded_facet_keys": list(EXCLUDED_FACET_KEYS),
+            # Retention policy: collected data is KEPT (owner directive
+            # 2026-09-07 — "any tool that gets us there should be retained").
+            # Kelly fractions are recorded as inert metadata and barred from the
+            # feature layer, not deleted. Recording a number and staking on it
+            # are different acts; invariant 10 forbids the second.
+            "facets_retained_by_default": True,
+            "withheld_facet_keys": list(WITHHELD_FACET_KEYS),
+            "kelly_retained_as_inert_metadata": True,
+            "kelly_used_for_ev_devig_or_staking": False,
             "invariants": {
                 "odds_are_display_only": "AGENTS.md invariant 11",
                 "odds_never_a_feature_or_gate": "AGENTS.md invariants 8-9",

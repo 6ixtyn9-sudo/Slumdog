@@ -20,10 +20,17 @@ than it kept. Two discards are closed here:
 Everything recovered here is **metadata, never signal**. See
 ``shadow_settle._settled_context`` and the ``metadata_policy`` block written
 into the settlement artifact: odds are display-only (AGENTS.md invariant 11),
-never model features or gates (invariants 8-9), and Kelly-style fractions are
-excluded outright (invariant 10). That last rule is why ``kelly`` is the one
-facet deliberately *not* persisted — and why the exclusion is recorded in the
-artifact rather than happening silently.
+never model features or gates (invariants 8-9), and nothing recorded here may
+feed an EV / de-vigging / Kelly / staking calculation (invariant 10).
+
+Retention is the default and withholding is the exception. An earlier version of
+this change withheld Forebet's ``kelly`` facet from the artifact; the owner
+overruled that on 2026-09-07 — collected data is not to be discarded, since the
+mission is to predict the underdog and any tool that gets us there should be
+retained. ``kelly`` is therefore persisted as inert metadata, and the invariant-10
+bar lives in the *feature* layer (``dataset.PROHIBITED_KEYS``) instead of at the
+point of recording. Recording a number and staking on it are different acts: the
+first is required, the second is forbidden.
 """
 
 from __future__ import annotations
@@ -36,12 +43,11 @@ import pytest
 from slumdog.contracts import SettledEvent
 from slumdog.settlement import _draw_odds, parse_football_settled, parse_html_settled
 from slumdog.shadow_settle import (
-    EXCLUDED_FACET_KEYS,
     GRADE_FAILURE,
     GRADE_SUCCESS,
     GRADE_UNRESOLVED,
-    PERSISTED_FACET_KEYS,
     RANK_BANDS,
+    WITHHELD_FACET_KEYS,
     SettlementGrade,
     _build_event_index,
     _rank_band,
@@ -268,34 +274,50 @@ class TestSettledContext:
         assert ctx["draw_probability"] == 0.25
         assert "real-madrid-barcelona" in ctx["source_url"]
 
-    def test_kelly_is_excluded_and_the_exclusion_is_recorded(self):
-        """AGENTS.md invariant 10: no EV / de-vigging / Kelly / staking.
+    def test_kelly_is_retained_as_inert_metadata(self):
+        """Owner directive 2026-09-07: collected data is not to be discarded.
 
-        The parser still captures ``kelly`` in memory (unchanged behaviour), but
-        it must not reach the graded evidence — and the withholding must be
-        visible, not silent.
+        Kelly fractions are recorded, because the mission is to predict the
+        underdog and any tool that gets us there should be retained. What
+        invariant 10 forbids is *staking* on them, so that bar sits in the
+        feature layer — see test_kelly_is_barred_from_the_feature_layer.
         """
-        assert "kelly" in EXCLUDED_FACET_KEYS
-        assert "kelly" not in PERSISTED_FACET_KEYS
+        assert "kelly" not in WITHHELD_FACET_KEYS
 
         event = _settled_event()
-        assert "kelly" in event.facets  # present upstream...
+        assert "kelly" in event.facets
         ctx = _settled_context(event)
-        assert "kelly" not in ctx["facets"]  # ...absent from what we persist
-        assert ctx["facets_excluded_by_policy"] == ["kelly"]
-        assert "kelly" in ctx["facets_omitted"]
+        assert ctx["facets"]["kelly"] == "0.94"  # retained, not dropped
+        assert ctx["facets_withheld"] == []
 
-    def test_unlisted_facets_are_withheld_but_named(self):
-        ctx = _settled_context(_settled_event())
-        assert "some_future_facet" not in ctx["facets"]
-        assert "some_future_facet" in ctx["facets_omitted"]
+    def test_kelly_is_barred_from_the_feature_layer(self):
+        """Retained as data, banned as signal — that is where invariant 10 bites."""
+        from slumdog.dataset import PROHIBITED_KEYS
 
-    def test_listed_facets_survive(self):
-        ctx = _settled_context(_settled_event())
+        assert "kelly" in PROHIBITED_KEYS
+
+    def test_nothing_is_withheld_under_the_current_policy(self):
+        assert WITHHELD_FACET_KEYS == ()
+
+    def test_every_facet_the_parser_collected_is_retained(self):
+        """Retention by default — including facets no one has listed yet."""
+        event = _settled_event()
+        ctx = _settled_context(event)
+        assert set(ctx["facets"]) == set(event.facets)
+        assert ctx["facets"]["some_future_facet"] == "not-in-the-persisted-list"
         assert ctx["facets"]["host_stadium"] == "Santiago Bernabeu"
         assert ctx["facets"]["Host_SC_HT"] == "1"
         assert ctx["facets"]["move_X"] == "-0.10"
         assert ctx["facets"]["trend_en"].startswith("Real Madrid")
+
+    def test_withholding_mechanism_still_records_what_it_drops(self, monkeypatch):
+        """The denylist is empty, not absent: a future withholding stays visible."""
+        import slumdog.shadow_settle as mod
+
+        monkeypatch.setattr(mod, "WITHHELD_FACET_KEYS", ("kelly",))
+        ctx = mod._settled_context(_settled_event())
+        assert "kelly" not in ctx["facets"]
+        assert ctx["facets_withheld"] == ["kelly"]
 
     def test_no_settled_event_yields_empty_context(self):
         assert _settled_context(None) == {}
@@ -362,8 +384,11 @@ class TestOddsGovernance:
         assert policy["odds_used_as_model_features"] is False
         assert policy["odds_gate_candidates"] is False
         assert policy["missing_odds_lower_confidence"] is False
-        assert policy["kelly_excluded"] is True
-        assert policy["excluded_facet_keys"] == list(EXCLUDED_FACET_KEYS)
+        # Retention (owner directive 2026-09-07): data is kept, staking is not.
+        assert policy["facets_retained_by_default"] is True
+        assert policy["withheld_facet_keys"] == []
+        assert policy["kelly_retained_as_inert_metadata"] is True
+        assert policy["kelly_used_for_ev_devig_or_staking"] is False
         assert "invariant 10" in policy["invariants"]["no_ev_devig_kelly_or_staking"]
 
 
@@ -459,14 +484,14 @@ class TestArtifactPersistence:
         assert ctx["forebet_pick"] == 1
         assert ctx["league"] == "La Liga"
         assert ctx["facets"]["host_stadium"] == "Santiago Bernabeu"
-        assert ctx["facets_excluded_by_policy"] == ["kelly"]
+        assert ctx["facets"]["kelly"] == "0.94"  # retained, not withheld
+        assert ctx["facets_withheld"] == []
 
-    def test_kelly_never_reaches_the_written_bytes(self, tmp_path):
-        artifact_text = json.dumps(_write_artifact(tmp_path, settled=[_settled_event()]))
-        # The facet VALUE must not appear anywhere in the artifact.
-        assert "0.94" not in artifact_text
-        # The key name appears only in the policy/omission record, never as data.
-        assert '"kelly": "0.94"' not in artifact_text
+    def test_kelly_reaches_the_written_bytes(self, tmp_path):
+        """Retention is the whole point: the value must survive to the evidence."""
+        artifact = _write_artifact(tmp_path, settled=[_settled_event()])
+        assert artifact["grades"][0]["settled_context"]["facets"]["kelly"] == "0.94"
+        assert artifact["metadata_policy"]["withheld_facet_keys"] == []
 
     def test_unsettled_rows_have_empty_context_not_a_crash(self, tmp_path):
         artifact = _write_artifact(tmp_path, settled=[])

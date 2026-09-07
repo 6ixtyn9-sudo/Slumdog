@@ -451,13 +451,21 @@ carries a `metadata_policy` block asserting `odds_used_in_grading: false`,
 `missing_odds_lower_confidence: false`, and naming the invariants
 (AGENTS.md 8–11).
 
-`kelly` is the one facet **deliberately withheld**. AGENTS.md invariant 10
-forbids EV / de-vigging / Kelly / staking work, and Forebet's published Kelly
-fractions are exactly the raw material that drift needs, so they stop at the
-parser boundary. The parser still captures `kelly` in memory (behaviour
-unchanged); it does not reach the graded evidence. The withholding is recorded
-per row under `facets_excluded_by_policy`, and unlisted facets are named under
-`facets_omitted`, so nothing disappears silently.
+**Retention is the default; withholding is the exception.** Facets are persisted
+in full and `WITHHELD_FACET_KEYS` is an *empty* governance denylist. An earlier
+draft of this change withheld Forebet's `kelly` facet from the artifact on
+invariant-10 grounds; the owner overruled that on 2026-09-07 — collected data is
+not to be discarded, because the mission is to predict the underdog and any tool
+that gets us there should be retained. `kelly` is therefore recorded as inert
+metadata.
+
+The invariant-10 bar moved rather than disappeared: **recording a number and
+staking on it are different acts.** `kelly` was added to `dataset.PROHIBITED_KEYS`
+alongside `overround`, `value_edge` and `ROI`, so the retained datum can never
+become a model feature — the guard that actually prevents EV/de-vigging/Kelly
+drift sits where features are built, not where evidence is recorded. The
+withholding mechanism is kept (not deleted) so any future exclusion is a
+deliberate act named per row under `facets_withheld` instead of a silent drop.
 
 `odds_draw` was added to `dataset.PROHIBITED_KEYS` and to
 `shadow_contracts._FORBIDDEN_RECORD_FIELDS`, and declared in the facet catalogue
@@ -482,7 +490,7 @@ from `PreEventRecord` and are legitimate only in the post-event artifact.
   `unavailable_conflicting_capture` → `UNRESOLVED`. Identical duplicates (the
   case actually present in the 09-12 data) still resolve normally.
 
-Regression coverage: `tests/test_discarded_settlement_metadata.py` (45 tests).
+Regression coverage: `tests/test_discarded_settlement_metadata.py` (47 tests).
 
 **Pre-existing observation, not changed here:** `american_football.py`,
 `baseball.py`, `basketball.py`, `cricket.py` and `esports.py` each already
@@ -493,7 +501,7 @@ unilaterally.
 
 ## Verification
 
-- pytest → **789 passed, 0 deselected, 0 skipped, 0 errors** (verified 2026-09-07 on `arena/01a07b8b-slumdog`: 718 baseline + 14 rank-4+/pin-drift regression tests + 12 erratum integrity tests + 45 discarded-metadata regression tests)
+- pytest → **791 passed, 0 deselected, 0 skipped, 0 errors** (verified 2026-09-07 on `arena/01a07b8b-slumdog`: 718 baseline + 14 rank-4+/pin-drift regression tests + 12 erratum integrity tests + 47 discarded-metadata regression tests)
 - pyflakes src/slumdog scripts tests → clean on all new/changed files (14 pre-existing warnings remain in untouched `tests/test_dataset_*`, `test_forward_shadow_batch`, `test_research_incremental_builder`)
 - py_compile scripts/*.py src/slumdog/*.py tests/*.py → ok
 - git diff --check → ok

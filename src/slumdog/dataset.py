@@ -79,6 +79,12 @@ PROHIBITED_KEYS = {
     "odds_draw",
     "price",
     "overround",
+    # Kelly fractions are RETAINED as inert post-event metadata in the
+    # settlement artifact (owner directive 2026-09-07) but must never become a
+    # model feature: AGENTS.md invariant 10 forbids EV / de-vigging / Kelly /
+    # staking work. Barring the key here keeps the datum without licensing the
+    # drift — recording a number and staking on it are different acts.
+    "kelly",
     "fair_market_probability",
     "fair_implied_probability",
     "value_edge",
