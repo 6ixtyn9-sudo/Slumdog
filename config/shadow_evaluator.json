@@ -49,9 +49,10 @@
 
   "cohort_policy": {
     "primary_selection_per_sport_day": 1,
-    "top3_cohort_per_sport_day": 2,
+    "top3_cohort_per_sport_day": null,
     "no_global_cap": true,
-    "ranks_4_plus_recorded_but_not_in_cohort": true
+    "ranks_4_plus_recorded_but_not_in_cohort": true,
+    "top3_cohort_per_sport_day_null_means": "UNCAPPED: every R2-eligible, R1-ranked candidate for a sport-day is recorded as a selection (rank 1 = PRIMARY_SHADOW_SELECTION, every other rank = TOP3_EVALUATION_COHORT). No candidate that already cleared R2 is discarded. Set to a positive integer instead to cap the recorded cohort at that many non-primary ranks per sport-day (legacy behavior)."
   },
 
   "history_loader": {

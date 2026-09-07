@@ -13,7 +13,7 @@ Guarantees
 - Synthetic names only ("Synthetic Alpha" ... "Synthetic Zeta"); no
   retained real participant/event data is read, copied, or generated.
 - Reads from the repository ONLY the two frozen config files
-  (``config/research_baselines_v1.json``, ``config/shadow_evaluator_v1.json``),
+  (``config/research_baselines.json``, ``config/shadow_evaluator.json``),
   after verifying their canonical SHA-256 digests.
 - Never writes inside the repository; every generated file lands under
   the supplied external root.
@@ -68,7 +68,7 @@ EXPECTED_FROZEN_CONFIG_SHA256 = (
     "666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1"
 )
 EXPECTED_DECLARATION_SHA256 = (
-    "dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597"
+    "fe031ae550ac25d4f9c11becb701572e798f0d54f37bb8201f3a07e182503e5f"
 )
 
 SYNTHETIC_PAIRINGS = (
@@ -161,8 +161,8 @@ def build_synthetic_run(root: Path) -> dict[str, Any]:
             f"refusing to touch existing path: {root}")
 
     # 1) Synthetic repository root with ONLY the two verified config copies.
-    frozen_src = REPO_ROOT / "config" / "research_baselines_v1.json"
-    decl_src = REPO_ROOT / "config" / "shadow_evaluator_v1.json"
+    frozen_src = REPO_ROOT / "config" / "research_baselines.json"
+    decl_src = REPO_ROOT / "config" / "shadow_evaluator.json"
     for p in (frozen_src, decl_src):
         if not p.is_file():
             raise SyntheticFixtureError(f"required repository config missing: {p}")
@@ -178,8 +178,8 @@ def build_synthetic_run(root: Path) -> dict[str, Any]:
             f"shadow declaration canonical hash drift: {decl_sha}")
 
     (root / "config").mkdir(parents=True)
-    frozen_dst = root / "config" / "research_baselines_v1.json"
-    decl_dst = root / "config" / "shadow_evaluator_v1.json"
+    frozen_dst = root / "config" / "research_baselines.json"
+    decl_dst = root / "config" / "shadow_evaluator.json"
     shutil.copy(frozen_src, frozen_dst)
     shutil.copy(decl_src, decl_dst)
 

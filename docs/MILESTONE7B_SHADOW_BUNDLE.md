@@ -74,8 +74,8 @@ bundle/
     shadow_selections.json     # exact original payload bytes
     manifest.json              # exact original manifest bytes (completion marker)
   config/
-    research_baselines_v1.json # frozen R2 rule/config
-    shadow_evaluator_v1.json   # shadow declaration
+    research_baselines.json # frozen R2 rule/config
+    shadow_evaluator.json   # shadow declaration
   capture/
     receipt.json               # capture receipt used by the run
     sidecars/<sha256>.json     # every referenced capture sidecar

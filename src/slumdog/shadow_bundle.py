@@ -60,8 +60,8 @@ from typing import Any, Iterator
 # Frozen constants
 # ---------------------------------------------------------------------------
 
-BUNDLE_SCHEMA_VERSION = "slumdog_shadow_bundle_v1"
-RUN_SCHEMA_VERSION = "shadow_evaluator_v1"
+BUNDLE_SCHEMA_VERSION = "slumdog_shadow_bundle"
+RUN_SCHEMA_VERSION = "shadow_evaluator"
 
 # Canonical (parsed-JSON) SHA-256 of the frozen 6B baseline config. This
 # is the frozen R2 rule source and MUST NOT drift. It is duplicated here
@@ -70,8 +70,8 @@ RUN_SCHEMA_VERSION = "shadow_evaluator_v1"
 FROZEN_BASELINE_CONFIG_SHA256 = (
     "666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1"
 )
-FROZEN_BASELINE_CONFIG_REPO_PATH = Path("config") / "research_baselines_v1.json"
-SHADOW_DECLARATION_REPO_PATH = Path("config") / "shadow_evaluator_v1.json"
+FROZEN_BASELINE_CONFIG_REPO_PATH = Path("config") / "research_baselines.json"
+SHADOW_DECLARATION_REPO_PATH = Path("config") / "shadow_evaluator.json"
 
 DURABILITY_STATUS = "LOCAL_EXPORT_READY_FOR_INDEPENDENT_COPY"
 
@@ -91,8 +91,8 @@ INVENTORY_MEMBER = "bundle/inventory.json"
 README_MEMBER = "bundle/README.txt"
 PAYLOAD_MEMBER = "bundle/run/shadow_selections.json"
 MANIFEST_MEMBER = "bundle/run/manifest.json"
-FROZEN_CONFIG_MEMBER = "bundle/config/research_baselines_v1.json"
-DECLARATION_MEMBER = "bundle/config/shadow_evaluator_v1.json"
+FROZEN_CONFIG_MEMBER = "bundle/config/research_baselines.json"
+DECLARATION_MEMBER = "bundle/config/shadow_evaluator.json"
 
 # Roles that must be JSON-parsed during verification (small metadata).
 _METADATA_ROLES = frozenset({
@@ -758,8 +758,8 @@ Decision committed at : {committed_at}
 CONTENTS (logical layout)
   bundle/run/shadow_selections.json  immutable decision payload (exact bytes)
   bundle/run/manifest.json           completion marker + provenance (exact bytes)
-  bundle/config/research_baselines_v1.json   frozen R2 rule/config
-  bundle/config/shadow_evaluator_v1.json     shadow declaration
+  bundle/config/research_baselines.json   frozen R2 rule/config
+  bundle/config/shadow_evaluator.json     shadow declaration
   bundle/capture/receipt.json        capture receipt used by the run
   bundle/capture/sidecars/<sha>.json every referenced capture sidecar
   bundle/capture/bodies/<sha>.txt    every referenced raw capture body

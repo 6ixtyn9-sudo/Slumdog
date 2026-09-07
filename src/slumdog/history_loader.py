@@ -6,7 +6,7 @@ Pipeline:
       -> exact-byte SHA-256 per input (streamed, bounded)
       -> bounded streaming or load
       -> schema validation (via dataset._validate_settled_dict)
-      -> v2 validity filtering
+      -> ledger validity filtering
       -> duplicate/conflict handling (via dataset._census_grouping)
       -> list[SettledEvent]
       -> HistoryIndex
@@ -111,7 +111,7 @@ def _resolve_within_root(path: Path, repo_root: Path) -> Path:
 
 
 def _validate_settled_dict(d: Any) -> SettledEvent:
-    """Strict v2 settled-event validator. Raises ValueError with a
+    """Strict settled-event ledger-validity validator. Raises ValueError with a
     ``SCHEMA_*`` reason prefix on invalid input; returns the
     ``SettledEvent`` on success.
 
@@ -152,10 +152,10 @@ def _is_two_way(sport: str) -> bool:
     return not bool(getattr(spec, "draw_possible", False))
 
 
-def _v2_filter_one(
+def _ledger_validity_filter_one(
     ev: SettledEvent, *, cutoff_date: date
 ) -> tuple[bool, str | None]:
-    """Apply v2 validity rules. Returns (ok, reason_if_not_ok)."""
+    """Apply ledger validity rules. Returns (ok, reason_if_not_ok)."""
     from .sports import SPORTS
     from .shadow_contracts import key_of
     # Sport recognition
@@ -204,7 +204,7 @@ def load_valid_history(
     history_paths: list[str | Path] | None = None,
     max_interim_bytes: int = DEFAULT_MAX_INTERIM_BYTES,
 ) -> HistoryLoadResult:
-    """Load prior settled events with exact v2 validity.
+    """Load prior settled events with exact ledger validity.
 
     If ``history_paths`` is None, the loader reads:
 
@@ -329,14 +329,14 @@ def load_valid_history(
     # Stage 1: decoded rows
     schema_invalid = sum(v for k, v in excluded_counts.items() if k.startswith("SCHEMA_INVALID") or k.startswith("MALFORMED"))
     schema_valid_candidate_rows = decoded_rows - schema_invalid
-    # Stage 2: v2 validity filter
+    # Stage 2: ledger validity filter
     valid: list[SettledEvent] = []
     for ev in raw_settled:
-        ok, reason = _v2_filter_one(ev, cutoff_date=cutoff_date)
+        ok, reason = _ledger_validity_filter_one(ev, cutoff_date=cutoff_date)
         if ok:
             valid.append(ev)
         else:
-            excluded_counts[reason or "V2_INVALID"] += 1
+            excluded_counts[reason or "LEDGER_INVALID"] += 1
     # Stage 3: dedup + conflict (per _census_grouping)
     canonical, exact_duplicates, conflicting_keys, conflicting_rows = _emit_canonical(valid)
     # Admitted rows
@@ -354,17 +354,17 @@ def load_valid_history(
 
     # Verify the three equations that must hold for non-overlap:
     # 1. decoded_rows == schema_invalid + schema_valid_candidate_rows
-    # 2. schema_valid_candidate_rows == history_v2_excluded + unique_valid_rows + exact_duplicate_rows + conflicting_rows
-    #    where history_v2_excluded = sum of v2-exclusion counts
-    v2_excluded = sum(v for k, v in excluded_counts.items()
+    # 2. schema_valid_candidate_rows == history_ledger_excluded + unique_valid_rows + exact_duplicate_rows + conflicting_rows
+    #    where history_ledger_excluded = sum of ledger-validity-exclusion counts
+    validity_excluded = sum(v for k, v in excluded_counts.items()
                       if k not in ("MALFORMED_JSON", "MALFORMED_JSONL")
                       and not k.startswith("SCHEMA_INVALID"))
     assert decoded_rows == schema_invalid + schema_valid_candidate_rows, (
         f"decoded rows imbalance: {decoded_rows} vs {schema_invalid}+{schema_valid_candidate_rows}"
     )
-    assert schema_valid_candidate_rows == v2_excluded + len(canonical) + exact_duplicates + conflicting_rows, (
+    assert schema_valid_candidate_rows == validity_excluded + len(canonical) + exact_duplicates + conflicting_rows, (
         f"validity/dedup imbalance: {schema_valid_candidate_rows} vs "
-        f"{v2_excluded}+{len(canonical)}+{exact_duplicates}+{conflicting_rows}"
+        f"{validity_excluded}+{len(canonical)}+{exact_duplicates}+{conflicting_rows}"
     )
 
     return HistoryLoadResult(

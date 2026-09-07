@@ -2,8 +2,8 @@
 """Forward shadow batch driver — rolling-date capture + evaluate + bundle.
 
 Runs the forward shadow pipeline for the next N target dates, starting
-from D+2 (the earliest date reachable under the frozen timing-v1
-contract). For each date:
+from D+2 (the earliest date reachable under the frozen 24h pre-event
+timing contract). For each date:
 
 1. Collision check: skip if evidence already exists.
 2. Capture: one Forebet listing per sport (workers=1, 62s pauses).
@@ -39,7 +39,7 @@ from pathlib import Path
 def compute_target_dates(n: int = 5, *, base: dt.date | None = None) -> list[str]:
     """Return the next N reachable target dates (D+2 through D+N+1).
 
-    Under timing-v1, the earliest reachable target date is always D+2
+    Under the frozen 24h pre-event timing contract, the earliest reachable target date is always D+2
     (the cutoff for D+1 has already passed by the time any run starts).
     """
     now_utc = dt.datetime.now(dt.timezone.utc).date()
@@ -71,7 +71,7 @@ def has_existing_evidence(target_date: str, repo_root: Path) -> bool:
 # the day after that date (D+1): by then Forebet's final results for
 # that date should exist. This is intentionally simple (a fixed
 # calendar offset, not a kickoff-time check) — the same conservative
-# posture as the frozen timing-v1 pre-event cutoff, applied to the
+# posture as the frozen 24h pre-event cutoff, applied to the
 # other end of the run's lifecycle. Settlement is fully idempotent and
 # additive: it only ever considers runs that have selections but no
 # settlement.json yet, and never touches a run that is already
@@ -310,7 +310,7 @@ def run_evaluator(
     Returns the evaluator output dict.
     """
     receipt_path = repo_root / "data" / "reports" / f"capture_{target_date}.json"
-    config_path = repo_root / "config" / "shadow_evaluator_v1.json"
+    config_path = repo_root / "config" / "shadow_evaluator.json"
     if not receipt_path.is_file():
         raise RuntimeError(f"capture receipt not found: {receipt_path}")
     if not config_path.is_file():
@@ -543,7 +543,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Write batch receipt
     batch_receipt = {
-        "batch_schema": "forward_shadow_batch_v1",
+        "batch_schema": "forward_shadow_batch",
         "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "target_dates": targets,
         "results": results,

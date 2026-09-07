@@ -533,7 +533,7 @@ class StrongUnderdogAssessment:
     source_url: str = ""
     raw_sha256: str = ""
     captured_at: str = ""
-    assessment_version: str = "price-free-v1"
+    assessment_version: str = "price-free"
 
     # Reserved for later approved stages — must remain None until legitimately produced
     slumdog_underdog_probability: float | None = None
@@ -604,7 +604,7 @@ class DailyUnderdogShortlist:
     strong_candidates: tuple[StrongUnderdogAssessment, ...] = ()
     watchlist_candidates: tuple[StrongUnderdogAssessment, ...] = ()
     rejection_counts: dict[str, int] = field(default_factory=dict)
-    assessment_version: str = "price-free-v1"
+    assessment_version: str = "price-free"
     source_receipt: str = ""
 
     def __post_init__(self) -> None:
@@ -676,7 +676,7 @@ def build_assessment_from_identity(
     source_url: str = "",
     raw_sha256: str = "",
     captured_at: str = "",
-    assessment_version: str = "price-free-v1",
+    assessment_version: str = "price-free",
 ) -> StrongUnderdogAssessment | None:
     """Build StrongUnderdogAssessment from identity — returns None if not eligible."""
 

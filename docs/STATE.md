@@ -1,10 +1,10 @@
 # Slumdog State — Canonical Current Truth
 
-**Last verified:** 2026-09-03 (UTC) — **PR #15 MERGED INTO `main` (`main` @ `3b57464`)** / **FORWARD SHADOW WORKFLOW LIVE** (`.github/workflows/forward_shadow.yml`, `contents: write`, `actions: read`) / **SHADOW EVIDENCE IN GIT** (27 files) / **CONTRACT AMENDED** (owner directive 2026-09-03 "no ledgers in Codespace") / **CODESPACE DEV-ONLY** / **PRODUCTION NOT AUTHORIZED** / **SHORTLIST POLICY NOT AUTHORIZED**. 694 tests pass (zero skips).
+**Last verified:** 2026-09-07 (UTC) — **`main` @ `02cce6f`** / **AUTOMATED D+1 SETTLEMENT LIVE AND PROVEN IN PRODUCTION** (three dates settled by real dispatches so far: 2026-09-02, 09-05, 09-06; artifacts on `main`) / **UNCAPPED-COHORT AMENDMENT + MILESTONE 7D RETIREMENT + VERSION-SUFFIX CLEANUP (owner directive 2026-09-07: no `_v1`/`_v2` naming, incl. dataset-contract version strings per owner sign-off; addendum folded into HANDOFF.md; sole exception: historical-file compatibility list in `dataset.py`) IMPLEMENTED ON `arena/01a07741-slumdog`, PR PENDING OWNER SIGN-OFF** / **FORWARD SHADOW WORKFLOW LIVE** (`.github/workflows/forward_shadow.yml`, `contents: write`, `actions: read`) / **SHADOW EVIDENCE IN GIT** (runs 2026-09-05..13 + settlements + bundles) / **CONTRACT AMENDED** (owner directive 2026-09-03 "no ledgers in Codespace") / **CODESPACE DEV-ONLY** / **PRODUCTION NOT AUTHORIZED** / **SHORTLIST POLICY NOT AUTHORIZED**. 718 tests pass, zero skips, zero deselects (the orphaned Milestone 7D test file was removed 2026-09-07 — see that milestone's entry).
 
-**Branch:** `arena/01a066f2-slumdog` (from `main` @ `3b57464`); `main` is only permanent branch
+**Branch:** `arena/01a07741-slumdog` (uncapped-cohort amendment + Milestone 7D retirement session, from `main` @ `02cce6f`); `main` is only permanent branch
 **Doc canonical path:** `docs/STATE.md`
-**Base commit:** `3b57464ef36181519f26c34ad7018aca561a5c99` (PR #15 merged)
+**Base commit:** `02cce6f0f74478062d86f8dab210ebdf3d7454cd` (main tip at this verification)
 ## Permanent Product Mission
 
 > **Slumdog identifies a small daily shortlist of participants that Forebet considers underdogs but whose available pre-event evidence indicates a credible outright-win upset.**
@@ -33,7 +33,7 @@ Invariants:
 
 - Milestone 7B (IMPLEMENTED/TESTED LOCALLY / PR opened NOT merged / NO REAL BUNDLE, CAPTURE, OR RUN): verifiable full-payload shadow bundle — `slumdog.shadow_bundle` (stdlib-only, imports no other Slumdog module). `create` packages a completed run's exact `shadow_selections.json` + `manifest.json` plus both frozen configs, the capture receipt, every referenced sidecar/raw body, and every history input into a deterministic content-addressed `bundle/` tar.gz (sorted members, uid/gid 0, mode 0644, mtime 0, gzip mtime 0, regular files only) with a canonical `inventory.json`, human `README.txt`, external `*.bundle.json` receipt, and `*.sha256` marker; refuses partial/blocked runs, corrupt payloads, hash mismatches, missing inputs, unsupported schema/version, out-of-root/traversal/symlink paths, and pre-existing outputs (no force); temp-sibling + atomic-rename finalization with the checksum marker last. `verify` runs fully in memory (no extraction): archive SHA-256, receipt/declaration authorization flags (all false), safe members (no absolute/`..`/symlink/device/FIFO/duplicate/unexpected), inventory schema + per-member hash/size, payload-vs-manifest, recomputed frozen-config + declaration canonical hashes, and recomputed input/decision digests + run id; exit 0 with `BUNDLE_VERIFIED` or exit 2 with a clean `BUNDLE_VERIFY_FAILED`. Determinism proven by two-out-dir byte-identical archives via the CLI. 67 focused synthetic tests (incl. bounded-memory streaming); full suite 601 passed. Durability status `LOCAL_EXPORT_READY_FOR_INDEPENDENT_COPY`. Training FROZEN; production/shortlist/threshold NOT authorized. Docs: `docs/MILESTONE7B_SHADOW_BUNDLE.md`.
 
-- Milestone 7D (IMPLEMENTED/TESTED LOCALLY / PR opened NOT merged / WORKFLOW NOT DISPATCHED ON GITHUB): cloud-only second-copy procedure — `.github/workflows/shadow_bundle_cloud_backup.yml` (manual `workflow_dispatch` ONLY; `permissions: contents: read`; actions/checkout, actions/setup-python, actions/upload-artifact, actions/download-artifact pinned to immutable full commit SHAs; 15-minute timeout on every job; no caches of any kind; concurrency-queued, never simultaneous; EXPLICIT 30-day artifact retention — Actions artifacts are NOT permanent storage; fail-closed on any hash/verify mismatch; logs carry filenames/hashes/ids only, never bundle contents or participants) plus `scripts/synthetic_shadow_fixture.py` (deterministic, network-free generator of an entirely synthetic completed run: `SHADOW_SELECTIONS_EMITTED` with 1 primary + 2 top-3 cohort, synthetic participants only, injected decision clock 36h before the frozen 24h cutoff, reads only the two frozen configs after canonical-hash verification, never writes inside the repository, refuses existing roots) and 21 focused tests (9 fixture + 12 workflow-contract, incl. owner-added regressions: required workflow presence, embedded-heredoc compilation, verification-receipt upload). Create job: fixture → `python -m slumdog.shadow_bundle create` → local verify (`BUNDLE_VERIFIED` required) → `sha256sum -c` → ONE artifact `shadow-bundle-<target_date>-<run_id>-<sha256-prefix-8>` holding the exact three-file triplet. Verify job on a FRESH runner depending only on the downloaded artifact: recompute archive SHA-256 (exact match vs creation job required) → `shadow_bundle verify` (`BUNDLE_VERIFIED` required) → marker re-check → compact JSON receipt `slumdog_cloud_bundle_verification_v1` (workflow run id/attempt, artifact name, target date, run id, archive SHA-256, creation/verification job identity, UTC timestamp, retention days, authorization flags all false) published to the job summary and as a separate artifact, never auto-committed. No change to the shadow evaluator, R2, ranking, configs, or production code. Status distinctions: implemented YES (committed on PR #13) / syntax validated YES (PyYAML + 12 contract tests, ZERO skips; a missing workflow file now FAILS the suite) / executed on GitHub NO / artifact uploaded NO / independent verification passed NO — cloud backup must NOT be claimed working until a real manual dispatch succeeds. Docs: `docs/MILESTONE7D_CLOUD_BACKUP.md`.
+- Milestone 7D (**RETIRED 2026-09-07** — provenance: implemented/tested locally, merged via PR #13 at `b086eae` on 2026-08-30, then the owner deliberately deleted `.github/workflows/shadow_bundle_cloud_backup.yml` directly from `main` on 2026-09-03 (commit `5641111`). Its contract test file `tests/test_cloud_backup_workflow.py` (12 tests hard-requiring the workflow file to exist, last touched `c35a8d1` 2026-08-30) was never removed at the time, so those 12 tests genuinely failed on `main` from 2026-09-03 until 2026-09-07 while being masked by `--deselect` in every intervening session. Owner decision 2026-09-07: retire rather than restore. The orphaned test file is now deleted; `scripts/synthetic_shadow_fixture.py` and `tests/test_synthetic_shadow_fixture.py` (9 tests) are self-contained and unaffected; `docs/MILESTONE7D_CLOUD_BACKUP.md` remains as historical documentation. Full suite is now green with NO deselects.) — original description follows for the record: cloud-only second-copy procedure — `.github/workflows/shadow_bundle_cloud_backup.yml` (manual `workflow_dispatch` ONLY; `permissions: contents: read`; actions/checkout, actions/setup-python, actions/upload-artifact, actions/download-artifact pinned to immutable full commit SHAs; 15-minute timeout on every job; no caches of any kind; concurrency-queued, never simultaneous; EXPLICIT 30-day artifact retention — Actions artifacts are NOT permanent storage; fail-closed on any hash/verify mismatch; logs carry filenames/hashes/ids only, never bundle contents or participants) plus `scripts/synthetic_shadow_fixture.py` (deterministic, network-free generator of an entirely synthetic completed run: `SHADOW_SELECTIONS_EMITTED` with 1 primary + 2 top-3 cohort, synthetic participants only, injected decision clock 36h before the frozen 24h cutoff, reads only the two frozen configs after canonical-hash verification, never writes inside the repository, refuses existing roots) and 21 focused tests (9 fixture + 12 workflow-contract, incl. owner-added regressions: required workflow presence, embedded-heredoc compilation, verification-receipt upload). Create job: fixture → `python -m slumdog.shadow_bundle create` → local verify (`BUNDLE_VERIFIED` required) → `sha256sum -c` → ONE artifact `shadow-bundle-<target_date>-<run_id>-<sha256-prefix-8>` holding the exact three-file triplet. Verify job on a FRESH runner depending only on the downloaded artifact: recompute archive SHA-256 (exact match vs creation job required) → `shadow_bundle verify` (`BUNDLE_VERIFIED` required) → marker re-check → compact JSON receipt `slumdog_cloud_bundle_verification_v1` (workflow run id/attempt, artifact name, target date, run id, archive SHA-256, creation/verification job identity, UTC timestamp, retention days, authorization flags all false) published to the job summary and as a separate artifact, never auto-committed. No change to the shadow evaluator, R2, ranking, configs, or production code. Status distinctions: implemented YES (committed on PR #13) / syntax validated YES (PyYAML + 12 contract tests, ZERO skips; a missing workflow file now FAILS the suite) / executed on GitHub NO / artifact uploaded NO / independent verification passed NO — cloud backup must NOT be claimed working until a real manual dispatch succeeds. Docs: `docs/MILESTONE7D_CLOUD_BACKUP.md`.
 
 ## Real-Data Census (Codespace retained ledgers)
 
@@ -93,8 +93,9 @@ Temporary artifacts (not committed):
 Milestones 0–7D: COMPLETE AND MERGED (PR #13 merged at b086eae, 622 tests)
 Settlement module (P1): IMPLEMENTED — shadow_settle.py + 45 focused tests
   (41 original + 4 sport-scoping, 2026-09-06)
-Automated D+1 settlement (P1 continuation, 2026-09-06): IMPLEMENTED, NOT YET
-  DISPATCHED ON GITHUB — forward_shadow.yml's existing daily job (dispatched
+Automated D+1 settlement (P1 continuation, 2026-09-06): MERGED (PR #16,
+  merge commit c06659c) AND PROVEN IN PRODUCTION — forward_shadow.yml's
+  existing daily job (dispatched
   externally via cron-job.org at 06:00 SAST/04:00 UTC; NOT a native GitHub
   `schedule:` trigger — the workflow remains workflow_dispatch-only per its
   pinned contract test) now settles any overdue prediction run BEFORE its
@@ -120,12 +121,18 @@ Automated D+1 settlement (P1 continuation, 2026-09-06): IMPLEMENTED, NOT YET
   updated to match (ceiling only, not the requirement that every job
   declare an explicit timeout). No new GitHub Actions workflow file was
   added — this rides entirely on the existing forward_shadow.yml job,
-  per owner instruction. First scheduled dispatch will attempt to clear
-  the existing backlog (2026-09-02, 2026-09-05..09) automatically before
-  proceeding to that day's forward capture.
+  per owner instruction. The first real dispatch (2026-09-06) settled the
+  backlog eligible as of that date — 2026-09-02 (run acd78872019300ff) and
+  2026-09-05 (run 4353ca88e825fd6a) — writing real settlement.json artifacts
+  (schema shadow_settlement_v1) and settlement_capture_receipt.json files to
+  git on main; remaining dates settle automatically as their D+1 arrives on
+  each subsequent daily dispatch.
   IMPORTANT: the settlement.json this module writes lives at
   data/reports/shadow/<date>/<run_id>/settlement.json with schema
-  "settlement_schema_version": "shadow_settlement_v1". This is DIFFERENT
+  "settlement_schema_version": "shadow_settlement" (artifacts committed
+  before the 2026-09-07 version-suffix cleanup carry the legacy tag
+  "shadow_settlement_v1"; they are immutable evidence and are not
+  rewritten). This is DIFFERENT
   from the pre-existing data/reports/shadow/settlements/2026-09-02/
   acd78872019300ff.settlement.json, whose schema is
   "version": "shadow_settlement_v1_manual_binding" — that file was a
@@ -134,27 +141,74 @@ Automated D+1 settlement (P1 continuation, 2026-09-06): IMPLEMENTED, NOT YET
   shadow_settle.py-produced settlement.json at its own run directory;
   the two are not the same artifact and must not be conflated.
 Forward batch workflow (P3): CREATED — forward_shadow.yml + driver script + 20 contract tests
+  (now 52 tests in tests/test_forward_shadow_batch.py incl. D+1 settlement
+  and history-selection coverage). run_evaluator() history-selection bug
+  fixed by 972b79a (2026-09-06, +5 regression tests): it was passing
+  backfill manifest files (history_<sport>.json) to the evaluator's
+  --history, which only accepts history_*.jsonl.gz ledgers and
+  settled_history.json — the root cause of SHADOW_RUN_BLOCKED on
+  2026-09-10/11/12; resolved, confirmed by a successful production
+  re-dispatch (real runs + bundles for those dates now on main).
 Draw-avoidance analysis (P7): CREATED — draw_analysis.py + 11 focused tests
 Timing-V2 proposal (P6): DRAFTED — docs/TIMING_V2_PROPOSAL.md (not implemented)
-Real shadow runs: EXIST IN CODESPACE (5 forward dates 2026-09-05..09, all BUNDLE_VERIFIED)
-Real settlement (manual/ad-hoc, NOT shadow_settle.py output): 2026-09-02 settled
-  2026-09-03 (primary SUCCESS, top-3 1/3) — see IMPORTANT note above
+Real shadow runs: ON MAIN (8 forward dates 2026-09-05..12; 09-05..09
+  BUNDLE_VERIFIED from the codespace era, 09-10/11/12 produced by
+  production dispatches after the 972b79a fix, each with manifest +
+  selections + bundle artifacts on main)
+Real settlement (AUTOMATED, shadow_settle.py output, on main): 2026-09-02
+  (run acd78872019300ff: primary 1/1, top-3 1/3), 2026-09-05 (run
+  4353ca88e825fd6a: primary 0/1, top-3 2/3), and 2026-09-06 (run
+  8d9a696cd42c1878, settled by the 2026-09-07 dispatch), schema
+  shadow_settlement_v1. Distinct from the pre-existing manual/ad-hoc file
+  at data/reports/shadow/settlements/2026-09-02/
+  acd78872019300ff.settlement.json (schema
+  shadow_settlement_v1_manual_binding) — see IMPORTANT note above. Sample
+  size (3 primary picks) is far too small for any performance conclusion —
+  see docs/REVIEW_2026-09-06_STATUS_PERFORMANCE_RECOMMENDATIONS.md §5 and
+  the "Sport Eligibility Findings" section of HANDOFF.md.
 Canonical config SHA-256: 666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1 (VERIFIED)
-New shadow declaration canonical SHA-256: dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597 (VERIFIED)
-Tests: 713 passed, 12 deselected (694 prior + 4 sport-scoping + 27 D+1
-  orchestration/robustness tests, including 4 added post-review to cover a
-  malformed-run-file edge case; 12 deselected are the pre-existing
-  test_cloud_backup_workflow.py failures — that workflow file was never
-  committed to main, unrelated to this change)
+New shadow declaration canonical SHA-256: fe031ae550ac25d4f9c11becb701572e798f0d54f37bb8201f3a07e182503e5f (VERIFIED, on branch arena/01a07741-slumdog after the uncapped-cohort amendment; supersedes dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597 which remains the hash of the declaration as merged via PR #16)
+Tests: 718 passed, 0 deselected, 0 skipped (2026-09-07: orphaned
+  Milestone 7D test file removed — its 12 tests had failed on main since
+  2026-09-03 when the owner deleted the workflow they police; previously
+  masked by --deselect. Uncapped-cohort amendment renames/rewrites 1 test,
+  net count unchanged)
 Training: FROZEN
 Production: NOT AUTHORIZED
 Shortlist policy: NOT AUTHORIZED
-Selection width: 1 primary + rank-2/3 cohort (FROZEN; grading all ranks 1..N is authorized)
-Next: first scheduled forward_shadow.yml dispatch will exercise D+1 settlement
-  automation for real (backlog clear + steady-state); confirm results before
-  claiming the automation "works" end-to-end (same evidence standard as
-  Milestone 7D's cloud backup — implemented/tested locally is not the same
-  as a proven real dispatch)
+Selection width: UNCAPPED (owner amendment 2026-09-07, branch
+  arena/01a07741-slumdog, PR pending): cohort_policy.top3_cohort_per_
+  sport_day = null — every R2-eligible, R1-ranked event per sport-day is
+  recorded (rank 1 = PRIMARY_SHADOW_SELECTION, every other rank =
+  TOP3_EVALUATION_COHORT). Downstream recording width ONLY: R2
+  eligibility thresholds and R1 ranking order untouched/frozen.
+  ELIGIBLE_RANKED_BEYOND_TOP3 stays in the schema, permanently
+  unreachable while the width is null. Supersedes the fixed width of 2.
+Next: (1) owner sign-off + merge of arena/01a07741-slumdog PR
+  (uncapped-cohort amendment + Milestone 7D retirement); (2) the first
+  forward_shadow.yml dispatch after merge must be checked for the uncapped
+  path firing end-to-end: at least one sport-day's manifest must show
+  top3_cohort_selected reflecting every eligible-ranked event with
+  eligible_ranked_beyond_top3 == 0; (3) remaining forward runs keep
+  settling automatically as their D+1 arrives on each daily dispatch
+  (2026-09-07 eligible from 09-08, ..., 2026-09-13 from 09-14); let the
+  settled backlog accumulate before judging any direction (3 settled
+  primary picks is not a rate).
+  Owner decision pending: the feature-usage gap documented in
+  docs/REVIEW_2026-09-06_STATUS_PERFORMANCE_RECOMMENDATIONS.md §3/§6.1
+  (17-field frozen decision vector vs the 60+-field
+  football.py::extract_football_features module) — no change without
+  explicit owner authorization (touches the frozen R2 contract; AGENTS.md
+  anti-tuning rule requires pre-authorization).
+  No backfill recommended for any sport — tennis/mma are structurally
+  H2H-gated, cricket's archive window is young; see
+  the "Sport Eligibility Findings" section of HANDOFF.md.
+  Test invocation: always `python -m pytest` (a bare `pytest` fails ~39
+  tests in tests/test_forward_shadow_batch.py with ModuleNotFoundError:
+  No module named 'scripts' — scripts/ has no __init__.py and bare
+  pytest does not put cwd on sys.path; reproduced in two independent
+  sandboxes, pre-existing, unrelated to any 2026-09-07 change).
+  Training remains FROZEN.
 ```
 
 ## System Maturity: EARLY STAGE (~10% complete)
@@ -200,7 +254,7 @@ Next: first scheduled forward_shadow.yml dispatch will exercise D+1 settlement
   `training_authorized=false`, `threshold_optimization_authorized=false`
   (fail-closed at declaration load).
 - Frozen rule source: R2 read from
-  `config/research_baselines_v1.json:rules.R2_CONSERVATIVE_FIXED_RULE`
+  `config/research_baselines.json:rules.R2_CONSERVATIVE_FIXED_RULE`
   (canonical SHA-256
   `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1`).
 - Frozen 24h pre-event timing gate: `captured_at` AND
@@ -257,7 +311,7 @@ Next: first scheduled forward_shadow.yml dispatch will exercise D+1 settlement
   in this session.
 
 
-- Frozen configuration verified: `config/research_baselines_v1.json` with canonical SHA-256 `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1`
+- Frozen configuration verified: `config/research_baselines.json` with canonical SHA-256 `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1`
 - Pass 1: streaming integrity checks over decompressed JSONL bytes, row count matching `receipt.accounting.eligible_examples`, date coverage within P1..P4 union, fail-closed on non-finite values and prohibited keys
 - Pass 2: streaming metrics computation:
   - Missingness reporting for every analyzed feature (global & per sport per period)
@@ -285,12 +339,12 @@ reproducibility.
 
 ## Verification
 
-- pytest → 694 passed (622 + 41 settlement + 20 forward batch + 11 draw analysis)
+- pytest → 718 passed, 0 deselected, 0 skipped (verified 2026-09-07 via `python -m pytest` on `arena/01a07741-slumdog` @ uncapped-cohort amendment; bare `pytest` invocation NOT recommended — see Next section)
 - pyflakes src/slumdog scripts tests → clean on all new/changed files
 - py_compile scripts/*.py src/slumdog/*.py tests/*.py → ok
 - git diff --check → ok
 - Frozen baseline config SHA-256 → `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1` MATCH
-- New shadow declaration canonical SHA-256 → `dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597` (unchanged)
+- New shadow declaration canonical SHA-256 → `fe031ae550ac25d4f9c11becb701572e798f0d54f37bb8201f3a07e182503e5f` (changed 2026-09-07 by the uncapped-cohort amendment on `arena/01a07741-slumdog`; previous: `dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597`)
 - Golden regression → `1a97cb81fc6521a99f1055a873975d562cae33fefce7468ceca929739f8fca0d` (unchanged)
 - CLI: `python -m slumdog.shadow_evaluator --help` → exit 0
 - CLI: `python -m slumdog.shadow_settle --help` → exit 0
@@ -300,6 +354,7 @@ reproducibility.
 - AGENTS.md — constitution
 - README.md — overview
 - HANDOFF.md — living handoff with full census evidence
+- docs/REVIEW_2026-09-06_STATUS_PERFORMANCE_RECOMMENDATIONS.md — 2026-09-06 status/performance review (REVIEW/REFERENCE ONLY, not canonical)
 - docs/PRICE_FREE_DATASET_CONTRACT.md — dataset contract CURRENT
 - docs/FEATURE_TIMING_CONTRACT.md — timing contract CURRENT (period_values UNKNOWN)
 - docs/MILESTONE1_AUDIT.md — audit REFERENCE

@@ -733,7 +733,7 @@ def write_settlement_artifact(
         })
 
     settlement_payload = {
-        "settlement_schema_version": "shadow_settlement_v1",
+        "settlement_schema_version": "shadow_settlement",
         "target_date": target_date,
         "run_id": run_id,
         "settled_at": settled_at,

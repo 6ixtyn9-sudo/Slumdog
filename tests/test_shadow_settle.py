@@ -615,7 +615,7 @@ class TestWriteSettlementArtifact:
             repo_root=tmp_path,
         )
         payload = json.loads(Path(result.settlement_artifact_path).read_text())
-        assert payload["settlement_schema_version"] == "shadow_settlement_v1"
+        assert payload["settlement_schema_version"] == "shadow_settlement"
         assert payload["grading_contract"]["target"] == "UNDERDOG_WIN"
 
     def test_prediction_run_unmodified(self, tmp_path):

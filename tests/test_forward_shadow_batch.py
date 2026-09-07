@@ -249,7 +249,7 @@ class TestRunEvaluatorHistorySelection:
         )
         config_dir = repo_root / "config"
         config_dir.mkdir(parents=True, exist_ok=True)
-        (config_dir / "shadow_evaluator_v1.json").write_text("{}")
+        (config_dir / "shadow_evaluator.json").write_text("{}")
 
     def _capture_history_args(self, monkeypatch, repo_root: Path, target_date: str) -> list[str]:
         import scripts.forward_shadow_batch as fsb
@@ -335,12 +335,12 @@ class TestRunEvaluatorHistorySelection:
         repo_root = Path(__file__).resolve().parents[1]
         (tmp_path / "config").mkdir()
         shutil.copy(
-            repo_root / "config" / "shadow_evaluator_v1.json",
-            tmp_path / "config" / "shadow_evaluator_v1.json",
+            repo_root / "config" / "shadow_evaluator.json",
+            tmp_path / "config" / "shadow_evaluator.json",
         )
         shutil.copy(
-            repo_root / "config" / "research_baselines_v1.json",
-            tmp_path / "config" / "research_baselines_v1.json",
+            repo_root / "config" / "research_baselines.json",
+            tmp_path / "config" / "research_baselines.json",
         )
         reports_dir = tmp_path / "data" / "reports"
         reports_dir.mkdir(parents=True)

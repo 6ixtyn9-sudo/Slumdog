@@ -101,8 +101,8 @@ def make_example_row(
         "missingness": missingness,
         "source_url": f"/en/{sport}/matches/x/y/{event_id}",
         "raw_sha256": "a" * 64,
-        "feature_contract_version": "price-free-v2-incremental-valid-history",
-        "label_contract_version": "price-free-v1",
+        "feature_contract_version": "price-free-incremental-valid-history",
+        "label_contract_version": "price-free",
         "exclusion_reason": None,
         "legacy_provenance_missing": False,
     }
@@ -138,7 +138,7 @@ def write_test_dataset(out_dir: Path, rows: list[dict]) -> tuple[Path, Path]:
 
 
 def test_frozen_config_canonical_sha256_matches():
-    """Verify that the frozen research_baselines_v1.json matches the canonical SHA-256."""
+    """Verify that the frozen research_baselines.json matches the canonical SHA-256."""
     config_text = FROZEN_CONFIG_PATH.read_text(encoding="utf-8")
     config_dict = json.loads(config_text)
     sha256 = verify_frozen_config(config_dict, CANONICAL_CONFIG_SHA256)

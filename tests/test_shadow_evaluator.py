@@ -58,12 +58,13 @@ from slumdog.shadow_evaluator import (
     safe_cutoff_utc,
     validate_event_identity,
 )
+from slumdog.research_builder import RESEARCH_FEATURE_CONTRACT_VERSION
 from slumdog.shadow_contracts import PreEventRecord
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SHADOW_DECL_PATH = REPO_ROOT / "config" / "shadow_evaluator_v1.json"
-FROZEN_CONFIG_PATH = REPO_ROOT / "config" / "research_baselines_v1.json"
+SHADOW_DECL_PATH = REPO_ROOT / "config" / "shadow_evaluator.json"
+FROZEN_CONFIG_PATH = REPO_ROOT / "config" / "research_baselines.json"
 
 # Golden regression hash for the shared feature helper.
 #
@@ -90,10 +91,22 @@ FROZEN_CONFIG_PATH = REPO_ROOT / "config" / "research_baselines_v1.json"
 # obtained ONLY after the base-vs-current comparison above. If the
 # current digest ever stops matching, this test will fail BEFORE the
 # hardcoded value is updated.
+#
+# ONE-TIME RE-BASELINE (2026-09-07, owner sign-off): the dataset-contract
+# version strings were de-suffixed per explicit owner directive
+# (price-free-v1-minimal-2026-08-24 -> price-free-minimal-2026-08-24,
+# price-free-v1 -> price-free). Those two fields are embedded in every
+# serialized example, so the golden digest and byte count were re-anchored:
+#   digest: 1a97cb81...fca0d (above) -> ff8acd0be142d8793a06f5112498a0864
+#           f27be588897dfee26dd0b657da249b9
+#   bytes : 21430 -> 21340 (exactly -90 = 15 examples x 6 removed chars;
+#           the ONLY byte difference — example count and all feature values
+#           are unchanged). This re-anchor covers the rename ONLY; the
+#           digest must not be regenerated for any other change.
 GOLDEN_SHARED_FEATURE_DIGEST = (
-    "1a97cb81fc6521a99f1055a873975d562cae33fefce7468ceca929739f8fca0d"
+    "ff8acd0be142d8793a06f5112498a0864f27be588897dfee26dd0b657da249b9"
 )
-GOLDEN_CANONICAL_BYTE_COUNT = 21430
+GOLDEN_CANONICAL_BYTE_COUNT = 21340
 GOLDEN_EXAMPLE_COUNT = 15
 
 
@@ -157,8 +170,8 @@ def tmp_root():
         root = Path(tmp)
         (root / "config").mkdir()
         (root / "data" / "reports" / "shadow").mkdir(parents=True)
-        shutil.copy(FROZEN_CONFIG_PATH, root / "config" / "research_baselines_v1.json")
-        shutil.copy(SHADOW_DECL_PATH, root / "config" / "shadow_evaluator_v1.json")
+        shutil.copy(FROZEN_CONFIG_PATH, root / "config" / "research_baselines.json")
+        shutil.copy(SHADOW_DECL_PATH, root / "config" / "shadow_evaluator.json")
         yield root
 
 
@@ -192,22 +205,22 @@ def test_frozen_r2_rule_structure_verified(tmp_root):
 
 
 def test_frozen_config_drift_rejected(tmp_root):
-    cfg = json.loads((tmp_root / "config" / "research_baselines_v1.json").read_text())
+    cfg = json.loads((tmp_root / "config" / "research_baselines.json").read_text())
     cfg["rules"][FROZEN_R2_KEY]["policy_candidate"] = True
-    (tmp_root / "config" / "research_baselines_v1.json").write_text(json.dumps(cfg))
+    (tmp_root / "config" / "research_baselines.json").write_text(json.dumps(cfg))
     with pytest.raises(ShadowEvaluatorError):
         load_frozen_baseline_config(tmp_root)
 
 
 def test_frozen_config_eligibility_drift_rejected(tmp_root):
-    cfg = json.loads((tmp_root / "config" / "research_baselines_v1.json").read_text())
+    cfg = json.loads((tmp_root / "config" / "research_baselines.json").read_text())
     cfg["rules"][FROZEN_R2_KEY]["eligibility"] = [
         {"feature": "underdog_prior_games", "op": "gte", "value": 3},
         {"feature": "favorite_prior_games", "op": "gte", "value": 5},
         {"feature": "h2h_prior_games", "op": "gte", "value": 1},
         {"feature": "forebet_probability_gap", "op": "lte", "value": 0.2},
     ]
-    (tmp_root / "config" / "research_baselines_v1.json").write_text(json.dumps(cfg))
+    (tmp_root / "config" / "research_baselines.json").write_text(json.dumps(cfg))
     with pytest.raises(ShadowEvaluatorError):
         load_frozen_baseline_config(tmp_root)
 
@@ -224,7 +237,7 @@ def test_frozen_config_eligibility_drift_rejected(tmp_root):
 def test_authorization_gate_rejected(tmp_root, gate):
     bad = json.loads(SHADOW_DECL_PATH.read_text())
     bad["authorizations"][gate] = True
-    p = tmp_root / "config" / "shadow_evaluator_v1.json"
+    p = tmp_root / "config" / "shadow_evaluator.json"
     p.write_text(json.dumps(bad))
     with pytest.raises(ShadowEvaluatorError):
         load_shadow_declaration(p)
@@ -233,7 +246,7 @@ def test_authorization_gate_rejected(tmp_root, gate):
 def test_shadow_evaluation_authorized_false_rejected(tmp_root):
     bad = json.loads(SHADOW_DECL_PATH.read_text())
     bad["authorizations"]["shadow_evaluation_authorized"] = False
-    p = tmp_root / "config" / "shadow_evaluator_v1.json"
+    p = tmp_root / "config" / "shadow_evaluator.json"
     p.write_text(json.dumps(bad))
     with pytest.raises(ShadowEvaluatorError):
         load_shadow_declaration(p)
@@ -601,7 +614,7 @@ def test_history_loader_strict_cutoff_and_void(tmp_root):
         "disposition": r.disposition,
     } for r in rows]
     dicts.append({
-        "event_id": "v1", "sport": "football", "event_date": "2024-05-01",
+        "event_id": "ev1", "sport": "football", "event_date": "2024-05-01",
         "participant_1": "Arsenal", "participant_2": "Chelsea",
         "winner_index": 1, "score_1": 1.0, "score_2": 0.0,
         "probability_1": 0.55, "probability_2": 0.30, "draw_probability": 0.15,
@@ -659,13 +672,13 @@ def test_history_loader_balanced_accounting(tmp_root):
     assert ms["history_unique_valid_rows"] == 14
     assert ms["history_admitted_rows"] == 14
     # Balanced: schema_valid == unique + duplicate + conflict
-    v2_excluded = sum(
+    validity_excluded = sum(
         v for k, v in ms["history_excluded_counts"].items()
         if k not in ("MALFORMED_JSON", "MALFORMED_JSONL")
         and not k.startswith("SCHEMA_INVALID")
     )
     assert ms["history_schema_valid_candidate_rows"] == 17
-    assert 17 == v2_excluded + 14 + 1 + 2
+    assert 17 == validity_excluded + 14 + 1 + 2
 
 
 def test_history_loader_path_containment(tmp_root):
@@ -690,15 +703,15 @@ def _write_one_row_gz(tmp_root: Path, row: dict, name: str = "history_football.j
     return path
 
 
-# v2 validity matrix — one row per exclusion category.
+# Ledger-validity matrix — one row per exclusion category.
 # The dataset has TWO layers of rejection:
 #   - schema layer (`_validate_settled_dict`) catches malformed fields
 #     (missing event_id, missing winner, unknown disposition, etc.)
-#   - v2 layer (`_v2_filter_one`) catches semantic issues (unknown
+#   - ledger-validity layer (`_ledger_validity_filter_one`) catches semantic issues (unknown
 #     sport, self-pair, two-way draw, prior-date violation, etc.)
-# The v2 filter is called ONLY on rows that pass schema.
+# The ledger-validity filter is called ONLY on rows that pass schema.
 # Each test row is constructed to be schema-valid so it reaches the
-# v2 filter, then is rejected at the v2 layer for the documented
+# ledger-validity filter, then is rejected at the ledger-validity layer for the documented
 # reason. The schema-invalid cases (malformed winner, malformed date,
 # empty participant, unknown disposition) are tested separately.
 #
@@ -706,11 +719,11 @@ def _write_one_row_gz(tmp_root: Path, row: dict, name: str = "history_football.j
 #   football=True, handball=True, cricket=True, esoccer=True
 #   basketball, tennis, hockey, baseball, american_football, rugby,
 #   mma, esports, volleyball, afl = False
-# The v2 filter rejects winner=0 only when the sport is NOT
+# The ledger-validity filter rejects winner=0 only when the sport is NOT
 # draw-possible. Draw-possible sports admit winner=0; the price-free
 # builder separately decides whether to use it as a training example.
-_V2_INVALID_CASES = [
-    # (label, mutated_row_dict, expected_v2_reason)
+_LEDGER_INVALID_CASES = [
+    # (label, mutated_row_dict, expected_ledger_reason)
     ("unknown_sport_unicorn", _dict_row(sport="unicorn_sport"), "UNKNOWN_SPORT"),
     ("unknown_sport_xyz", _dict_row(sport="xyz"), "UNKNOWN_SPORT"),
     ("self_pair_exact", _dict_row(p1="Arsenal", p2="Arsenal"), "SELF_PAIR"),
@@ -736,10 +749,10 @@ _V2_INVALID_CASES = [
 ]
 
 
-@pytest.mark.parametrize("label,row,expected", _V2_INVALID_CASES, ids=[c[0] for c in _V2_INVALID_CASES])
-def test_history_v2_validity_matrix(tmp_root, label, row, expected):
-    """One row per v2 validity category. Each row is REJECTED at the
-    v2 layer for the documented reason, except the two positive cases
+@pytest.mark.parametrize("label,row,expected", _LEDGER_INVALID_CASES, ids=[c[0] for c in _LEDGER_INVALID_CASES])
+def test_history_ledger_validity_matrix(tmp_root, label, row, expected):
+    """One row per ledger-validity category. Each row is REJECTED at the
+    ledger-validity layer for the documented reason, except the two positive cases
     which must be ADMITTED.
     """
     gz_path = _write_one_row_gz(tmp_root, row)
@@ -758,7 +771,7 @@ def test_history_v2_validity_matrix(tmp_root, label, row, expected):
 
 
 # Schema-level exclusion cases (caught by _validate_settled_dict, NOT
-# by the v2 filter). These prove the dataset's first-line guard is
+# by the ledger-validity filter). These prove the dataset's first-line guard is
 # wired into the loader.
 _SCHEMA_INVALID_CASES = [
     # (label, mutated_row_dict, expected_schema_reason)
@@ -779,9 +792,9 @@ _SCHEMA_INVALID_CASES = [
 
 @pytest.mark.parametrize("label,row,expected", _SCHEMA_INVALID_CASES, ids=[c[0] for c in _SCHEMA_INVALID_CASES])
 def test_history_loader_schema_layer_excludes(tmp_root, label, row, expected):
-    """Malformed rows are caught by the schema layer before the v2
-    filter. They are counted in ``history_schema_invalid`` and never
-    reach the v2 layer or the admitted set."""
+    """Malformed rows are caught by the schema layer before the
+    ledger-validity filter. They are counted in ``history_schema_invalid`` and never
+    reach the ledger-validity layer or the admitted set."""
     gz_path = _write_one_row_gz(tmp_root, row)
     gz_bytes_before = gz_path.read_bytes()
     res = load_valid_history(target_date="2026-08-28", repo_root=tmp_root)
@@ -807,11 +820,11 @@ def test_history_loader_schema_layer_excludes(tmp_root, label, row, expected):
 
 # Coherent disposition/winner combos for SETTLED_CUP, SETTLED_DRAW
 # These all pass the schema layer (vocabulary is in SUPPORTED_DISPOSITIONS)
-# and exercise the v2 layer's sport-aware two-way-draw guard.
+# and exercise the ledger-validity layer's sport-aware two-way-draw guard.
 # Per the SPORTS registry, only football/handball/cricket/esoccer are
 # draw-possible. Other sports reject winner=0 as ANOMALOUS_TWO_WAY_DRAW
 # regardless of disposition.
-_V2_DISPOSITION_WINNER_CASES = [
+_LEDGER_DISPOSITION_WINNER_CASES = [
     # (label, sport, disposition, winner_index, should_admit)
     ("settled_home_win_football", "football", "SETTLED", 1, True),
     ("settled_away_win_football", "football", "SETTLED", 2, True),
@@ -827,9 +840,9 @@ _V2_DISPOSITION_WINNER_CASES = [
 ]
 
 
-@pytest.mark.parametrize("label,sport,disp,wi,should_admit", _V2_DISPOSITION_WINNER_CASES,
-                         ids=[c[0] for c in _V2_DISPOSITION_WINNER_CASES])
-def test_history_v2_disposition_winner_coherence(tmp_root, label, sport, disp, wi, should_admit):
+@pytest.mark.parametrize("label,sport,disp,wi,should_admit", _LEDGER_DISPOSITION_WINNER_CASES,
+                         ids=[c[0] for c in _LEDGER_DISPOSITION_WINNER_CASES])
+def test_history_ledger_disposition_winner_coherence(tmp_root, label, sport, disp, wi, should_admit):
     """Disposition/winner combinations are coherent when admitted;
     incoherent combinations are rejected with documented reasons.
     Tennis is draw-possible; football is two-way. SPORTS registry
@@ -1005,7 +1018,7 @@ def test_end_to_end_disk_fixture(tmp_root):
     result = evaluate_from_disk(
         target_date="2026-08-28",
         capture_receipt_path=receipt_path,
-        declaration_path=tmp_root / "config" / "shadow_evaluator_v1.json",
+        declaration_path=tmp_root / "config" / "shadow_evaluator.json",
         repo_root=tmp_root,
         history_paths=[gz_path],
         decision_clock=decision_clock,
@@ -1060,7 +1073,7 @@ def test_end_to_end_blocked_manifest_written_last(tmp_root, monkeypatch):
     with pytest.raises(OSError):
         evaluate_from_disk(
             target_date="2026-08-28", capture_receipt_path=receipt_path,
-            declaration_path=tmp_root / "config" / "shadow_evaluator_v1.json",
+            declaration_path=tmp_root / "config" / "shadow_evaluator.json",
             repo_root=tmp_root, history_paths=[gz_path],
             decision_clock=decision_clock,
         )
@@ -1126,7 +1139,7 @@ def test_cli_main_successful_run(tmp_root, capsys, monkeypatch):
         "--date", "2026-08-28",
         "--capture-receipt", str(receipt_path),
         "--history", str(gz_path),
-        "--config", str(tmp_root / "config" / "shadow_evaluator_v1.json"),
+        "--config", str(tmp_root / "config" / "shadow_evaluator.json"),
         "--root", str(tmp_root),
     ])
     captured = capsys.readouterr()
@@ -1176,7 +1189,7 @@ def test_blocked_receipt_collision_protection(tmp_root, monkeypatch):
         "--date", "2026-08-28",
         "--capture-receipt", str(tmp_root / "nonexistent.json"),
         "--history", str(gz_path),
-        "--config", str(tmp_root / "config" / "shadow_evaluator_v1.json"),
+        "--config", str(tmp_root / "config" / "shadow_evaluator.json"),
         "--root", str(tmp_root),
     ])
     assert rc1 != 0
@@ -1190,7 +1203,7 @@ def test_blocked_receipt_collision_protection(tmp_root, monkeypatch):
         "--date", "2026-08-28",
         "--capture-receipt", str(tmp_root / "nonexistent.json"),
         "--history", str(gz_path),
-        "--config", str(tmp_root / "config" / "shadow_evaluator_v1.json"),
+        "--config", str(tmp_root / "config" / "shadow_evaluator.json"),
         "--root", str(tmp_root),
     ])
     assert rc2 != 0
@@ -1206,7 +1219,7 @@ def test_authorization_failure_writes_nothing(tmp_root):
     artifact is written. No BLOCKED receipt. No run dir. No payload."""
     bad_decl = json.loads(SHADOW_DECL_PATH.read_text())
     bad_decl["authorizations"]["production_authorized"] = True
-    p = tmp_root / "config" / "shadow_evaluator_v1.json"
+    p = tmp_root / "config" / "shadow_evaluator.json"
     p.write_text(json.dumps(bad_decl))
     rc = main([
         "--date", "2026-08-28",
@@ -1252,7 +1265,7 @@ def test_blocked_receipt_cannot_be_mistaken_for_completed_manifest(tmp_root, mon
         "--date", "2024-01-01",
         "--capture-receipt", str(receipt_path),
         "--history", str(gz_path),
-        "--config", str(tmp_root / "config" / "shadow_evaluator_v1.json"),
+        "--config", str(tmp_root / "config" / "shadow_evaluator.json"),
         "--root", str(tmp_root),
     ])
     assert rc != 0
@@ -1306,7 +1319,7 @@ def test_input_digest_commits_to_required_evidence(tmp_root, monkeypatch):
         "--date", "2026-08-28",
         "--capture-receipt", str(receipt_path),
         "--history", str(gz_path),
-        "--config", str(tmp_root / "config" / "shadow_evaluator_v1.json"),
+        "--config", str(tmp_root / "config" / "shadow_evaluator.json"),
         "--root", str(tmp_root),
     ])
     assert rc == 0
@@ -1348,7 +1361,7 @@ def test_input_digest_commits_to_required_evidence(tmp_root, monkeypatch):
     assert len(ip["sidecar_digests"]) >= 1
     assert len(ip["raw_body_digests"]) >= 1
     # History feature contract version present
-    assert ip["history_feature_contract"] == "price-free-v2-incremental-valid-history"
+    assert ip["history_feature_contract"] == RESEARCH_FEATURE_CONTRACT_VERSION
     # At least one record tuple
     assert len(ip["capture_record_tuples"]) >= 1
     # input_digest is a 64-char hex
@@ -1382,7 +1395,7 @@ def test_decision_digest_commits_to_required_evidence(tmp_root, monkeypatch):
         "--date", "2026-08-28",
         "--capture-receipt", str(receipt_path),
         "--history", str(gz_path),
-        "--config", str(tmp_root / "config" / "shadow_evaluator_v1.json"),
+        "--config", str(tmp_root / "config" / "shadow_evaluator.json"),
         "--root", str(tmp_root),
     ])
     assert rc == 0
@@ -1417,12 +1430,18 @@ def test_decision_digest_commits_to_required_evidence(tmp_root, monkeypatch):
     assert re.match(r"^[0-9a-f]{64}$", manifest["decision_digest"])
 
 
-def test_ranks_4_plus_beyond_top3_in_considered_pool_only(tmp_root, capsys, monkeypatch):
-    """Rank 4+ must appear in ``considered_pool[]`` but NOT in
-    ``selections[]``. ``considered_status = ELIGIBLE_RANKED_BEYOND_TOP3``.
-    ``decision_digest`` must commit to both arrays. Five eligible
-    events produce two rank-4+ in considered_pool; selections[] has
-    only ranks 1-3.
+def test_uncapped_cohort_records_every_eligible_ranked_event(tmp_root, capsys, monkeypatch):
+    """UNCAPPED cohort (owner amendment 2026-09-07): the declaration's
+    ``cohort_policy.top3_cohort_per_sport_day == null`` means every
+    R2-eligible, R1-ranked event for a sport-day lands in
+    ``selections[]`` — rank 1 as ``PRIMARY_SHADOW_SELECTION``, every
+    other rank as ``TOP3_EVALUATION_COHORT``. No eligible ranked event
+    is discarded, so ``ELIGIBLE_RANKED_BEYOND_TOP3`` is never produced
+    and ``decision_accounting.eligible_ranked_beyond_top3`` stays 0
+    (the status remains in the schema, permanently unreachable while
+    the width is null). ``decision_digest`` still commits to both
+    arrays. Eight eligible events must produce 1 primary + 7 cohort =
+    8 selections.
     """
     from slumdog import shadow_evaluator as se
     fixed_clock = datetime(2026, 8, 26, 12, 0, 0, tzinfo=timezone.utc)
@@ -1438,6 +1457,9 @@ def test_ranks_4_plus_beyond_top3_in_considered_pool_only(tmp_root, capsys, monk
         ("Chelsea", "Liverpool", "2024-03"),
         ("Chelsea", "ManU", "2024-04"),
         ("Arsenal", "Liverpool", "2024-05"),
+        ("ManU", "Arsenal", "2024-06"),
+        ("Liverpool", "Chelsea", "2024-07"),
+        ("ManU", "Chelsea", "2024-08"),
     ]
     for h, a, month in base_rows:
         for i in range(6):
@@ -1451,7 +1473,8 @@ def test_ranks_4_plus_beyond_top3_in_considered_pool_only(tmp_root, capsys, monk
                 "disposition": "SETTLED",
             })
     # 2 H2H per pairing
-    h2h_months = ["2024-06", "2024-07", "2024-08", "2024-09", "2024-10"]
+    h2h_months = ["2024-06", "2024-07", "2024-08", "2024-09", "2024-10",
+                  "2024-11", "2024-12", "2025-01"]
     for (h, a, _), month in zip(base_rows, h2h_months):
         for i in range(2):
             hist_rows.append({
@@ -1466,7 +1489,7 @@ def test_ranks_4_plus_beyond_top3_in_considered_pool_only(tmp_root, capsys, monk
     gz_path = reports / "history_football.jsonl.gz"
     _make_history_gz(gz_path, hist_rows)
 
-    # Build capture receipt with 5 R2-eligible future events (all gap 0.10).
+    # Build capture receipt with 8 R2-eligible future events (all gap 0.10).
     target_date = "2026-08-28"
     pairs = [
         ("1001", "Arsenal", "Chelsea", 1),
@@ -1474,6 +1497,9 @@ def test_ranks_4_plus_beyond_top3_in_considered_pool_only(tmp_root, capsys, monk
         ("1003", "Chelsea", "Liverpool", 3),
         ("1004", "Chelsea", "ManU", 4),
         ("1005", "Arsenal", "Liverpool", 5),
+        ("1006", "ManU", "Arsenal", 6),
+        ("1007", "Liverpool", "Chelsea", 7),
+        ("1008", "ManU", "Chelsea", 8),
     ]
     rows = []
     for eid, h, a, hh in pairs:
@@ -1518,7 +1544,7 @@ def test_ranks_4_plus_beyond_top3_in_considered_pool_only(tmp_root, capsys, monk
         "--date", target_date,
         "--capture-receipt", str(receipt_path),
         "--history", str(gz_path),
-        "--config", str(tmp_root / "config" / "shadow_evaluator_v1.json"),
+        "--config", str(tmp_root / "config" / "shadow_evaluator.json"),
         "--root", str(tmp_root),
     ])
     assert rc == 0
@@ -1528,51 +1554,57 @@ def test_ranks_4_plus_beyond_top3_in_considered_pool_only(tmp_root, capsys, monk
     assert len(run_dirs) == 1
     manifest = json.loads((run_dirs[0] / "manifest.json").read_text())
 
-    # Schema boundary: selections[] in the payload = ranks 1-3 only
+    # UNCAPPED boundary: selections[] records every eligible ranked
+    # event (ranks 1-8), not just ranks 1-3.
     payload = json.loads((run_dirs[0] / "shadow_selections.json").read_text())
-    assert len(payload["selections"]) == 3, (
-        f"selections[] should have exactly 3 (ranks 1-3), got {len(payload['selections'])}"
+    assert len(payload["selections"]) == 8, (
+        f"selections[] should have all 8 eligible ranked events, "
+        f"got {len(payload['selections'])}"
     )
     selection_ranks = {s["rank_within_sport_day"] for s in payload["selections"]}
-    assert selection_ranks == {1, 2, 3}, f"selections[] ranks: {selection_ranks}"
+    assert selection_ranks == {1, 2, 3, 4, 5, 6, 7, 8}, (
+        f"selections[] ranks: {selection_ranks}"
+    )
 
-    # No rank-4+ in selections[]
-    r4plus_in_selections = [s for s in payload["selections"]
-                            if s["rank_within_sport_day"] >= 4]
-    assert r4plus_in_selections == [], f"rank-4+ leaked: {r4plus_in_selections}"
+    # Exactly one primary (rank 1); every other rank is cohort —
+    # nothing may carry ELIGIBLE_RANKED_BEYOND_TOP3 while uncapped.
+    primaries = [s for s in payload["selections"]
+                 if s["status"] == "PRIMARY_SHADOW_SELECTION"]
+    cohorts = [s for s in payload["selections"]
+               if s["status"] == "TOP3_EVALUATION_COHORT"]
+    beyond = [s for s in payload["selections"]
+              if s["status"] == "ELIGIBLE_RANKED_BEYOND_TOP3"]
+    assert len(primaries) == 1 and primaries[0]["rank_within_sport_day"] == 1
+    assert len(cohorts) == 7
+    assert beyond == [], f"rank-4+ status leaked while uncapped: {beyond}"
 
-    # considered_pool[] (manifest level) has all 5 with ranks and
+    # considered_pool[] (manifest level) has all 8 with ranks and
     # explicit ``considered_status``.
     pool = manifest["considered_pool"]
-    assert len(pool) == 5, f"considered_pool should have 5, got {len(pool)}"
+    assert len(pool) == 8, f"considered_pool should have 8, got {len(pool)}"
     pool_ranks = sorted(p["rank_within_sport_day"] for p in pool)
     assert all(r is not None for r in pool_ranks), f"some pool entries unranked: {pool_ranks}"
-    assert set(pool_ranks) == {1, 2, 3, 4, 5}, f"pool ranks: {pool_ranks}"
-    # rank-4+ in pool must be marked ELIGIBLE_RANKED_BEYOND_TOP3
-    r4plus_in_pool = [p for p in pool if p["rank_within_sport_day"] >= 4]
-    assert len(r4plus_in_pool) == 2
-    for p in r4plus_in_pool:
-        assert p["considered_status"] == "ELIGIBLE_RANKED_BEYOND_TOP3", (
-            f"rank-4+ status wrong: {p}"
-        )
-    # rank 1-3 in pool must be primary/cohort
-    r123_in_pool = [p for p in pool if p["rank_within_sport_day"] <= 3]
-    assert len(r123_in_pool) == 3
-    for p in r123_in_pool:
+    assert set(pool_ranks) == {1, 2, 3, 4, 5, 6, 7, 8}, f"pool ranks: {pool_ranks}"
+    # No pool entry may be ELIGIBLE_RANKED_BEYOND_TOP3 while uncapped
+    r4plus_in_pool = [p for p in pool
+                      if p["considered_status"] == "ELIGIBLE_RANKED_BEYOND_TOP3"]
+    assert r4plus_in_pool == [], f"beyond-top3 entries while uncapped: {r4plus_in_pool}"
+    for p in pool:
         assert p["considered_status"] in (
             "PRIMARY_SHADOW_SELECTION", "TOP3_EVALUATION_COHORT"
-        ), f"rank-1/2/3 status wrong: {p}"
+        ), f"pool status wrong while uncapped: {p}"
 
-    # Accounting
+    # Accounting: the beyond-top3 bucket is permanently 0 while uncapped
     acc = manifest["decision_accounting"]
-    assert acc["eligible_ranked_beyond_top3"] == 2, (
-        f"expected 2 rank-4+, got {acc['eligible_ranked_beyond_top3']}; acc={acc}"
+    assert acc["eligible_ranked_beyond_top3"] == 0, (
+        f"expected 0 rank-4+ while uncapped, got "
+        f"{acc['eligible_ranked_beyond_top3']}; acc={acc}"
     )
     assert acc["primary_selected"] == 1
-    assert acc["top3_cohort_selected"] == 2
+    assert acc["top3_cohort_selected"] == 7
     total = (acc["primary_selected"] + acc["top3_cohort_selected"] +
              acc["eligible_ranked_beyond_top3"])
-    assert total == 5, f"accounting total {total} != 5"
+    assert total == 8, f"accounting total {total} != 8"
 
     # decision_digest commits to both arrays (digest payload's
     # ``considered_pool`` is the same set as the manifest's
@@ -1745,7 +1777,7 @@ def test_cli_main_successful_run_produces_selections(tmp_root, capsys, monkeypat
         "--date", target_date,
         "--capture-receipt", str(receipt_path),
         "--history", str(gz_path),
-        "--config", str(tmp_root / "config" / "shadow_evaluator_v1.json"),
+        "--config", str(tmp_root / "config" / "shadow_evaluator.json"),
         "--root", str(tmp_root),
     ])
     captured = capsys.readouterr()
@@ -1902,7 +1934,7 @@ def test_cli_main_successful_subprocess(tmp_root):
             "--date", target_date,
             "--capture-receipt", str(receipt_path),
             "--history", str(gz_path),
-            "--config", str(tmp_root / "config" / "shadow_evaluator_v1.json"),
+            "--config", str(tmp_root / "config" / "shadow_evaluator.json"),
             "--root", str(tmp_root),
         ],
         capture_output=True, text=True,
@@ -1926,7 +1958,7 @@ def test_cli_nonzero_on_capture_load_failure(tmp_root):
             sys.executable, "-m", "slumdog.shadow_evaluator",
             "--date", "2026-08-28",
             "--capture-receipt", str(tmp_root / "nonexistent.json"),
-            "--config", str(tmp_root / "config" / "shadow_evaluator_v1.json"),
+            "--config", str(tmp_root / "config" / "shadow_evaluator.json"),
             "--root", str(tmp_root),
         ],
         capture_output=True, text=True,
@@ -1970,7 +2002,7 @@ def test_production_isolation_no_network(tmp_root, monkeypatch):
     decision_clock = datetime(2026, 8, 27, 0, 0, 0, tzinfo=timezone.utc)
     result = evaluate_from_disk(
         target_date="2026-08-28", capture_receipt_path=receipt_path,
-        declaration_path=tmp_root / "config" / "shadow_evaluator_v1.json",
+        declaration_path=tmp_root / "config" / "shadow_evaluator.json",
         repo_root=tmp_root, history_paths=[gz_path],
         decision_clock=decision_clock,
     )
@@ -2002,7 +2034,7 @@ def test_production_isolation_no_settlement_or_collectors(tmp_root, monkeypatch)
     decision_clock = datetime(2026, 8, 27, 0, 0, 0, tzinfo=timezone.utc)
     result = evaluate_from_disk(
         target_date="2026-08-28", capture_receipt_path=receipt_path,
-        declaration_path=tmp_root / "config" / "shadow_evaluator_v1.json",
+        declaration_path=tmp_root / "config" / "shadow_evaluator.json",
         repo_root=tmp_root, history_paths=[gz_path],
         decision_clock=decision_clock,
     )
@@ -2030,7 +2062,7 @@ def test_no_overwrite_existing_run(tmp_root):
     decision_clock = datetime(2026, 8, 27, 0, 0, 0, tzinfo=timezone.utc)
     r1 = evaluate_from_disk(
         target_date="2026-08-28", capture_receipt_path=receipt_path,
-        declaration_path=tmp_root / "config" / "shadow_evaluator_v1.json",
+        declaration_path=tmp_root / "config" / "shadow_evaluator.json",
         repo_root=tmp_root, history_paths=[gz_path],
         decision_clock=decision_clock,
     )
@@ -2038,7 +2070,7 @@ def test_no_overwrite_existing_run(tmp_root):
     with pytest.raises(ShadowEvaluatorError, match="refusing to overwrite"):
         evaluate_from_disk(
             target_date="2026-08-28", capture_receipt_path=receipt_path,
-            declaration_path=tmp_root / "config" / "shadow_evaluator_v1.json",
+            declaration_path=tmp_root / "config" / "shadow_evaluator.json",
             repo_root=tmp_root, history_paths=[gz_path],
             decision_clock=decision_clock,
         )
@@ -2152,15 +2184,15 @@ def test_odds_only_differences_produce_same_decision_digest(tmp_root, monkeypatc
     cfg = tmp_root / "config"
     cfg.mkdir(parents=True, exist_ok=True)
     import shutil
-    shutil.copy("config/research_baselines_v1.json",
-                cfg / "research_baselines_v1.json")
-    shutil.copy("config/shadow_evaluator_v1.json",
-                cfg / "shadow_evaluator_v1.json")
+    shutil.copy("config/research_baselines.json",
+                cfg / "research_baselines.json")
+    shutil.copy("config/shadow_evaluator.json",
+                cfg / "shadow_evaluator.json")
 
     rc_a = main([
         "--date", target_date, "--capture-receipt", str(rec_a),
         "--history", str(gz_path),
-        "--config", str(cfg / "shadow_evaluator_v1.json"),
+        "--config", str(cfg / "shadow_evaluator.json"),
         "--root", str(tmp_root),
     ])
     assert rc_a == 0
@@ -2168,7 +2200,7 @@ def test_odds_only_differences_produce_same_decision_digest(tmp_root, monkeypatc
     rc_b = main([
         "--date", target_date, "--capture-receipt", str(rec_b),
         "--history", str(gz_path),
-        "--config", str(cfg / "shadow_evaluator_v1.json"),
+        "--config", str(cfg / "shadow_evaluator.json"),
         "--root", str(tmp_root),
     ])
     assert rc_b == 0
@@ -2424,15 +2456,15 @@ def test_same_run_odds_provenance_only_observation_is_not_a_conflict(
     cfg = tmp_root / "config"
     cfg.mkdir(parents=True, exist_ok=True)
     import shutil
-    shutil.copy("config/research_baselines_v1.json",
-                cfg / "research_baselines_v1.json")
-    shutil.copy("config/shadow_evaluator_v1.json",
-                cfg / "shadow_evaluator_v1.json")
+    shutil.copy("config/research_baselines.json",
+                cfg / "research_baselines.json")
+    shutil.copy("config/shadow_evaluator.json",
+                cfg / "shadow_evaluator.json")
 
     rc = main([
         "--date", target_date, "--capture-receipt", str(receipt_path),
         "--history", str(gz_path),
-        "--config", str(cfg / "shadow_evaluator_v1.json"),
+        "--config", str(cfg / "shadow_evaluator.json"),
         "--root", str(tmp_root),
     ])
     assert rc == 0
@@ -2577,7 +2609,7 @@ def test_same_run_odds_provenance_only_observation_is_not_a_conflict(
     rc2 = main([
         "--date", target_date, "--capture-receipt", str(receipt_path_single),
         "--history", str(gz_path),
-        "--config", str(cfg / "shadow_evaluator_v1.json"),
+        "--config", str(cfg / "shadow_evaluator.json"),
         "--root", str(tmp_root),
     ])
     assert rc2 == 0
@@ -2704,15 +2736,15 @@ def test_same_run_genuine_decision_conflict_excludes_all_members(
     cfg = tmp_root / "config"
     cfg.mkdir(parents=True, exist_ok=True)
     import shutil
-    shutil.copy("config/research_baselines_v1.json",
-                cfg / "research_baselines_v1.json")
-    shutil.copy("config/shadow_evaluator_v1.json",
-                cfg / "shadow_evaluator_v1.json")
+    shutil.copy("config/research_baselines.json",
+                cfg / "research_baselines.json")
+    shutil.copy("config/shadow_evaluator.json",
+                cfg / "shadow_evaluator.json")
 
     rc = main([
         "--date", target_date, "--capture-receipt", str(receipt_path),
         "--history", str(gz_path),
-        "--config", str(cfg / "shadow_evaluator_v1.json"),
+        "--config", str(cfg / "shadow_evaluator.json"),
         "--root", str(tmp_root),
     ])
     assert rc == 0
@@ -2925,15 +2957,15 @@ def test_asymmetric_conflict_r2_eligible_vs_r2_ineligible_probability(
     cfg = tmp_root / "config"
     cfg.mkdir(parents=True, exist_ok=True)
     import shutil
-    shutil.copy("config/research_baselines_v1.json",
-                cfg / "research_baselines_v1.json")
-    shutil.copy("config/shadow_evaluator_v1.json",
-                cfg / "shadow_evaluator_v1.json")
+    shutil.copy("config/research_baselines.json",
+                cfg / "research_baselines.json")
+    shutil.copy("config/shadow_evaluator.json",
+                cfg / "shadow_evaluator.json")
 
     rc = main([
         "--date", target_date, "--capture-receipt", str(receipt_path),
         "--history", str(gz_path),
-        "--config", str(cfg / "shadow_evaluator_v1.json"),
+        "--config", str(cfg / "shadow_evaluator.json"),
         "--root", str(tmp_root),
     ])
     assert rc == 0
@@ -3100,15 +3132,15 @@ def test_asymmetric_conflict_eligible_vs_identity_ineligible_excludes_group(
     cfg = tmp_root / "config"
     cfg.mkdir(parents=True, exist_ok=True)
     import shutil
-    shutil.copy("config/research_baselines_v1.json",
-                cfg / "research_baselines_v1.json")
-    shutil.copy("config/shadow_evaluator_v1.json",
-                cfg / "shadow_evaluator_v1.json")
+    shutil.copy("config/research_baselines.json",
+                cfg / "research_baselines.json")
+    shutil.copy("config/shadow_evaluator.json",
+                cfg / "shadow_evaluator.json")
 
     rc = main([
         "--date", target_date, "--capture-receipt", str(receipt_path),
         "--history", str(gz_path),
-        "--config", str(cfg / "shadow_evaluator_v1.json"),
+        "--config", str(cfg / "shadow_evaluator.json"),
         "--root", str(tmp_root),
     ])
     assert rc == 0
@@ -3153,7 +3185,7 @@ def test_asymmetric_conflict_eligible_vs_identity_ineligible_excludes_group(
 
 
 # ---------------------------------------------------------------------------
-# Participant normalization tests (key_of is reused as the v2 helper)
+# Participant normalization tests (key_of is reused as the ledger-validity helper)
 # ---------------------------------------------------------------------------
 
 
@@ -3161,7 +3193,7 @@ def test_fingerprint_participant_normalization_equivalent_display_variants():
     """Two observations whose participant display strings differ
     only in capitalization / punctuation but normalize to the
     same key MUST NOT be classified as a conflict. Reuses the
-    existing v2 identity helper ``key_of`` in
+    existing ledger identity helper ``key_of`` in
     ``shadow_contracts.py`` (casefold + alphanumeric only).
     """
     from slumdog.shadow_evaluator import _extract_decision_fingerprint
@@ -3629,15 +3661,15 @@ def test_e2e_two_way_sport_with_missing_draw_runs_through_r2(tmp_root, monkeypat
     cfg = tmp_root / "config"
     cfg.mkdir(parents=True, exist_ok=True)
     import shutil
-    shutil.copy("config/research_baselines_v1.json",
-                cfg / "research_baselines_v1.json")
-    shutil.copy("config/shadow_evaluator_v1.json",
-                cfg / "shadow_evaluator_v1.json")
+    shutil.copy("config/research_baselines.json",
+                cfg / "research_baselines.json")
+    shutil.copy("config/shadow_evaluator.json",
+                cfg / "shadow_evaluator.json")
 
     rc = main([
         "--date", target_date, "--capture-receipt", str(receipt_path),
         "--history", str(gz_path),
-        "--config", str(cfg / "shadow_evaluator_v1.json"),
+        "--config", str(cfg / "shadow_evaluator.json"),
         "--root", str(tmp_root),
     ])
     assert rc == 0
@@ -3752,10 +3784,10 @@ def test_e2e_receipt_order_independence_for_equivalent_observations(
     cfg = tmp_root / "config"
     cfg.mkdir(parents=True, exist_ok=True)
     import shutil
-    shutil.copy("config/research_baselines_v1.json",
-                cfg / "research_baselines_v1.json")
-    shutil.copy("config/shadow_evaluator_v1.json",
-                cfg / "shadow_evaluator_v1.json")
+    shutil.copy("config/research_baselines.json",
+                cfg / "research_baselines.json")
+    shutil.copy("config/shadow_evaluator.json",
+                cfg / "shadow_evaluator.json")
 
     receipt_ba_path = tmp_root / "data" / "reports" / f"capture_{target_date}_twocap_ba.json"
     receipt_ba = {
@@ -3772,7 +3804,7 @@ def test_e2e_receipt_order_independence_for_equivalent_observations(
         rc = main([
             "--date", target_date, "--capture-receipt", str(receipt_path),
             "--history", str(gz_path),
-            "--config", str(cfg / "shadow_evaluator_v1.json"),
+            "--config", str(cfg / "shadow_evaluator.json"),
             "--root", str(tmp_root),
         ])
         assert rc == 0

@@ -1,11 +1,11 @@
-"""Milestone 6A — incremental v2 research builder tests.
+"""Milestone 6A — incremental research builder tests.
 
 Three families:
 1. Strict equivalence: for valid canonical settled events where the legacy
-   and v2 history memberships agree, the v2 incremental builder produces
+   and research history memberships agree, the incremental research builder produces
    bit-identical examples and matching counters to the strict reference
    builder (build_price_free_examples).
-2. Intentional divergences: corrected v2 history membership
+2. Intentional divergences: corrected research history membership
    (research_history_eligible) deliberately differs from legacy
    HistoryIndex quirks (void aliases, incoherent disposition/winner rows)
    — these are NOT equivalence cases.
@@ -50,8 +50,8 @@ from slumdog.research_dataset import (
     run_research_mode,
 )
 
-FEATURE_CONTRACT_V2 = RESEARCH_FEATURE_CONTRACT_VERSION
-LABEL_CONTRACT_V1 = "price-free-v1"
+RESEARCH_FEATURE_CONTRACT = RESEARCH_FEATURE_CONTRACT_VERSION
+BASELINE_LABEL_CONTRACT = "price-free"
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +132,7 @@ def research_build(rows, sample_size=100):
 
 def stripped(example) -> dict:
     d = example.to_dict()
-    d.pop("feature_contract_version")  # v1 vs v2 is the only sanctioned diff
+    d.pop("feature_contract_version")  # contract field is the only sanctioned diff
     return d
 
 
@@ -141,7 +141,7 @@ def stripped_list(examples) -> list[dict]:
 
 
 # All rows here are builder-eligible or excluded identically by both
-# builders, and v1/v2 history memberships agree (valid canonical settled
+# builders, and baseline/research history memberships agree (valid canonical settled
 # events) — equivalence scope.
 EQUIV_ROWS = [
     # d1
@@ -308,11 +308,11 @@ def test_equivalence_duplicate_missing_vs_present_provenance():
 
 
 # ---------------------------------------------------------------------------
-# 2. Intentional divergences (corrected v2 history membership)
+# 2. Intentional divergences (corrected research history membership)
 # ---------------------------------------------------------------------------
 
 
-def test_divergence_void_alias_feeds_legacy_history_not_v2():
+def test_divergence_void_alias_feeds_legacy_history_not_valid_ledger():
     rows = [
         make_row("hockey:1", event_date="2023-04-01", p1="Alpha", p2="Beta", disposition="NO_CONTEST", winner=1, score1=2, score2=1, prob1=0.5, prob2=0.5),
         make_row("hockey:2", event_date="2023-04-02", p1="Beta", p2="Gamma", prob1=0.4, prob2=0.6, winner=1, score1=3, score2=2),
@@ -323,7 +323,7 @@ def test_divergence_void_alias_feeds_legacy_history_not_v2():
     strict_beta = next(e for e in strict_ex if e.event_id == "hockey:2")
     research_beta = next(e for e in result.sample if e.event_id == "hockey:2")
     # Legacy HistoryIndex includes NO_CONTEST rows (only literal VOID is
-    # filtered); v2 eligibility excludes them. Beta is the underdog here.
+    # filtered); research eligibility excludes them. Beta is the underdog here.
     assert strict_beta.features["underdog_prior_games"] == 1.0
     assert research_beta.features["underdog_prior_games"] == 0.0
     # Everything else on the row is identical (features/missingness carry
@@ -337,7 +337,7 @@ def test_divergence_void_alias_feeds_legacy_history_not_v2():
     assert b["missingness"]["underdog_prior_win_rate"] == 1
 
 
-def test_divergence_settled_cup_winner_zero_feeds_legacy_history_not_v2():
+def test_divergence_settled_cup_winner_zero_feeds_legacy_history_not_valid_ledger():
     rows = [
         make_row("football:1", sport="football", event_date="2023-04-01", p1="Alpha", p2="Beta", disposition="SETTLED_CUP", winner=0, score1=1, score2=1, prob1=0.5, prob2=0.5),
         make_row("football:2", sport="football", event_date="2023-04-02", p1="Beta", p2="Gamma", prob1=0.4, prob2=0.6, winner=1, score1=3, score2=2),
@@ -348,7 +348,7 @@ def test_divergence_settled_cup_winner_zero_feeds_legacy_history_not_v2():
     strict_beta = next(e for e in strict_ex if e.event_id == "football:2")
     research_beta = next(e for e in result.sample if e.event_id == "football:2")
     # Legacy includes SETTLED_CUP winner-0 rows in draw-capable sports;
-    # v2 requires coherent disposition/winner combinations.
+    # The research contract requires coherent disposition/winner combinations.
     assert strict_beta.features["underdog_prior_games"] == 1.0
     assert research_beta.features["underdog_prior_games"] == 0.0
 
@@ -403,7 +403,7 @@ def test_normalize_content_mismatch_fails_closed():
     assert collapsed == 0
 
 
-def test_v2_input_digest_exact_bytes():
+def test_research_input_digest_exact_bytes():
     events = [_validate_settled_dict(r) for r in EQUIV_ROWS]
     rows_by_sport = {"hockey": sorted(events, key=lambda r: (r.event_date, r.event_id))}
     combined, sport_digests = _compute_research_input_digest(rows_by_sport)
@@ -413,7 +413,7 @@ def test_v2_input_digest_exact_bytes():
         h.update((json.dumps(canon, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8"))
     expected_sport = h.hexdigest()
     expected_combined = hashlib.sha256(
-        b"slumdog-research-input-v2\n"
+        b"slumdog-research-input\n"
         + f"hockey\n{len(rows_by_sport['hockey'])}\n{expected_sport}\n".encode("utf-8")
     ).hexdigest()
     assert sport_digests["hockey"] == expected_sport
@@ -602,7 +602,7 @@ def test_diagnostic_receipt_on_internal_inconsistency(tmp_path):
     assert [p for p in out.iterdir() if ".tmp-" in p.name] == []
 
 
-def test_ready_receipt_flags_and_v2_versions(tmp_path):
+def test_ready_receipt_flags_and_research_contract_versions(tmp_path):
     rows = [
         make_row("hockey:1", event_date="2023-06-01"),
         make_row("hockey:2", event_date="2023-06-02", p1="Beta", p2="Alpha", winner=2, score1=0, score2=3, prob1=0.4, prob2=0.6),
@@ -615,13 +615,13 @@ def test_ready_receipt_flags_and_v2_versions(tmp_path):
     receipt_data = json.loads(receipt.read_text())
     assert receipt_data["status"] == RESEARCH_STATUS
     assert receipt_data["research_ready"] is True
-    assert receipt_data["feature_contract_version"] == FEATURE_CONTRACT_V2
-    assert receipt_data["label_contract_version"] == LABEL_CONTRACT_V1
+    assert receipt_data["feature_contract_version"] == RESEARCH_FEATURE_CONTRACT
+    assert receipt_data["label_contract_version"] == BASELINE_LABEL_CONTRACT
     sample_data = json.loads(sample.read_text())
-    assert sample_data["feature_contract_version"] == FEATURE_CONTRACT_V2
+    assert sample_data["feature_contract_version"] == RESEARCH_FEATURE_CONTRACT
     assert sample_data["research_only"] is True
     for line in gzip.decompress(examples_path.read_bytes()).decode().splitlines():
-        assert json.loads(line)["feature_contract_version"] == FEATURE_CONTRACT_V2
+        assert json.loads(line)["feature_contract_version"] == RESEARCH_FEATURE_CONTRACT
 
 
 def test_receipt_only_run_without_examples(tmp_path):

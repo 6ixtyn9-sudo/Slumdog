@@ -1,7 +1,7 @@
 """Milestone 6B — Non-trained baseline analyzer.
 
 Implements the frozen two-pass non-trained baseline analyzer according to
-config/research_baselines_v1.json without altering the frozen rules.
+config/research_baselines.json without altering the frozen rules.
 
 Pass 1: Streaming integrity checks (SHA-256 over decompressed JSONL bytes ==
 receipt.examples_digest, row count == receipt.accounting.eligible_examples,
@@ -37,7 +37,7 @@ from typing import Any
 
 from .dataset import ALLOWED_FEATURES, PROHIBITED_KEYS
 
-FROZEN_CONFIG_PATH = Path("config/research_baselines_v1.json")
+FROZEN_CONFIG_PATH = Path("config/research_baselines.json")
 CANONICAL_CONFIG_SHA256 = (
     "666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1"
 )
@@ -1253,7 +1253,7 @@ def main() -> int:
     parser.add_argument(
         "--config",
         default=str(FROZEN_CONFIG_PATH),
-        help="Path to frozen research_baselines_v1.json",
+        help="Path to frozen research_baselines.json",
     )
     parser.add_argument(
         "--examples",

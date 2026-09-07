@@ -3,13 +3,13 @@
 Research mode only; strict mode is unchanged. build_research_dataset:
 lightweight conflict census over ALL valid rows -> exclude every
 conflicting composite key -> content/provenance duplicate normalization ->
-incremental v2 builder (research_builder.py) -> readiness from bounded
+incremental research builder (research_builder.py) -> readiness from bounded
 aggregates -> streaming deterministic artifacts (examples gz streamed as
 produced, bounded sample = first N emitted, receipt last, safe
 no-overwrite finalization).
 
-Feature contract price-free-v2-incremental-valid-history on every emitted
-example, sample, and receipt; label contract unchanged (price-free-v1).
+Feature contract price-free-incremental-valid-history on every emitted
+example, sample, and receipt; label contract unchanged (price-free).
 NOT authorized here: models, ranking, production, wagering. Must never be
 imported by production pipeline modules (pipeline, training, backfill,
 depth_sweep, research, forebet, cli).
@@ -201,7 +201,7 @@ class ResearchExampleEmitter:
 
 @dataclass(frozen=True)
 class ResearchDatasetResult:
-    """Result of research-only v2 dataset construction.
+    """Result of research-only dataset construction.
 
     Bounded by design: no full example list is ever held — only the emitted
     count, the bounded sample, and the digests over the exact emitted bytes.
@@ -224,7 +224,7 @@ def build_research_dataset(
     malformed_empty_participant_rows: int,
     emitter: ResearchExampleEmitter,
 ) -> ResearchDatasetResult:
-    """Build the research-only v2 dataset incrementally (bounded memory).
+    """Build the research-only dataset incrementally (bounded memory).
 
     Enforced order: lightweight census over ALL valid rows -> exclude every
     conflicting composite key -> content/provenance duplicate normalization

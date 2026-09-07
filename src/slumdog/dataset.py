@@ -45,8 +45,8 @@ from .history import HistoryIndex
 from .sports import SPORTS
 from .underdog import ForebetUnderdogIdentity, identify_forebet_underdog, label_underdog_outcome
 
-FEATURE_CONTRACT_VERSION = "price-free-v1-minimal-2026-08-24"
-LABEL_CONTRACT_VERSION = "price-free-v1"
+FEATURE_CONTRACT_VERSION = "price-free-minimal-2026-08-24"
+LABEL_CONTRACT_VERSION = "price-free"
 
 REQUIRED_IDENTITY_FEATURES = (
     "forebet_favorite_probability",
@@ -177,7 +177,7 @@ def _canonical_event_repr(row: SettledEvent) -> dict[str, Any]:
         "league": row.league,
         "source_url": source_url,
         "raw_sha256": raw_sha,
-        "version": "canonical-v1",  # versioned representation
+        "version": "canonical",  # versioned representation
     }
 
 
