@@ -138,7 +138,7 @@ top-level keys and their `load_shadow_declaration` invariants:
     from the frozen 6B config.
 - `cohort_policy`:
   - `primary_selection_per_sport_day = 1`
-  - `top3_cohort_per_sport_day = 2`
+  - `top3_cohort_per_sport_day = null` (UNCAPPED as of the 2026-09-07 owner amendment, PR #17 — see `config/shadow_evaluator.json` for the current live value and its `top3_cohort_per_sport_day_null_means` annotation. A positive integer restores the legacy fixed-cap behavior described elsewhere in this document.)
   - `no_global_cap = true`
   - `ranks_4_plus_recorded_but_not_in_cohort = true`
 - `history_loader`:
