@@ -17,7 +17,7 @@
     "tuning_on_observed_results": "prohibited",
     "config_hash_immutable_after_first_real_run": true,
     "rule_source_frozen": "R2_CONSERVATIVE_FIXED_RULE",
-    "rule_source_frozen_config_path": "config/research_baselines_v1.json",
+    "rule_source_frozen_config_path": "config/research_baselines.json",
     "rule_source_frozen_config_sha256": "666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1"
   },
 
@@ -35,7 +35,7 @@
 
   "rule": {
     "name": "R2_CONSERVATIVE_FIXED_RULE",
-    "source": "config/research_baselines_v1.json:rules.R2_CONSERVATIVE_FIXED_RULE",
+    "source": "config/research_baselines.json:rules.R2_CONSERVATIVE_FIXED_RULE",
     "policy_candidate": false,
     "quota_forced": false,
     "rank_policy": "R1_ALWAYS_RANK_COMPARATOR",
