@@ -42,7 +42,7 @@ jobs:
           else
             echo "::warning::no successful pipeline.yml run found"
           fi
-      - name: Settle overdue predictions (D+1) then run forward batch (D+2..D+6, timing-v1)
+      - name: Settle overdue predictions (D+1) then run forward batch (D+2..D+6, frozen 24h timing contract)
         env:
           PYTHONPATH: src
         run: python scripts/forward_shadow_batch.py --root .
