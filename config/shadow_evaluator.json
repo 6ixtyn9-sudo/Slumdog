@@ -1,5 +1,5 @@
 {
-  "declaration_version": "shadow_evaluator_v1",
+  "declaration_version": "shadow_evaluator",
   "frozen_at": "2026-08-28",
   "authoring_session": "arena/01a048de-slumdog",
   "authoring_base_commit": "b87784fdb590c17b55d4fa1c2bd6c3275dce0f6d",
@@ -107,9 +107,9 @@
   "durability": {
     "status": "LOCAL_CODESPACE_ONLY_NOT_BACKED_UP",
     "second_copy_procedure": "DEFERRED_TO_SEPARATE_APPROVAL",
-    "no_compact_digest_writer_in_v1": true,
-    "no_external_storage_in_v1": true,
-    "no_force_overwrite_in_v1": true,
+    "no_compact_digest_writer": true,
+    "no_external_storage": true,
+    "no_force_overwrite": true,
     "git_tracked_exception": false
   },
 
