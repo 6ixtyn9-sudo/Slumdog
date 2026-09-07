@@ -12,7 +12,7 @@ Public surface:
   Supports ``python -m slumdog.shadow_evaluator --help``.
 
 Scope and non-authorizations are identical to the declaration; see
-``config/shadow_evaluator_v1.json``.
+``config/shadow_evaluator.json``.
 
 Processing order (fail-closed):
 
@@ -65,7 +65,7 @@ from .underdog import identify_forebet_underdog
 # Frozen rule source
 # ---------------------------------------------------------------------------
 
-FROZEN_BASELINE_CONFIG_PATH = "config/research_baselines_v1.json"
+FROZEN_BASELINE_CONFIG_PATH = "config/research_baselines.json"
 FROZEN_BASELINE_CONFIG_SHA256 = (
     "666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1"
 )
@@ -1063,7 +1063,7 @@ def _emit_run(
             "decision_fingerprint_count": len(c["decision_fingerprints"]),
         })
     input_digest_payload = {
-        "version": "shadow_evaluator_v1",
+        "version": "shadow_evaluator",
         "declaration_sha256": declaration_sha,
         "frozen_baseline_config_sha256": FROZEN_BASELINE_CONFIG_SHA256,
         "target_date": target_date,
@@ -1107,7 +1107,7 @@ def _emit_run(
         for s in selections
     ]
     decision_digest_payload = {
-        "version": "shadow_evaluator_v1",
+        "version": "shadow_evaluator",
         "rule_name": FROZEN_R2_KEY,
         "frozen_baseline_config_sha256": FROZEN_BASELINE_CONFIG_SHA256,
         "considered_pool": pool_for_digest,
@@ -1117,7 +1117,7 @@ def _emit_run(
     decision_digest = _canonical_sha256(decision_digest_payload)
 
     run_id_payload = {
-        "version": "shadow_evaluator_v1",
+        "version": "shadow_evaluator",
         "input_digest": input_digest,
         "decision_digest": decision_digest,
         "decision_committed_at": decision_committed_at,
@@ -1197,7 +1197,7 @@ def _emit_run(
         "history_provenance": history_result.manifest_section,
         "durability_policy": declaration.get("durability", {}),
         "anti_tuning": declaration.get("anti_tuning", {}),
-        "version": "shadow_evaluator_v1",
+        "version": "shadow_evaluator",
     }
     fd_m, tmp_m = tempfile.mkstemp(prefix="manifest.", suffix=".json.tmp", dir=str(artifact_dir))
     try:
@@ -1353,7 +1353,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--history", action="append", type=Path, default=[],
                    help="Optional explicit history paths (repeatable)")
     p.add_argument("--config", required=True, type=Path,
-                   help="Path to config/shadow_evaluator_v1.json")
+                   help="Path to config/shadow_evaluator.json")
     p.add_argument("--root", default=Path("."), type=Path,
                    help="Repository root (default: current working directory)")
     p.add_argument("--history-max-interim-bytes", type=int, default=None,

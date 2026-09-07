@@ -312,7 +312,7 @@ def test_equivalence_duplicate_missing_vs_present_provenance():
 # ---------------------------------------------------------------------------
 
 
-def test_divergence_void_alias_feeds_legacy_history_not_v2():
+def test_divergence_void_alias_feeds_legacy_history_not_valid_ledger():
     rows = [
         make_row("hockey:1", event_date="2023-04-01", p1="Alpha", p2="Beta", disposition="NO_CONTEST", winner=1, score1=2, score2=1, prob1=0.5, prob2=0.5),
         make_row("hockey:2", event_date="2023-04-02", p1="Beta", p2="Gamma", prob1=0.4, prob2=0.6, winner=1, score1=3, score2=2),
@@ -337,7 +337,7 @@ def test_divergence_void_alias_feeds_legacy_history_not_v2():
     assert b["missingness"]["underdog_prior_win_rate"] == 1
 
 
-def test_divergence_settled_cup_winner_zero_feeds_legacy_history_not_v2():
+def test_divergence_settled_cup_winner_zero_feeds_legacy_history_not_valid_ledger():
     rows = [
         make_row("football:1", sport="football", event_date="2023-04-01", p1="Alpha", p2="Beta", disposition="SETTLED_CUP", winner=0, score1=1, score2=1, prob1=0.5, prob2=0.5),
         make_row("football:2", sport="football", event_date="2023-04-02", p1="Beta", p2="Gamma", prob1=0.4, prob2=0.6, winner=1, score1=3, score2=2),
@@ -403,7 +403,7 @@ def test_normalize_content_mismatch_fails_closed():
     assert collapsed == 0
 
 
-def test_v2_input_digest_exact_bytes():
+def test_research_input_digest_exact_bytes():
     events = [_validate_settled_dict(r) for r in EQUIV_ROWS]
     rows_by_sport = {"hockey": sorted(events, key=lambda r: (r.event_date, r.event_id))}
     combined, sport_digests = _compute_research_input_digest(rows_by_sport)
@@ -602,7 +602,7 @@ def test_diagnostic_receipt_on_internal_inconsistency(tmp_path):
     assert [p for p in out.iterdir() if ".tmp-" in p.name] == []
 
 
-def test_ready_receipt_flags_and_v2_versions(tmp_path):
+def test_ready_receipt_flags_and_research_contract_versions(tmp_path):
     rows = [
         make_row("hockey:1", event_date="2023-06-01"),
         make_row("hockey:2", event_date="2023-06-02", p1="Beta", p2="Alpha", winner=2, score1=0, score2=3, prob1=0.4, prob2=0.6),

@@ -103,7 +103,7 @@ evaluator and the research-dataset builder both call. In other words: the
 richer feature-extraction code already exists in the repo, has tests, and is
 simply not on the path the live/shadow decision uses. This is very likely
 by design (the 17-field vector is what's frozen under
-`config/shadow_evaluator_v1.json`'s `R2_CONSERVATIVE_FIXED_RULE`, and
+`config/shadow_evaluator.json`'s `R2_CONSERVATIVE_FIXED_RULE`, and
 `AGENTS.md`'s anti-tuning rule forbids amending the frozen rule based on
 observed results) — but it means today's shadow picks are not using most of
 what's already sitting in the captured data, and that richer vector is the

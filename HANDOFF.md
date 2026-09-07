@@ -5,7 +5,7 @@
 **Branch:** `arena/01a07741-slumdog` (uncapped-cohort + Milestone 7D retirement session, from `main` @ `02cce6f`)
 **Base commit:** `02cce6f0f74478062d86f8dab210ebdf3d7454cd` (main tip at this verification)
 **Tests:** 718 passed, 0 deselected, 0 skipped (`python -m pytest` — see launch-invocation note in Milestone 7F section)
-**Working tree:** committed on `arena/01a07741-slumdog`, pushed, PR against `main` opened for owner sign-off. Changes: `config/shadow_evaluator_v1.json`, `src/slumdog/shadow_evaluator.py`, `scripts/synthetic_shadow_fixture.py`, `tests/test_shadow_evaluator.py` (1 test renamed/rewritten), deleted `tests/test_cloud_backup_workflow.py`, `docs/STATE.md`, `HANDOFF.md`, new `docs/ADDENDUM_2026-09-07_SPORT_ELIGIBILITY_FINDINGS.md`. No workflow files touched.
+**Working tree:** committed on `arena/01a07741-slumdog`, pushed, PR #17 against `main` open for owner sign-off. Changes: `config/shadow_evaluator.json` (renamed, `top3_cohort_per_sport_day: null` = UNCAPPED), `src/slumdog/shadow_evaluator.py`, `scripts/synthetic_shadow_fixture.py`, `tests/test_shadow_evaluator.py`, deleted `tests/test_cloud_backup_workflow.py`, version-suffix cleanup across code/config/docs (config renames + de-suffixed artifact schema tags), sport-eligibility findings folded into this file (standalone addendum file deleted per owner directive — no doc bloat), `docs/STATE.md` refreshed. No workflow files touched.
 
 ## Cloud-Native Evidence Architecture
 
@@ -79,7 +79,7 @@ Pending: (1) durable storage beyond 30d artifacts.
 
 **Independent review fix (2026-09-06, post-push):** a review of the pushed commit found that `_sports_in_run()` only caught `(OSError, json.JSONDecodeError)` around its two file reads, so a `shadow_selections.json`/`manifest.json` that parses as valid JSON but has the wrong top-level shape (e.g. a bare list instead of a dict, or a non-dict entry inside `selections`/`considered_pool`) would raise `AttributeError`/`TypeError` uncaught — violating `run_settlement_for_date`'s documented "never raises" contract and, worse, would have propagated out of `run_settlement_backlog()` and aborted `main()` before the forward-capture pass ran. Fixed by widening both except clauses to `(OSError, json.JSONDecodeError, AttributeError, TypeError)`, with 4 new regression tests (`TestSportsInRun`: list-not-dict, non-dict selection entry, non-dict manifest; `TestRunSettlementForDate`: end-to-end malformed-file case resolves to `NO_SPORTS_RESOLVED` rather than raising). Real-world likelihood was assessed as low (run files are always dicts written by the frozen evaluator with atomic writes) but the fix was one line per except clause, so it was applied rather than left as a documented risk.
 
-**IMPORTANT — do not conflate two different settlement artifacts:** the pre-existing `data/reports/shadow/settlements/2026-09-02/acd78872019300ff.settlement.json` (schema `"version": "shadow_settlement_v1_manual_binding"`) was a **manual/ad-hoc grading**, not produced by `shadow_settle.py` (confirmed: that string appears nowhere in the module; its path convention — a shared `settlements/<date>/<run_id>.settlement.json` — doesn't match what `write_settlement_artifact()` actually writes). The automation in this milestone writes a fresh, correctly-schemed settlement (`"settlement_schema_version": "shadow_settlement_v1"`) to `data/reports/shadow/<date>/<run_id>/settlement.json` the first time it runs for 2026-09-02 — this is intended, not a duplicate-avoidance bug.
+**IMPORTANT — do not conflate two different settlement artifacts:** the pre-existing `data/reports/shadow/settlements/2026-09-02/acd78872019300ff.settlement.json` (schema `"version": "shadow_settlement_v1_manual_binding"`) was a **manual/ad-hoc grading**, not produced by `shadow_settle.py` (confirmed: that string appears nowhere in the module; its path convention — a shared `settlements/<date>/<run_id>.settlement.json` — doesn't match what `write_settlement_artifact()` actually writes). The automation in this milestone writes a fresh, correctly-schemed settlement (`"settlement_schema_version": "shadow_settlement"` since the 2026-09-07 version-suffix cleanup; `"shadow_settlement_v1"` on artifacts committed before it) to `data/reports/shadow/<date>/<run_id>/settlement.json` the first time it runs for 2026-09-02 — this is intended, not a duplicate-avoidance bug.
 
 **Production record (2026-09-06):** PR #16 merged as `c06659c` (plus `25f694a` doc-line fix). The same day's production dispatches settled the eligible backlog — 2026-09-02 (`acd78872019300ff`: primary 1/1, top-3 1/3; settled 16:39 UTC) and 2026-09-05 (`4353ca88e825fd6a`: primary 0/1, top-3 2/3; settled 16:40 UTC) — writing real `settlement.json` (schema `shadow_settlement_v1`) artifacts and `settlement_capture_receipt.json` files to `main`. Two early dispatches hit `SHADOW_RUN_BLOCKED` on forward dates 2026-09-10/11/12; root cause: `run_evaluator()` globbed `history_*.json` and passed backfill *manifest* files to `--history`, which the evaluator's loader rejects (it accepts only `history_*.jsonl.gz` ledgers and `settled_history.json`). Fixed and tested in `972b79a` (+5 regression tests; full suite 718 passed, 12 deselected); the subsequent re-dispatch completed successfully and all three dates now have real run + bundle artifacts on `main`. Sample-size caveat: 2 settled primary picks is not a rate — see `docs/REVIEW_2026-09-06_STATUS_PERFORMANCE_RECOMMENDATIONS.md` §5 before drawing any performance conclusion.
 
@@ -91,7 +91,7 @@ Pending: (1) durable storage beyond 30d artifacts.
 
 **Change 1 — uncapped shadow picks (owner request).** Every game that already clears the frozen R2 eligibility rule and R1 ranking is now recorded — no fixed cohort-size cap. This is explicitly NOT a loosening of R2 thresholds (`underdog_prior_games >= 5`, `favorite_prior_games >= 5`, `h2h_prior_games >= 1`, `forebet_probability_gap <= 0.2` all untouched) nor any change to R1 ranking order — purely the downstream recording width:
 
-- `config/shadow_evaluator_v1.json`: `cohort_policy.top3_cohort_per_sport_day` changed from `2` to `null` (= UNCAPPED), with an in-config `top3_cohort_per_sport_day_null_means` annotation. New declaration canonical SHA-256 (sorted-keys compact JSON): `fe031ae550ac25d4f9c11becb701572e798f0d54f37bb8201f3a07e182503e5f` (verified; supersedes `dd08976a…` from the PR #16 era).
+- `config/shadow_evaluator.json`: `cohort_policy.top3_cohort_per_sport_day` changed from `2` to `null` (= UNCAPPED), with an in-config `top3_cohort_per_sport_day_null_means` annotation. New declaration canonical SHA-256 (sorted-keys compact JSON): `fe031ae550ac25d4f9c11becb701572e798f0d54f37bb8201f3a07e182503e5f` (verified; supersedes `dd08976a…` from the PR #16 era).
 - `src/slumdog/shadow_evaluator.py`: `load_shadow_declaration` now accepts `null` (uncapped) or any positive integer (legacy cap mechanism retained, currently unused); `_emit_run` computes `last_cohort_rank = math.inf if width is None else 1 + width`, so every R2-eligible, R1-ranked event becomes `PRIMARY_SHADOW_SELECTION` (rank 1) or `TOP3_EVALUATION_COHORT` (every other rank). `ELIGIBLE_RANKED_BEYOND_TOP3` stays in the schema (no version churn) but is permanently unreachable while the width is `null`.
 - `scripts/synthetic_shadow_fixture.py`: `EXPECTED_DECLARATION_SHA256` updated to the new hash; the fixture's 3-pairing shape is unaffected (3 events fit under any cap).
 - `src/slumdog/shadow_settle.py`: NO change needed — settlement indexing already keys off `considered_status == "ELIGIBLE_RANKED_BEYOND_TOP3"`, and that bucket is simply always empty now.
@@ -103,7 +103,22 @@ Pending: (1) durable storage beyond 30d artifacts.
 
 **Test-launch portability note (verified real, not sandbox-only):** a bare `pytest` invocation fails ~39 tests in `tests/test_forward_shadow_batch.py` with `ModuleNotFoundError: No module named 'scripts'` (`scripts/` has no `__init__.py`; bare pytest doesn't put cwd on `sys.path` while `python -m pytest` does). Reproduced in two independent sandboxes; pre-existing and unrelated to both changes above. Standardize on `python -m pytest` everywhere.
 
+**Version-suffix cleanup (owner directive 2026-09-07, same PR):** the system carries no `_v1`/`_v2` naming anymore where it is safe to rename: config files renamed `config/shadow_evaluator.json` and `config/research_baselines.json` (content bytes unchanged, so canonical hashes `fe031ae5…`/`666dabe7…` are unchanged and still pinned); live artifact schema tags de-suffixed (`shadow_evaluator`, `shadow_settlement`, `slumdog_shadow_bundle`, `forward_shadow_batch`); history-loader `_v2_filter_one`/`V2_INVALID` identifiers renamed to ledger-validity names. Pre-rename artifacts on `main` keep their old tags forever (immutable evidence with sha256 markers); consequence: runs/bundles created before this cleanup cannot be re-bundled/re-verified with the renamed constants (they were verified at creation; no live path re-processes them). **Deliberately kept (data-integrity pins, not naming bloat):** dataset contract versions `price-free-v1*` / `price-free-v2-incremental-valid-history` / `slumdog-research-input-v2` / `canonical-v1` — these strings are embedded in digested dataset bytes and pinned by golden-regression digests; renaming them would silently re-baseline frozen contracts, which requires explicit owner authorization. The `timing-v1` label inside `.github/workflows/forward_shadow.yml`'s step name stays until the owner touches that file (App-token push restriction on workflow files).
+
 **Constraint compliance:** no new `_v2`/`_v3` files (all edits in place) / R2 thresholds untouched / R1 ranking untouched / no `--dates` window widening / no workflow files touched / training FROZEN.
+
+## Sport Eligibility Findings (2026-09-07 investigation)
+
+Findings from the follow-up investigation into "why do only some sports produce picks, and would backfill help" (no code changes, no backfill run; read-only against production runs on `main`):
+
+**The early "football-only" pattern already resolved itself.** Verified per-run `decision_accounting` on `main`: 2026-09-02…09-09 produced 1 primary/2 cohort (football only); 09-10 → 5 primary + 7 cohort (basketball, football, hockey, rugby, volleyball); 09-11 → 6 + 11 (adds baseball, handball); 09-12 → 7 + 14 (adds american_football). Total daily volume grows organically as each sport's settled-history ledger deepens via the daily pipeline — the R2 gate (`prior_games >= 5` both sides, `h2h_prior_games >= 1`, `gap <= 0.2`) admits more sport-days with no config change.
+
+**Three sports have never produced a primary pick — and backfill would not help:** tennis, cricket, mma (esoccer excluded: `current_only`). Ledger row counts pulled from the Codespace ledgers (2026-09-07): tennis 38,712 rows / 12% repeat-pairing rate; cricket 6,546 rows / 52%; mma 759 rows / 5%. Row volume is not the binding constraint for any of them:
+
+- **Tennis and mma are structurally H2H-gated, not depth-gated.** Individual-competitor sports with mostly one-off pairings (only 12%/5% of historical pairings ever repeat). More backfill adds one-off matches, not rematches, so it cannot materially raise `h2h_prior_games >= 1` satisfaction. No backfill recommended.
+- **Cricket is different (52% repeat rate) but still not a backfill candidate:** its ledger already starts (2025-02-10) essentially at the frozen `HISTORY_STARTS["cricket"] = 2025-01-01` contract start — there is barely any earlier history to backfill *to*. It improves organically as recent rows accrue.
+
+**Conclusion:** no backfill action taken or recommended for any sport. The "only 3 picks/day" ceiling was a temporary early-stage artifact, not a permanent limit. Do not "fix" the structural tennis/mma/cricket gap by loosening frozen R2 thresholds — that would be a prohibited result-driven amendment. Re-check the per-sport primary-pick tally after 1–2 more weeks of forward runs to confirm cricket is rising and tennis/mma stay near zero.
 
 ## Product Invariants (from AGENTS.md)
 
@@ -275,7 +290,7 @@ The original 6A implementation was found not to scale (it materialized all examp
 
 ## Milestone 6B — Non-Trained Baseline Analyzer (COMPLETE, 426 tests passed, Real Run Verified)
 
-- **Frozen Pre-declaration:** `config/research_baselines_v1.json` verified against canonical SHA-256 `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1`. Anti-tuning guarantees preserved: tuning periods empty, result-driven amendments prohibited, shortlist policy not authorized, training frozen.
+- **Frozen Pre-declaration:** `config/research_baselines.json` verified against canonical SHA-256 `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1`. Anti-tuning guarantees preserved: tuning periods empty, result-driven amendments prohibited, shortlist policy not authorized, training frozen.
 - **Two-Pass Architecture:**
   - `src/slumdog/baseline_analyzer.py` (implementation) and `src/slumdog/research_baselines.py` (re-export/CLI shim only, zero logic).
   - **Pass 1 (Streaming integrity):** SHA-256 over decompressed JSONL bytes verified against `receipt.examples_digest`; row count verified against `receipt.accounting.eligible_examples`; every row's `event_date` must fall within P1..P4 union; non-finite floats (NaN/Inf/-Inf) fail closed; prohibited keys fail closed; any failure exits nonzero immediately with no outputs written.
@@ -532,7 +547,7 @@ semantics.
 
 **Scope:** A pre-event forward shadow evaluator that consumes an
 already-captured Forebet snapshot, applies the **frozen R2 eligibility
-rule** read from `config/research_baselines_v1.json` (never
+rule** read from `config/research_baselines.json` (never
 duplicated), applies **R1 ranking** (the same comparator used by the
 6B analyzer), and emits an immutable per-sport-day payload + manifest
 under `data/reports/shadow/<target_date>/<run_id>/`.
@@ -583,7 +598,7 @@ under `data/reports/shadow/<target_date>/<run_id>/`.
 - `src/slumdog/dataset.py` — UNCHANGED in this recovery (the
   `build_pre_event_features` extraction is from the prior session;
   the new helpers delegate to it).
-- `config/shadow_evaluator_v1.json` — UNCHANGED from the prior
+- `config/shadow_evaluator.json` — UNCHANGED from the prior
   session. Canonical SHA-256 (sorted keys, compact separators,
   UTF-8): `dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597`.
   Verified after refactor.

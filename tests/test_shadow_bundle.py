@@ -45,8 +45,8 @@ from slumdog.shadow_evaluator import evaluate_from_disk
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-FROZEN_CONFIG = REPO_ROOT / "config" / "research_baselines_v1.json"
-SHADOW_DECL = REPO_ROOT / "config" / "shadow_evaluator_v1.json"
+FROZEN_CONFIG = REPO_ROOT / "config" / "research_baselines.json"
+SHADOW_DECL = REPO_ROOT / "config" / "shadow_evaluator.json"
 
 TARGET_DATE = "2026-08-28"
 # captured_at MUST be before the safe cutoff (target 00:00Z - 24h).
@@ -110,8 +110,8 @@ def make_env(tmp_path: Path, *, primary: bool = True) -> dict:
     root = tmp_path / "repo"
     (root / "config").mkdir(parents=True)
     (root / "data" / "reports" / "shadow").mkdir(parents=True)
-    shutil.copy(FROZEN_CONFIG, root / "config" / "research_baselines_v1.json")
-    shutil.copy(SHADOW_DECL, root / "config" / "shadow_evaluator_v1.json")
+    shutil.copy(FROZEN_CONFIG, root / "config" / "research_baselines.json")
+    shutil.copy(SHADOW_DECL, root / "config" / "shadow_evaluator.json")
 
     # Raw body + sidecar (real Forebet row shape, json body_format).
     body = ("<html><body>" + json.dumps([_forebet_rows(), {}]) + "</body></html>").encode("utf-8")
@@ -147,7 +147,7 @@ def make_env(tmp_path: Path, *, primary: bool = True) -> dict:
     result = evaluate_from_disk(
         target_date=TARGET_DATE,
         capture_receipt_path=receipt_path,
-        declaration_path=root / "config" / "shadow_evaluator_v1.json",
+        declaration_path=root / "config" / "shadow_evaluator.json",
         repo_root=root,
         history_paths=[gz_path],
         decision_clock=DECISION_CLOCK,
@@ -165,8 +165,8 @@ def make_env(tmp_path: Path, *, primary: bool = True) -> dict:
         "sidecar_path": sidecar_path,
         "body_path": body_path,
         "history_path": gz_path,
-        "frozen_config_path": root / "config" / "research_baselines_v1.json",
-        "decl_path": root / "config" / "shadow_evaluator_v1.json",
+        "frozen_config_path": root / "config" / "research_baselines.json",
+        "decl_path": root / "config" / "shadow_evaluator.json",
         "run_status": result.run_status,
         "run_id": result.run_id,
     }
@@ -401,8 +401,8 @@ def test_bundle_contains_all_required_inputs(tmp_path):
     names = set(members)
     assert "bundle/run/shadow_selections.json" in names
     assert "bundle/run/manifest.json" in names
-    assert "bundle/config/research_baselines_v1.json" in names
-    assert "bundle/config/shadow_evaluator_v1.json" in names
+    assert "bundle/config/research_baselines.json" in names
+    assert "bundle/config/shadow_evaluator.json" in names
     assert "bundle/capture/receipt.json" in names
     assert any(n.startswith("bundle/capture/sidecars/") for n in names)
     assert any(n.startswith("bundle/capture/bodies/") for n in names)
@@ -411,8 +411,8 @@ def test_bundle_contains_all_required_inputs(tmp_path):
     assert "bundle/README.txt" in names
     # Bundled capture/history bytes exactly equal the on-disk source bytes.
     assert members["bundle/capture/receipt.json"] == env["receipt_path"].read_bytes()
-    assert members["bundle/config/research_baselines_v1.json"] == env["frozen_config_path"].read_bytes()
-    assert members["bundle/config/shadow_evaluator_v1.json"] == env["decl_path"].read_bytes()
+    assert members["bundle/config/research_baselines.json"] == env["frozen_config_path"].read_bytes()
+    assert members["bundle/config/shadow_evaluator.json"] == env["decl_path"].read_bytes()
 
 
 def test_archive_uses_safe_logical_paths_only(tmp_path):
@@ -723,9 +723,9 @@ def test_verify_rejects_frozen_config_canonical_mismatch(tmp_path):
     _, _, archive, receipt, _ = _make_verified_bundle(tmp_path)
 
     def corrupt_config(members):
-        cfg = json.loads(members["bundle/config/research_baselines_v1.json"])
+        cfg = json.loads(members["bundle/config/research_baselines.json"])
         cfg["__tampered__"] = True
-        members["bundle/config/research_baselines_v1.json"] = json.dumps(cfg).encode()
+        members["bundle/config/research_baselines.json"] = json.dumps(cfg).encode()
     tamper_bundle(archive, receipt, mutate_archive=corrupt_config, resync_inventory=True)
     with pytest.raises(BundleError, match="frozen baseline config"):
         verify_bundle(bundle_path=archive, receipt_path=receipt)
@@ -770,10 +770,10 @@ def test_verify_rejects_shadow_declaration_canonical_mismatch(tmp_path):
         # Flip a fail-closed authorization gate inside the bundled
         # declaration, and keep every hash/digest self-consistent so the
         # verifier reaches the declaration authorization gate.
-        decl = json.loads(members["bundle/config/shadow_evaluator_v1.json"])
+        decl = json.loads(members["bundle/config/shadow_evaluator.json"])
         decl["authorizations"]["production_authorized"] = True
         decl_bytes = json.dumps(decl, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        members["bundle/config/shadow_evaluator_v1.json"] = decl_bytes
+        members["bundle/config/shadow_evaluator.json"] = decl_bytes
         new_decl_sha = hashlib.sha256(decl_bytes).hexdigest()
         manifest = json.loads(members["bundle/run/manifest.json"])
         manifest["declaration_sha256"] = new_decl_sha

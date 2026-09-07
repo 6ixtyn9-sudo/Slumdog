@@ -6,7 +6,7 @@ correlate with draws vs decisive results, per draw-capable sport.
 This is a **read-only** analysis: no configuration changes, no
 threshold modifications, no selection-policy changes. Report only.
 
-The 7 pre-declared signals (from ``config/research_baselines_v1.json``):
+The 7 pre-declared signals (from ``config/research_baselines.json``):
 
 1. ``conceding_rate_gap``
 2. ``evidence_availability``

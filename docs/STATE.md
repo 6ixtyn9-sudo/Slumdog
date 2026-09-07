@@ -1,6 +1,6 @@
 # Slumdog State — Canonical Current Truth
 
-**Last verified:** 2026-09-07 (UTC) — **`main` @ `02cce6f`** / **AUTOMATED D+1 SETTLEMENT LIVE AND PROVEN IN PRODUCTION** (three dates settled by real dispatches so far: 2026-09-02, 09-05, 09-06; artifacts on `main`) / **UNCAPPED-COHORT AMENDMENT + MILESTONE 7D RETIREMENT IMPLEMENTED ON `arena/01a07741-slumdog`, PR PENDING OWNER SIGN-OFF** / **FORWARD SHADOW WORKFLOW LIVE** (`.github/workflows/forward_shadow.yml`, `contents: write`, `actions: read`) / **SHADOW EVIDENCE IN GIT** (runs 2026-09-05..13 + settlements + bundles) / **CONTRACT AMENDED** (owner directive 2026-09-03 "no ledgers in Codespace") / **CODESPACE DEV-ONLY** / **PRODUCTION NOT AUTHORIZED** / **SHORTLIST POLICY NOT AUTHORIZED**. 718 tests pass, zero skips, zero deselects (the orphaned Milestone 7D test file was removed 2026-09-07 — see that milestone's entry).
+**Last verified:** 2026-09-07 (UTC) — **`main` @ `02cce6f`** / **AUTOMATED D+1 SETTLEMENT LIVE AND PROVEN IN PRODUCTION** (three dates settled by real dispatches so far: 2026-09-02, 09-05, 09-06; artifacts on `main`) / **UNCAPPED-COHORT AMENDMENT + MILESTONE 7D RETIREMENT + VERSION-SUFFIX CLEANUP (owner directive 2026-09-07: no `_v1`/`_v2` naming; addendum folded into HANDOFF.md) IMPLEMENTED ON `arena/01a07741-slumdog`, PR PENDING OWNER SIGN-OFF** / **FORWARD SHADOW WORKFLOW LIVE** (`.github/workflows/forward_shadow.yml`, `contents: write`, `actions: read`) / **SHADOW EVIDENCE IN GIT** (runs 2026-09-05..13 + settlements + bundles) / **CONTRACT AMENDED** (owner directive 2026-09-03 "no ledgers in Codespace") / **CODESPACE DEV-ONLY** / **PRODUCTION NOT AUTHORIZED** / **SHORTLIST POLICY NOT AUTHORIZED**. 718 tests pass, zero skips, zero deselects (the orphaned Milestone 7D test file was removed 2026-09-07 — see that milestone's entry).
 
 **Branch:** `arena/01a07741-slumdog` (uncapped-cohort amendment + Milestone 7D retirement session, from `main` @ `02cce6f`); `main` is only permanent branch
 **Doc canonical path:** `docs/STATE.md`
@@ -129,7 +129,10 @@ Automated D+1 settlement (P1 continuation, 2026-09-06): MERGED (PR #16,
   each subsequent daily dispatch.
   IMPORTANT: the settlement.json this module writes lives at
   data/reports/shadow/<date>/<run_id>/settlement.json with schema
-  "settlement_schema_version": "shadow_settlement_v1". This is DIFFERENT
+  "settlement_schema_version": "shadow_settlement" (artifacts committed
+  before the 2026-09-07 version-suffix cleanup carry the legacy tag
+  "shadow_settlement_v1"; they are immutable evidence and are not
+  rewritten). This is DIFFERENT
   from the pre-existing data/reports/shadow/settlements/2026-09-02/
   acd78872019300ff.settlement.json, whose schema is
   "version": "shadow_settlement_v1_manual_binding" — that file was a
@@ -162,7 +165,7 @@ Real settlement (AUTOMATED, shadow_settle.py output, on main): 2026-09-02
   shadow_settlement_v1_manual_binding) — see IMPORTANT note above. Sample
   size (3 primary picks) is far too small for any performance conclusion —
   see docs/REVIEW_2026-09-06_STATUS_PERFORMANCE_RECOMMENDATIONS.md §5 and
-  docs/ADDENDUM_2026-09-07_SPORT_ELIGIBILITY_FINDINGS.md.
+  the "Sport Eligibility Findings" section of HANDOFF.md.
 Canonical config SHA-256: 666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1 (VERIFIED)
 New shadow declaration canonical SHA-256: fe031ae550ac25d4f9c11becb701572e798f0d54f37bb8201f3a07e182503e5f (VERIFIED, on branch arena/01a07741-slumdog after the uncapped-cohort amendment; supersedes dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597 which remains the hash of the declaration as merged via PR #16)
 Tests: 718 passed, 0 deselected, 0 skipped (2026-09-07: orphaned
@@ -199,7 +202,7 @@ Next: (1) owner sign-off + merge of arena/01a07741-slumdog PR
   anti-tuning rule requires pre-authorization).
   No backfill recommended for any sport — tennis/mma are structurally
   H2H-gated, cricket's archive window is young; see
-  docs/ADDENDUM_2026-09-07_SPORT_ELIGIBILITY_FINDINGS.md.
+  the "Sport Eligibility Findings" section of HANDOFF.md.
   Test invocation: always `python -m pytest` (a bare `pytest` fails ~39
   tests in tests/test_forward_shadow_batch.py with ModuleNotFoundError:
   No module named 'scripts' — scripts/ has no __init__.py and bare
@@ -251,7 +254,7 @@ Next: (1) owner sign-off + merge of arena/01a07741-slumdog PR
   `training_authorized=false`, `threshold_optimization_authorized=false`
   (fail-closed at declaration load).
 - Frozen rule source: R2 read from
-  `config/research_baselines_v1.json:rules.R2_CONSERVATIVE_FIXED_RULE`
+  `config/research_baselines.json:rules.R2_CONSERVATIVE_FIXED_RULE`
   (canonical SHA-256
   `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1`).
 - Frozen 24h pre-event timing gate: `captured_at` AND
@@ -308,7 +311,7 @@ Next: (1) owner sign-off + merge of arena/01a07741-slumdog PR
   in this session.
 
 
-- Frozen configuration verified: `config/research_baselines_v1.json` with canonical SHA-256 `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1`
+- Frozen configuration verified: `config/research_baselines.json` with canonical SHA-256 `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1`
 - Pass 1: streaming integrity checks over decompressed JSONL bytes, row count matching `receipt.accounting.eligible_examples`, date coverage within P1..P4 union, fail-closed on non-finite values and prohibited keys
 - Pass 2: streaming metrics computation:
   - Missingness reporting for every analyzed feature (global & per sport per period)
@@ -352,7 +355,6 @@ reproducibility.
 - README.md — overview
 - HANDOFF.md — living handoff with full census evidence
 - docs/REVIEW_2026-09-06_STATUS_PERFORMANCE_RECOMMENDATIONS.md — 2026-09-06 status/performance review (REVIEW/REFERENCE ONLY, not canonical)
-- docs/ADDENDUM_2026-09-07_SPORT_ELIGIBILITY_FINDINGS.md — 2026-09-07 sport-eligibility/backfill findings (REVIEW/REFERENCE ONLY, not canonical)
 - docs/PRICE_FREE_DATASET_CONTRACT.md — dataset contract CURRENT
 - docs/FEATURE_TIMING_CONTRACT.md — timing contract CURRENT (period_values UNKNOWN)
 - docs/MILESTONE1_AUDIT.md — audit REFERENCE

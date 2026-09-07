@@ -33,7 +33,7 @@ verified at every shadow-evaluator load.
    `period_scores_*`, or `odds_*` fields by construction; converting an
    `EventSnapshot` to a `PreEventRecord` drops these.
 3. The frozen R2 eligibility rule is read from
-   `config/research_baselines_v1.json:rules.R2_CONSERVATIVE_FIXED_RULE` at
+   `config/research_baselines.json:rules.R2_CONSERVATIVE_FIXED_RULE` at
    every load; the declaration's `anti_tuning.rule_source_frozen` is verified
    to equal `R2_CONSERVATIVE_FIXED_RULE`. No threshold optimization, no
    result-driven amendment.
@@ -62,7 +62,7 @@ verified at every shadow-evaluator load.
 |---|---|---|
 | `src/slumdog/dataset.py` | MODIFIED | Mechanical Design B extraction: new pure helper `build_pre_event_features(sport, event_date, participant_1, participant_2, identity, history)` after `_prior_scoring_stats`. `build_price_free_examples` now calls the helper. 17 ALLOWED_FEATURES keys preserved in identical order. 426 existing research tests remain green. |
 | `src/slumdog/shadow_evaluator.py` | NEW | The forward evaluator. ~1100 lines. Owns declaration + frozen-config + timing + identity + R2 eligibility + R1 ranking + atomic artifact emission. Imports `build_pre_event_features` and `HistoryIndex`. Does **not** import `pipeline`, `forebet`, `settlement`, `training`, `research_dataset`, `dataset_audit`, `cli`, or any legacy Robber/Ticket path. |
-| `config/shadow_evaluator_v1.json` | NEW | Shadow evaluator declaration. canonical SHA-256 over UTF-8 sorted keys = `dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597` (recorded in this plan, not a config field). |
+| `config/shadow_evaluator.json` | NEW | Shadow evaluator declaration. canonical SHA-256 over UTF-8 sorted keys = `dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597` (recorded in this plan, not a config field). |
 | `tests/test_shadow_evaluator.py` | NEW | 60 focused tests across 13 contract groups. All behavioral, no AST/repo-wide source scans. |
 | `docs/MILESTONE7_SHADOW_PICKS_PLAN.md` | REPLACED | This document — final implemented design, replacing the earlier proposed plan. |
 | `HANDOFF.md` | UPDATED | M7 section appended. |
@@ -77,7 +77,7 @@ fixture was added.
 ## 3. Frozen Rule Source (no duplication)
 
 The shadow evaluator **does not** carry a copy of the R2 eligibility
-thresholds. It loads `config/research_baselines_v1.json` via
+thresholds. It loads `config/research_baselines.json` via
 `load_frozen_baseline_config(root)` which:
 
 - reads the file,
@@ -100,7 +100,7 @@ at load.
 
 ---
 
-## 4. Declaration (`config/shadow_evaluator_v1.json`)
+## 4. Declaration (`config/shadow_evaluator.json`)
 
 The declaration is the auditable contract for a single M7 run. Its
 top-level keys and their `load_shadow_declaration` invariants:
