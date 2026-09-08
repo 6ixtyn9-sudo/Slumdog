@@ -401,12 +401,19 @@ git, so no post-event fact enters a feature and nothing missing is zero-filled.
 threshold, rule, or config amendment** — that would be exactly the
 result-driven tuning `anti_tuning` prohibits.
 
-Caveat on artifact scope: `data/reports/shadow/errata/` is a **new artifact
-type not enumerated in the `AGENTS.md` scoped commit waiver** (which lists
-`shadow_selections.json`, `manifest.json`, `capture_*.json`, `*.settlement.json`
-+ markers, `*.bundle.json`, `*.tar.gz.sha256`, `status.tsv`). They are small
-JSON (5–86 KB) in the same spirit, but the owner should either extend the
-waiver explicitly or relocate them.
+Artifact scope — **RESOLVED 2026-09-08.** `data/reports/shadow/errata/` was a
+new artifact type not enumerated in the `AGENTS.md` scoped commit waiver (which
+listed `shadow_selections.json`, `manifest.json`, `capture_*.json`,
+`*.settlement.json` + markers, `*.bundle.json`, `*.tar.gz.sha256`,
+`status.tsv`). On owner direction the waiver has been **extended** rather than
+the artifacts relocated: `*.rank4_erratum.json` + `.sha256` markers under
+`data/reports/shadow/errata/` are now explicitly covered. Extending was chosen
+over relocating because the three errata are already committed and pushed —
+moving them would rewrite the paths of published, hash-marked corrections to
+immutable evidence for no gain. Measured size 5.2–86 KiB, the same class as the
+`*.settlement.json` files already covered. All other waiver exclusions are
+unchanged (never raw capture bodies, never `*.tar.gz` archives, never history
+ledgers). See `AGENTS.md` → Filesystem Separation.
 
 ## Discarded Settlement Metadata Recovered (2026-09-07)
 

@@ -68,6 +68,16 @@ This is NOT a value-betting, odds-first, EV, de-vigging, Kelly, or bookmaker-cov
   these small JSON/text files — never raw capture bodies (HTML/JSON),
   never `*.tar.gz` bundle archives, never history ledgers. Those remain
   in Actions artifacts (30-day retention) or durable object storage.
+- **Waiver extension (2026-09-08, owner directive "resolve the errata waiver
+  scope before adding more surface area"):** `*.rank4_erratum.json` +
+  `.sha256` markers under `data/reports/shadow/errata/` are added to the
+  scoped waiver above. These are append-only corrections to already-committed
+  settlement evidence (measured 2026-09-08: 5.2–86 KiB JSON across the three
+  published errata, same size class as the `*.settlement.json` files already
+  covered). They never restate or overwrite
+  the originals, which remain byte-identical and authoritative. All other
+  exclusions in the waiver above are unchanged: still never raw capture
+  bodies, never `*.tar.gz` archives, never history ledgers.
 
 ## Change Control
 
