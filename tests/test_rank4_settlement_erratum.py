@@ -165,13 +165,28 @@ def test_aggregates_are_internally_consistent(errata):
         total_decided += corrected["decided"]
         total_success += corrected["successes"]
 
-    # The audit established these figures across the three settled dates.
-    assert total_changed == total_success == 270
-    assert total_decided == 820
-    assert total_success / total_decided == pytest.approx(0.3293, abs=1e-4)
+    # Pinned totals, restated as evidence grows. These are CORRECTED numbers
+    # that restate the record; per AGENTS.md they must never be used to justify
+    # a threshold, rule or config amendment.
+    #
+    #   2026-09-02   22 decided    6 success
+    #   2026-09-05  480 decided  168 success
+    #   2026-09-06  318 decided   96 success
+    #   ------------------------------ (original audit: 270 / 820 = 0.3293)
+    #   2026-09-07   35 decided   13 success  <- added 2026-09-08
+    #   ------------------------------ (current:        283 / 855 = 0.3310)
+    #
+    # 2026-09-07 was settled by the D+1 automation on main at
+    # 2026-09-08T04:00:49Z, i.e. by the UNFIXED grading code, so it carries the
+    # same sentinel-0 defect and needs the same correction. Adding a date
+    # widens the denominator; it is not a restatement of any earlier figure —
+    # the three original per-date rows above are unchanged.
+    assert total_changed == total_success == 283
+    assert total_decided == 855
+    assert total_success / total_decided == pytest.approx(0.3310, abs=1e-4)
 
 
-def test_all_three_settled_dates_are_covered(errata):
+def test_every_settled_date_is_covered(errata):
     """The original report read only two of the three settled dates.
 
     Its headline ``n=798`` was 480 (2026-09-05) + 318 (2026-09-06): 2026-09-02
@@ -202,6 +217,35 @@ def test_regenerating_refuses_to_overwrite(errata):
     assert "refusing to overwrite existing erratum" in proc.stderr
     for path, digest in before.items():
         assert _sha256(path) == digest, f"{path} was modified by a refused re-run"
+
+
+def test_skip_existing_appends_without_rewriting_published_errata(errata):
+    """Incremental mode must never touch already-published corrections.
+
+    The generator used to be one-shot: after its first run it failed closed
+    forever, so a newly discovered defective date could not be corrected
+    without deliberately deleting published, hash-marked evidence. That matters
+    because ``main`` keeps producing defective artifacts on the D+1 schedule
+    until the grading fix merges — 2026-09-07 landed the day after the first
+    three were published.
+
+    ``--skip-existing`` appends only what is missing. With everything already
+    published it must write nothing at all and leave every byte alone. The
+    default (no flag) still refuses outright — see
+    ``test_regenerating_refuses_to_overwrite``.
+    """
+    before = {path: _sha256(path) for path, _p in errata}
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--skip-existing"],
+        capture_output=True, text=True, cwd=str(REPO_ROOT), timeout=300,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    # Idempotent: nothing new to write, so nothing written.
+    assert "wrote 0," in proc.stdout, proc.stdout
+    # Every published erratum is named as skipped and left byte-identical.
+    for path, digest in before.items():
+        assert f"skipped {path.relative_to(REPO_ROOT)}" in proc.stdout, proc.stdout
+        assert _sha256(path) == digest, f"{path} was modified by --skip-existing"
 
 
 def test_check_mode_writes_nothing(errata):

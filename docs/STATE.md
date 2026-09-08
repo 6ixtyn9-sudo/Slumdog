@@ -337,9 +337,11 @@ This mirrors the existing raw-capture policy: raw bytes are large and
 immutable; receipts and summaries are small and valuable for
 reproducibility.
 
-## Rank-4+ Settlement Erratum (2026-09-07)
+## Rank-4+ Settlement Erratum (2026-09-07, extended 2026-09-08)
 
-**Every rank-4+ grade in the three committed `settlement.json` files is wrong.**
+**Every rank-4+ grade in the committed `settlement.json` files is wrong** — four
+dates now: 2026-09-02, 09-05, 09-06 (original audit) and 2026-09-07 (added
+2026-09-08, produced by `main`'s still-unfixed code via the D+1 automation).
 Full findings: `docs/ADVERSARIAL_REVIEW_RANK4_SETTLEMENT_FINDINGS.md`.
 
 Mechanism: `manifest.json`'s `considered_pool[]` entries never carried
@@ -367,10 +369,24 @@ rows whose identity is known):
 | 2026-09-02 | 22 | 0 | 6 |
 | 2026-09-05 | 480 | 0 | 168 |
 | 2026-09-06 | 318 | 0 | 96 |
-| **total** | **820** | **0 (0.0%)** | **270 (32.9%)** |
+| *subtotal — original audit* | *820* | *0 (0.0%)* | *270 (32.9%)* |
+| 2026-09-07 | 35 | 0 | 13 |
+| **total (4 dates)** | **855** | **0 (0.0%)** | **283 (33.1%)** |
 
-Wilson 95% for the corrected rate: [0.298, 0.362]. Primary/cohort tiers
-(ranks 1–3) verified **unaffected** — all 9 rows re-grade identically.
+Wilson 95% for the corrected rate: **[0.300, 0.363]** (was [0.298, 0.362] over
+three dates). Primary/cohort tiers (ranks 1–3) verified **unaffected** — all 9
+rows re-grade identically.
+
+**2026-09-07 was added on 2026-09-08, and it is evidence that the defect is
+still live on `main`.** That artifact was written by the D+1 automation
+(`github-actions[bot]`, run 34185420153, `settled_at` 2026-09-08T04:00:49Z,
+committed to `main` as `1ee80d4`) — i.e. by the **unfixed** grading code, because
+PR #18 is still open. It carries the identical signature: all 37
+`considered_pool` rows have `underdog_index == 0`, 35 grade FAILURE, and the
+rows have no `underdog_index_provenance` field. Until PR #18 merges, every D+1
+dispatch publishes another defective artifact and another erratum is required to
+correct it. The three original per-date rows above are unchanged; adding a date
+widens the denominator and does not restate any earlier figure.
 
 Note the earlier "ranks_4_plus n=798 across 3 dates" figure was itself wrong
 twice over: 798 = 480 + 318, i.e. **2026-09-02 was never read** (two
@@ -383,6 +399,12 @@ Remediation (append-only; no committed evidence was modified):
   `data/reports/shadow/errata/<date>/<run_id>.rank4_erratum.json` + `.sha256`.
   It verifies each original against its marker and **fails closed** rather than
   overwriting. Originals confirmed byte-identical before and after.
+  `--skip-existing` (added 2026-09-08) gives an append-only incremental mode:
+  without it the generator was one-shot and refused to run at all once any
+  erratum existed, so a newly discovered defective date could only be corrected
+  by deliberately deleting published evidence. With it, already-published
+  errata are hash-verified, reported as skipped and left byte-identical while
+  new dates are appended. The default remains fail-closed (exit 2).
 - Forward fixes: `shadow_evaluator.py` now serialises the identity into every
   eligible pool entry (`None` when genuinely undecidable, never `0`);
   `shadow_settle.py` recovers identity from `capture_record_tuples` for legacy

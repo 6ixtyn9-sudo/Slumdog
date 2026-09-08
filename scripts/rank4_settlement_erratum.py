@@ -279,6 +279,15 @@ def main(argv: list[str] | None = None) -> int:
                         help="verify markers and report, write nothing")
     parser.add_argument("--stdout", action="store_true",
                         help="print errata as JSON, write nothing")
+    parser.add_argument(
+        "--skip-existing", action="store_true",
+        help="append-only incremental mode: skip any run whose erratum is "
+             "already published instead of failing closed, so a newly "
+             "discovered defective date can be corrected without touching "
+             "published evidence. Skipped runs are still hash-verified and "
+             "reported. Without this flag the generator refuses to run at all "
+             "once any erratum exists.",
+    )
     args = parser.parse_args(argv)
 
     runs = discover_runs()
@@ -318,22 +327,34 @@ def main(argv: list[str] | None = None) -> int:
         print("--check: nothing written")
         return 0
 
+    written = skipped = 0
     for e in errata:
         out_dir = ERRATA_ROOT / e["target_date"]
-        out_dir.mkdir(parents=True, exist_ok=True)
         out = out_dir / f"{e['run_id']}.rank4_erratum.json"
         marker = out.with_name(out.name + ".sha256")
         if out.exists() or marker.exists():
-            raise ErratumError(
-                f"refusing to overwrite existing erratum: {out} "
-                "(delete it deliberately if a regeneration is intended)"
-            )
+            if not args.skip_existing:
+                raise ErratumError(
+                    f"refusing to overwrite existing erratum: {out} "
+                    "(delete it deliberately if a regeneration is intended, or "
+                    "pass --skip-existing to append only newly found dates)"
+                )
+            # Already published: leave those bytes alone. The original
+            # settlement.json was hash-verified against its .sha256 marker
+            # during discovery, so a silently altered original cannot slip
+            # through here — skipping is safe, not a blind trust.
+            print(f"skipped {out.relative_to(REPO_ROOT)} (already published)")
+            skipped += 1
+            continue
+        out_dir.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(e, indent=2, sort_keys=True) + "\n"
         out.write_text(payload, encoding="utf-8")
         digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         marker.write_text(f"{digest}  {out.name}\n", encoding="utf-8")
         print(f"wrote {out.relative_to(REPO_ROOT)}  ({digest[:16]}…)")
+        written += 1
 
+    print(f"\nwrote {written}, skipped {skipped} already published")
     return 0
 
 

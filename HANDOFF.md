@@ -1,6 +1,8 @@
 # Slumdog Living Handoff
 
-**Last updated:** 2026-09-07 (UTC) — **DISCARD AUDIT ACTIONED: the settlement lineage stopped throwing away collected data** — the draw price (`best_odd_X` / `odds_draw`) was discarded twice over (`parsers._participant_odds` reads `parsed[1]` and drops it; `parse_football_settled` never read `best_odd_X`), even though the **pre-event** path kept it — and `SettledEvent.facets` (Forebet's pick, league, weather, HT/ET/penalty scores, odds movement, cup flags) was assembled by the parser and then dropped by `write_settlement_artifact`. Both closed; every grade row now carries a curated `settled_context` and every artifact carries a `metadata_policy` block binding the recovered data to AGENTS.md invariants 8–11. **Retention is the default and `WITHHELD_FACET_KEYS` is empty** — the owner overruled an initial `kelly` withholding on 2026-09-07 ("any tool that gets us there should be retained"), so the invariant-10 bar moved to the feature layer instead (`kelly` added to `dataset.PROHIBITED_KEYS`). Also: `per_rank_band` pools the n=1 per-rank explosion, and conflicting `capture_record_tuples` no longer decide a grade by capture ordering. **No grading rule, threshold, or config changed.** Full suite **791 passed, 0 failed, 0 deselected, 0 skipped**. See `## Discarded Settlement Metadata` below and `docs/STATE.md`.
+**Last updated:** 2026-09-08 (UTC) — **BOTH OPEN BLOCKERS CLEARED, AND A FOURTH DEFECTIVE ARTIFACT FOUND STILL BEING PUBLISHED BY `main`.** (1) The `AGENTS.md` scoped-commit waiver now covers `data/reports/shadow/errata/**` (extended, not relocated). (2) `fe031ae5…` is **fully reconciled** — `git fetch --unshallow` recovered 168 commits and the hash is the declaration as committed at `ebc4e6fc`/`303b09f6`; the pin was correct at birth and went stale at `4c63575e`, four commits before current. The alignment to `20f9a3a3…` is now *proven*, and the HOLD on that part of PR #18 is lifted. (3) Chasing the "09-07 settlement gap" found something worse: it is **not a gap** — the D+1 automation settled 2026-09-07 on `main` @ `1ee80d4` at 2026-09-08T04:00:49Z using the **unfixed** code, so all 37 rank-4+ rows carry `underdog_index == 0` and 35 are fabricated FAILUREs. A fourth erratum is published (true rate 13/35 = 37.1% vs committed 0/35); totals are now **283/855 = 33.1%**, Wilson 95% [0.300, 0.363]. Up to **six more** defective artifacts (09-08 … 09-13) are already scheduled on the same automation until PR #18 merges. The generator gained `--skip-existing` so new dates append without touching published evidence. Full suite **792 passed, 0 failed, 0 deselected, 0 skipped**.
+
+Prior state (2026-09-07): **DISCARD AUDIT ACTIONED: the settlement lineage stopped throwing away collected data** — the draw price (`best_odd_X` / `odds_draw`) was discarded twice over (`parsers._participant_odds` reads `parsed[1]` and drops it; `parse_football_settled` never read `best_odd_X`), even though the **pre-event** path kept it — and `SettledEvent.facets` (Forebet's pick, league, weather, HT/ET/penalty scores, odds movement, cup flags) was assembled by the parser and then dropped by `write_settlement_artifact`. Both closed; every grade row now carries a curated `settled_context` and every artifact carries a `metadata_policy` block binding the recovered data to AGENTS.md invariants 8–11. **Retention is the default and `WITHHELD_FACET_KEYS` is empty** — the owner overruled an initial `kelly` withholding on 2026-09-07 ("any tool that gets us there should be retained"), so the invariant-10 bar moved to the feature layer instead (`kelly` added to `dataset.PROHIBITED_KEYS`). Also: `per_rank_band` pools the n=1 per-rank explosion, and conflicting `capture_record_tuples` no longer decide a grade by capture ordering. **No grading rule, threshold, or config changed.** Full suite **791 passed, 0 failed, 0 deselected, 0 skipped**. See `## Discarded Settlement Metadata` below and `docs/STATE.md`.
 
 Prior state (same session): **RANK-4+ SETTLEMENT GRADING DEFECT FOUND, QUANTIFIED AND REMEDIATED** — every rank-4+ grade in the three committed `settlement.json` files was fabricated: `considered_pool[]` never carried `underdog_index`, settlement defaulted the gap to `0` (the draw sentinel), and a rank-4+ `SUCCESS` was therefore structurally unreachable. True rate is **270/820 = 32.9%**, not the reported 0/798. Fixed forward, erratum published append-only, originals untouched. See `## Rank-4+ Settlement Grading Defect` below and `docs/ADVERSARIAL_REVIEW_RANK4_SETTLEMENT_FINDINGS.md`.
 
@@ -197,11 +199,38 @@ any threshold, rule, or config amendment.**
    **Consequence:** aligning the pin to `20f9a3a3…` was correct and is now
    *proven*, not inferred. The HOLD on that part of PR #18 is lifted. Full
    table in `docs/STATE.md` → Verification.
-3. Forward consequence: with `top3_cohort_per_sport_day = null` the rank-4+
-   branch is unreachable, so `ranks_4_plus` will read **n = 0 for every future
-   date** while the 867 historical rows stay corrected only via the erratum.
-   Any tool reporting that tier must treat n=0 as "tier no longer produced",
-   not "no data yet".
+3. Forward consequence — **now confirmed by observation, 2026-09-08.** With
+   `top3_cohort_per_sport_day = null` the rank-4+ branch is unreachable, so
+   `ranks_4_plus` reads **n = 0 for every future date** while the 904 historical
+   rank-4+ rows (24 + 504 + 339 + 37 across 09-02/05/06/07) stay corrected only
+   via the errata. Any tool reporting that tier must treat n=0 as "tier no
+   longer produced", not "no data yet".
+
+   The confirmation is in each manifest's own `declaration_sha256`, which
+   separates the two eras cleanly:
+
+   | runs | declaration | cohort cap | rank-4+ rows |
+   |---|---|---|---|
+   | 2026-09-02 … 09-13 | `dd08976a…` | capped (2 per sport-day) | 24, 504, 339, 37, 9, 2, 20, 53, 134, 195 |
+   | 2026-09-14 | `20f9a3a3…` | **uncapped** | **0** — all 17 R2-eligible non-primary events absorbed into `TOP3_EVALUATION_COHORT` |
+
+   09-14 (`0f9e535a45172415`, from `main` @ `1ee80d4`) is the first run under the
+   uncapped declaration and its `sport_day_summary` records
+   `eligible_r4_plus_event_ids: []`. Note this was *nearly* misread as the
+   opposite: 09-07…09-13 still show rank-4+ rows, but every one of them ran
+   under the capped `dd08976a…` declaration, so they are pre-amendment evidence,
+   not counter-examples. Check `declaration_sha256` before inferring anything
+   from pool composition.
+
+   **Cost of delay on PR #18, now quantified.** The ten capped-era runs are
+   settled on the D+1 schedule by automation on `main`, which still has the
+   *unfixed* grading code. 09-07 was settled that way on 2026-09-08 and needed a
+   fourth erratum. The remaining capped-era runs — **09-08, 09-09, 09-10, 09-11,
+   09-12, 09-13** — will each be settled by the same unfixed code as their dates
+   pass, so up to six more defective artifacts and six more errata are already
+   scheduled unless PR #18 merges first. Merging stops the bleeding; the erratum
+   generator's `--skip-existing` mode exists precisely so each new one can be
+   appended without touching published evidence.
 4. If the Wilson "certification" tool is revived, it needs a **validity gate**,
    not a sample-size gate: assert every graded row has
    `underdog_index ∈ {1, 2}` and refuse to emit a bound for a tier whose
