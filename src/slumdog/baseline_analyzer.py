@@ -487,6 +487,18 @@ def r1_sort_key(ev: dict[str, Any]) -> tuple:
 
 
 def is_r2_eligible(features: dict[str, Any]) -> bool:
+    """FROZEN RULE — do not modify.
+
+    This is the single deciding function for R2 eligibility. Its thresholds are
+    declared independently in ``config/research_baselines.json`` under
+    ``rules.R2_CONSERVATIVE_FIXED_RULE.eligibility`` (a hash-pinned file, see
+    ``CANONICAL_CONFIG_SHA256``) and are verified against that declaration at
+    runtime by ``shadow_evaluator.load_frozen_baseline_config``, which refuses
+    to run on drift.
+
+    ``r2_ineligibility_reason`` below RECORDS why this returned False. It
+    decides nothing, and changing this function changes what gets decided.
+    """
     ud_games = features.get("underdog_prior_games")
     fav_games = features.get("favorite_prior_games")
     h2h_games = features.get("h2h_prior_games")
@@ -497,6 +509,121 @@ def is_r2_eligible(features: dict[str, Any]) -> bool:
         return False
 
     return ud_games >= 5 and fav_games >= 5 and h2h_games >= 1 and gap <= 0.2
+
+
+# The frozen R2 rule, as declared in config/research_baselines.json and pinned
+# by shadow_evaluator.load_frozen_baseline_config. Written out here so the
+# exclusion-reason decomposition reports the same thresholds from one place
+# instead of re-typing literals that could drift from the rule.
+FROZEN_R2_RULE_NAME = "R2_CONSERVATIVE_FIXED_RULE"
+
+R2_ELIGIBILITY_SPEC: tuple[tuple[str, str, float], ...] = (
+    ("underdog_prior_games", "gte", 5),
+    ("favorite_prior_games", "gte", 5),
+    ("h2h_prior_games", "gte", 1),
+    ("forebet_probability_gap", "lte", 0.2),
+)
+
+_R2_COMPARISONS = {
+    "gte": lambda value, threshold: value >= threshold,
+    "lte": lambda value, threshold: value <= threshold,
+}
+
+
+def r2_ineligibility_reason(
+    features: dict[str, Any],
+    missingness: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Decompose *why* :func:`is_r2_eligible` returned False, with real values.
+
+    RECORDING ONLY — this decides nothing. ``is_r2_eligible`` remains the single
+    frozen rule and is deliberately not modified or reused as the authority
+    here; agreement between the two is asserted over a value matrix in
+    ``tests/test_r2_exclusion_reason.py``, so the decomposition cannot silently
+    drift from the rule it describes.
+
+    Returns ``None`` when the record is eligible. Otherwise a JSON-safe dict:
+
+    ``missing_fields``
+        Which of the four required features were absent. The frozen config's
+        ``missingness.R2`` says "missingness disqualifies", but until now a
+        missing feature and a failed threshold were recorded as the *same*
+        status, so a data-coverage problem was indistinguishable from a rule
+        rejection.
+    ``failed_thresholds``
+        One entry per present-but-failing feature, carrying ``observed`` and
+        ``threshold``. ``gap=0.21`` and ``gap=0.6`` are very different records
+        and a boolean cannot tell them apart; keeping the real number is what
+        makes "is 0.2 the right cutoff?" answerable from evidence later.
+    ``observed_values``
+        All four features as seen, present or ``None``, so the distribution of
+        the excluded population is reconstructable without re-running anything.
+    ``missingness_flags``
+        The ``missingness`` companion flag for each of the four features, when
+        the caller has it. This is what stops the decomposition being
+        **misread**: ``underdog_prior_games == 0.0`` with flag ``0`` is a *real*
+        zero meaning "no history in the bounded last-5 window", so a
+        ``THRESHOLD_NOT_MET`` on ``prior_games >= 5`` records absent data, not a
+        cutoff that was too tight. Rate features built from those zero games
+        carry flag ``1``. Without the flags, "we had nothing" and "the rule was
+        strict" look identical — which is the exact confusion that made the
+        ``gap <= 0.2`` question unanswerable before.
+    ``primary_reason``
+        ``MISSING_FEATURES`` / ``THRESHOLD_NOT_MET`` / ``BOTH`` — a coarse label
+        for grouping, never a substitute for the values above.
+
+    Every check is evaluated regardless of short-circuit order, so a row that is
+    missing ``h2h_prior_games`` *and* over the gap threshold reports both.
+    ``is_r2_eligible`` short-circuits on missingness and would only ever have
+    said "False".
+
+    Values are recorded exactly as computed, unrounded. ``0.60 - 0.20`` arrives
+    as ``0.39999999999999997``; rounding here would hide precisely the boundary
+    cases (a gap of ``0.20000000000000004`` fails ``lte 0.2`` while displaying
+    as ``0.2``) that a cutoff review needs to see.
+    """
+    observed: dict[str, Any] = {}
+    missing: list[str] = []
+    failed: list[dict[str, Any]] = []
+
+    for feature, op, threshold in R2_ELIGIBILITY_SPEC:
+        value = features.get(feature)
+        observed[feature] = value
+        if value is None:
+            missing.append(feature)
+            continue
+        if not _R2_COMPARISONS[op](value, threshold):
+            failed.append({
+                "feature": feature,
+                "op": op,
+                "threshold": threshold,
+                "observed": value,
+            })
+
+    if not missing and not failed:
+        return None
+    if missing and failed:
+        primary = "BOTH"
+    elif missing:
+        primary = "MISSING_FEATURES"
+    else:
+        primary = "THRESHOLD_NOT_MET"
+
+    flags = missingness or {}
+    return {
+        "rule": FROZEN_R2_RULE_NAME,
+        "primary_reason": primary,
+        "missing_fields": missing,
+        "failed_thresholds": failed,
+        "observed_values": observed,
+        # Companion flags for the four R2 features. See the docstring: a real
+        # 0.0 (flag 0) means "no history in the bounded window", which reads as
+        # a threshold failure but is actually absent data.
+        "missingness_flags": {
+            feature: flags.get(feature)
+            for feature, _op, _threshold in R2_ELIGIBILITY_SPEC
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
