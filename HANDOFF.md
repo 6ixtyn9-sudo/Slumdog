@@ -1,6 +1,8 @@
 # Slumdog Living Handoff
 
-**Last updated:** 2026-09-08 (UTC) — **BOTH OPEN BLOCKERS CLEARED, AND A FOURTH DEFECTIVE ARTIFACT FOUND STILL BEING PUBLISHED BY `main`.** (1) The `AGENTS.md` scoped-commit waiver now covers `data/reports/shadow/errata/**` (extended, not relocated). (2) `fe031ae5…` is **fully reconciled** — `git fetch --unshallow` recovered 168 commits and the hash is the declaration as committed at `ebc4e6fc`/`303b09f6`; the pin was correct at birth and went stale at `4c63575e`, four commits before current. The alignment to `20f9a3a3…` is now *proven*, and the HOLD on that part of PR #18 is lifted. (3) Chasing the "09-07 settlement gap" found something worse: it is **not a gap** — the D+1 automation settled 2026-09-07 on `main` @ `1ee80d4` at 2026-09-08T04:00:49Z using the **unfixed** code, so all 37 rank-4+ rows carry `underdog_index == 0` and 35 are fabricated FAILUREs. A fourth erratum is published (true rate 13/35 = 37.1% vs committed 0/35); totals are now **283/855 = 33.1%**, Wilson 95% [0.300, 0.363]. Up to **six more** defective artifacts (09-08 … 09-13) are already scheduled on the same automation until PR #18 merges. The generator gained `--skip-existing` so new dates append without touching published evidence. Full suite **792 passed, 0 failed, 0 deselected, 0 skipped**.
+**Last updated:** 2026-09-08 (UTC) — **THE PRE-GRADE EXCLUSION BLACK BOX IS OPEN: why 56–82% of every considered pool was discarded is now recorded per row.** `FEATURE_INCOMPLETE_OR_R2_INELIGIBLE` merged five distinct causes behind one label — and the label's own `OR` admitted it. `is_r2_eligible` computed the distinction and returned a bare `bool`; the excluded pool rows kept only six keys, so the cause was **unrecoverable from committed evidence**. That destroyed the only population able to answer a live question: `forebet_probability_gap <= 0.2` is the R2 gate, and the rows that *failed* it are exactly what is needed to judge whether 0.2 is right. New `r2_ineligibility_reason()` decomposes all five failure points with actual values (`missing_fields` named individually; every failed threshold carrying `feature`/`op`/`threshold`/**observed**, so gap 0.21 and gap 0.6 no longer collapse to the same `False`), attaches `r2_exclusion` to every pool row, and aggregates a new top-level `r2_exclusion_breakdown`. Digest safety is **proven on the four real committed settled manifests**, not assumed: injecting the key into every row leaves `decision_digest` byte-identical, with a negative control (touching `decision_accounting` *does* change it) so the proof cannot pass vacuously. A finding changed the design — driving the real evaluate path showed `prior_games` arriving as `0.0` with missingness flag `0`, i.e. *absent history*, not a strict cutoff, so the flags are recorded to keep the two distinguishable. **`is_r2_eligible` untouched, all thresholds unchanged, frozen config hash still `666dabe7…`.** Full suite **887 passed, 0 failed, 0 deselected, 0 skipped** (95 new). See `## R2 Exclusion Reasons` below.
+
+Prior state (2026-09-08, earlier this session): **BOTH OPEN BLOCKERS CLEARED, AND A FOURTH DEFECTIVE ARTIFACT FOUND STILL BEING PUBLISHED BY `main`.** (1) The `AGENTS.md` scoped-commit waiver now covers `data/reports/shadow/errata/**` (extended, not relocated). (2) `fe031ae5…` is **fully reconciled** — `git fetch --unshallow` recovered 168 commits and the hash is the declaration as committed at `ebc4e6fc`/`303b09f6`; the pin was correct at birth and went stale at `4c63575e`, four commits before current. The alignment to `20f9a3a3…` is now *proven*, and the HOLD on that part of PR #18 is lifted. (3) Chasing the "09-07 settlement gap" found something worse: it is **not a gap** — the D+1 automation settled 2026-09-07 on `main` @ `1ee80d4` at 2026-09-08T04:00:49Z using the **unfixed** code, so all 37 rank-4+ rows carry `underdog_index == 0` and 35 are fabricated FAILUREs. A fourth erratum is published (true rate 13/35 = 37.1% vs committed 0/35); totals are now **283/855 = 33.1%**, Wilson 95% [0.300, 0.363]. Up to **six more** defective artifacts (09-08 … 09-13) are already scheduled on the same automation until PR #18 merges. The generator gained `--skip-existing` so new dates append without touching published evidence. Full suite **792 passed, 0 failed, 0 deselected, 0 skipped**.
 
 Prior state (2026-09-07): **DISCARD AUDIT ACTIONED: the settlement lineage stopped throwing away collected data** — the draw price (`best_odd_X` / `odds_draw`) was discarded twice over (`parsers._participant_odds` reads `parsed[1]` and drops it; `parse_football_settled` never read `best_odd_X`), even though the **pre-event** path kept it — and `SettledEvent.facets` (Forebet's pick, league, weather, HT/ET/penalty scores, odds movement, cup flags) was assembled by the parser and then dropped by `write_settlement_artifact`. Both closed; every grade row now carries a curated `settled_context` and every artifact carries a `metadata_policy` block binding the recovered data to AGENTS.md invariants 8–11. **Retention is the default and `WITHHELD_FACET_KEYS` is empty** — the owner overruled an initial `kelly` withholding on 2026-09-07 ("any tool that gets us there should be retained"), so the invariant-10 bar moved to the feature layer instead (`kelly` added to `dataset.PROHIBITED_KEYS`). Also: `per_rank_band` pools the n=1 per-rank explosion, and conflicting `capture_record_tuples` no longer decide a grade by capture ordering. **No grading rule, threshold, or config changed.** Full suite **791 passed, 0 failed, 0 deselected, 0 skipped**. See `## Discarded Settlement Metadata` below and `docs/STATE.md`.
 
@@ -10,14 +12,139 @@ Prior state: **TWO CHANGES IMPLEMENTED ON `arena/01a07741-slumdog`, PR PENDING O
 
 **Branch:** `arena/01a07b8b-slumdog` (adversarial review + rank-4+ remediation session, from `main` @ `edd5ff2`)
 **Base commit:** `edd5ff22bd5ad499247b6dcb97d3aee11e5807d1` (main tip when this branch was cut). The clone **was unshallowed 2026-09-08** (`git fetch --unshallow`, 168 commits), which is what made the `fe031ae5…` reconciliation possible. `origin/main` has since advanced by one automated evidence commit, `1ee80d4` (github-actions[bot], "chore: shadow evidence (run 34185420153)"); `edd5ff2` remains an ancestor of it and PR #18 still reports `MERGEABLE`.
-**Tests:** 791 passed, 0 failed, 0 deselected, 0 skipped (`python -m pytest`)
-**Working tree:** committed and **pushed** on `arena/01a07b8b-slumdog`; local `HEAD` == remote tip == `b3441e5`. **PR #18 OPEN against `main`, `MERGEABLE`, NOT merged** (owner sign-off still required; `AGENTS.md` forbids merging without explicit authorization). Four commits: `8ddb2da` (review doc) → `2136535` (rank-4+ fix + erratum + pin) → `03006f3` (discard audit: odds_X, settled_context, per_rank_band) → `b3441e5` (retain facets by default; invariant-10 bar moved to the feature layer). The earlier "push blocked / no GitHub credential path" note is **superseded**, but note the Arena `GH_TOKEN` is **intermittently invalid** — pushes on 2026-09-07 failed with `Bad credentials` / `no longer valid` and then succeeded on retry minutes later. On a push failure, retry and re-check `gh auth status` before concluding the connection is broken; ask the owner to reconnect GitHub in Arena only if it stays dead.
+**Tests:** 887 passed, 0 failed, 0 deselected, 0 skipped (`python -m pytest`)
+**Working tree:** committed and **pushed** on `arena/01a07b8b-slumdog`; local `HEAD` == remote tip == `bf2b9f3`. **PR #18 OPEN against `main`, `MERGEABLE`, NOT merged** (owner sign-off still required; `AGENTS.md` forbids merging without explicit authorization). Commit chain: `8ddb2da` (review doc) → `2136535` (rank-4+ fix + erratum + pin) → `03006f3` (discard audit: odds_X, settled_context, per_rank_band) → `b3441e5` (retain facets by default; invariant-10 bar moved to the feature layer) → `0087454` (handoff PR-state refresh) → `e159140` (merge `origin/main` @ `1ee80d4`, bringing the 09-07 settlement evidence local) → `31444d8` (errata waiver scope resolved) → `1655898` (`fe031ae5` reconciled; both blockers closed) → `eaa1564` (4th defective artifact, 09-07; `--skip-existing`) → `bf2b9f3` (R2 exclusion-reason recovery). The earlier "push blocked / no GitHub credential path" note is **superseded**, but note the Arena `GH_TOKEN` is **intermittently invalid** — pushes on 2026-09-07 failed with `Bad credentials` / `no longer valid` and then succeeded on retry minutes later. On a push failure, retry and re-check `gh auth status` before concluding the connection is broken; ask the owner to reconnect GitHub in Arena only if it stays dead.
 
 **Sandbox git caveat (verified 2026-09-07):** the Arena sandbox reset the local `arena/01a07b8b-slumdog` pointer back to the base commit `edd5ff2` while leaving the working tree intact, so all prior work appeared uncommitted and `git log` showed one commit. Recovered with `git fetch origin arena/01a07b8b-slumdog` + `git reset --mixed 2136535` after proving every "untracked" file was byte-identical to the committed version. **Check `git log` against the remote before assuming work is missing.**
 
 Discard-audit changes (this increment): `src/slumdog/contracts.py` (`SettledEvent.odds_draw`), `src/slumdog/settlement.py` (`_draw_odds` helper + all four parser paths + American-format facets), `src/slumdog/dataset.py` (rehydration + `PROHIBITED_KEYS`), `src/slumdog/facets.py` (catalogue entry), `src/slumdog/shadow_contracts.py` (barred record field), `src/slumdog/shadow_settle.py` (`_settled_context`, `WITHHELD_FACET_KEYS` — empty, retention by default, `RANK_BANDS`/`per_rank_band`, conflict detection, `metadata_policy`), new `tests/test_discarded_settlement_metadata.py` (47 tests), `docs/STATE.md` + this file refreshed.
 
 Prior increment (already in `2136535`): `src/slumdog/shadow_evaluator.py`, `src/slumdog/shadow_settle.py`, `scripts/synthetic_shadow_fixture.py` (stale declaration-hash pin), new `scripts/rank4_settlement_erratum.py`, new `tests/test_rank4_settlement_erratum.py`, extended `tests/test_shadow_settle.py` + `tests/test_shadow_evaluator.py` + `tests/test_synthetic_shadow_fixture.py`, new `docs/ADVERSARIAL_REVIEW_RANK4_SETTLEMENT_FINDINGS.md`, new `data/reports/shadow/errata/**`. **No committed evidence, config, or workflow file was modified in either increment** — `settlement.json` + `.sha256` remain byte-identical, and the frozen baseline config hash is unchanged.
+
+## R2 Exclusion Reasons
+
+Owner instruction: the exclusion data is "the same class as the kelly / best_odd_X
+/ facets fixes — data computed then discarded", to be decomposed at *all five*
+failure points with actual values ("missing field names; real threshold numbers
+like gap=0.21 vs gap=0.6"), reusing the existing `pool_for_digest` fixed-key
+projection rather than reinvestigating digest safety, and framed with a
+`metadata_policy`-style governance note. Committed as `bf2b9f3`.
+
+**The defect.** Between **56% and 82%** of every considered pool was excluded
+before grading under one label: `FEATURE_INCOMPLETE_OR_R2_INELIGIBLE`. The `OR`
+is in the name — the label admits it merges two different situations, and in
+fact five distinct causes sat behind it. `is_r2_eligible` evaluated four
+thresholds plus a missingness check, short-circuited, and returned a bare `bool`.
+The excluded pool rows persisted only six keys. So the cause was not merely
+unrecorded but **unrecoverable from committed evidence**: no re-analysis of the
+artifacts could ever separate them.
+
+**Why this discard cost more than the others.** `forebet_probability_gap <= 0.2`
+is the R2 gate. The rows that *failed* it are precisely the population needed to
+judge whether 0.2 is the right number — the distribution of rejected gaps is the
+evidence. It was thrown away, so "is 0.2 too tight?" could only ever be answered
+by opinion. **That question remains open and is not answered here.** What changed
+is that it becomes answerable from future runs.
+
+**What is now recorded.** `baseline_analyzer.r2_ineligibility_reason(features,
+missingness)` returns `None` when the frozen rule admits a record, and otherwise:
+
+| key | content |
+| --- | --- |
+| `primary_reason` | `MISSING_FEATURES` / `THRESHOLD_NOT_MET` / `BOTH` — a grouping label, never a substitute for the values |
+| `missing_fields` | the specific absent feature names, individually |
+| `failed_thresholds` | `feature`, `op`, `threshold` **and the observed value** |
+| `observed_values` | all four features as seen, so the excluded distribution is reconstructable without re-running anything |
+| `missingness_flags` | the companion flags, per the finding below |
+| `rule` | `R2_CONSERVATIVE_FIXED_RULE` |
+
+Every check is evaluated regardless of short-circuit order, so a row missing
+`h2h_prior_games` *and* over the gap threshold reports `BOTH` — `is_r2_eligible`
+would only ever have said `False`. `r2_exclusion` is attached to **every**
+considered-pool row (`None` when eligible, or excluded for a non-R2 reason:
+conflict, duplicate, malformed, timing) and aggregated into a new top-level
+`r2_exclusion_breakdown` manifest section.
+
+**A finding that changed the design.** Driving the real evaluate path with no
+history showed `*_prior_games` arriving as `0.0` with missingness flag `0` — a
+genuine zero meaning "nothing in the bounded last-5 window", not an imputed
+value and not `None`. (Rate features derived from those zero games carry flag
+`1`, which is coherent: 0 games is a fact, a win rate over 0 games is not.) The
+consequence is that the dominant rejection will read as `THRESHOLD_NOT_MET` on
+`prior_games >= 5` with `observed: 0.0`, which is semantically **absent data,
+not a strict cutoff**. Without the flags those two cases are indistinguishable,
+and a reader would conclude the rule was too tight when the truth is there was no
+history at all. The flags are recorded for exactly that reason.
+
+Values are stored **unrounded**. `0.6 - 0.2` lands as `0.39999999999999997`, and
+a gap of `0.20000000000000004` fails `lte 0.2` while displaying as `0.2`.
+Rounding would hide the boundary cases a cutoff review most needs to see.
+
+**Digest safety — proven, not assumed.** `decision_digest` is computed over
+`decision_provenance`, whose `considered_pool` is the six-field `pool_for_digest`
+projection (`sport`, `event_id`, `event_date`, `considered_status`, `eligible`,
+`rank_within_sport_day`). A new key on a pool row is projected away and cannot
+reach the digest — the same mechanism the rank-4+ identity fix relied on, reused
+per instruction rather than reinvestigated. Verified against the **four committed
+settled manifests** (2026-09-02 / 09-05 / 09-06 / 09-07), not a synthetic case:
+
+1. `canonical_sha256(decision_provenance) == decision_digest` reproduces;
+2. projecting the manifest's full pool rows reproduces the committed digest input;
+3. injecting `r2_exclusion` into every row leaves the digest **byte-identical**;
+4. **negative control** — touching `decision_accounting` *does* change it, which
+   is what proves (3) is sensitive rather than passing vacuously.
+
+Because of (4), the aggregate deliberately lives in a new **top-level** manifest
+section and *not* in `decision_accounting`, which is part of the digest payload
+and would have broken reproducibility of every committed run.
+
+**What was deliberately left alone.** `considered_status` still carries the
+conflated label. Refining it would be cleaner, but it *is* a projected field, so
+changing it would rewrite `decision_digest` and `run_id` for historical runs. The
+per-row reason carries the distinction instead — widening what is recorded
+without touching what decides.
+
+**Governance.** This records; it decides nothing. `is_r2_eligible` is untouched
+and remains the single frozen rule; all thresholds unchanged;
+`config/research_baselines.json` unmodified (hash still `666dabe7…`);
+`load_frozen_baseline_config`'s exact-R2-rule-shape guard still passes, and
+`R2_ELIGIBILITY_SPEC` is asserted equal to the declared config rule so code and
+config cannot drift apart silently. `r2_exclusion_breakdown` carries an explicit
+`policy` block: `purpose: recording_only`, `decides_nothing`,
+`not_justification_for_tuning`, and a note stating the data is **NOT** a
+justification for changing `gap <= 0.2` or any other R2 threshold — `anti_tuning`
+prohibits result-driven amendments, and any threshold change requires a separate,
+explicit, **owner-approved tuning decision**. Recording why a frozen rule
+rejected a record and weakening that rule are different acts; this is the first
+only.
+
+**Files changed.** `src/slumdog/baseline_analyzer.py` (`r2_ineligibility_reason`,
+`R2_ELIGIBILITY_SPEC`, `FROZEN_R2_RULE_NAME`, `_R2_COMPARISONS`, docstring on
+`is_r2_eligible` marking it frozen); `src/slumdog/shadow_evaluator.py`
+(`r2_exclusion` in both pool key sets with a digest-safety comment, wired through
+3 decision-stage return paths and 6 pool-row construction sites,
+`_summarise_r2_exclusions`, the new manifest section); new
+`tests/test_r2_exclusion_reason.py` (95 tests). **No committed evidence or config
+was modified.**
+
+**Verification.** 95 new tests: rule/record agreement swept over a **480-point
+boundary grid** across all four features rather than cherry-picked cases;
+spec-vs-config equality; the five failure points separately visible; unrounded
+values; the missingness-flag semantics; digest identity on real settled evidence
+with negative control; end-to-end wiring through the production
+`_evaluate_for_decision_stage`; manifest shape via the synthetic fixture;
+aggregate tallies; and the governance assertions. Full suite **887 passed, 0
+failed, 0 deselected, 0 skipped**, pyflakes clean. The existing schema pins
+(symmetric-difference and subset assertions on the pool key sets,
+`tests/test_shadow_evaluator.py`) were updated for the new key and are green.
+
+**Settlement state (item 6, chased and closed).** All four settled dates
+(2026-09-02, 09-05, 09-06, 09-07) now have published errata and are corrected.
+**09-08 … 09-14 have no `settlement.json` at all** — they are unsettled, awaiting
+real match results, not missing an erratum. The forecast stands: 09-08 … 09-13
+will settle defectively on `main`'s unfixed automation unless PR #18 merges
+first, and `--skip-existing` lets the generator append those dates without
+touching published evidence.
 
 ## Discarded Settlement Metadata
 

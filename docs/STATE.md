@@ -528,9 +528,74 @@ in invariant 10. These predate this change, sit outside the shadow/certification
 lineage, and were left untouched — flagged for the owner rather than amended
 unilaterally.
 
+## R2 Exclusion Reasons Recovered (2026-09-08)
+
+The same discard class, one stage earlier in the lineage: between **56% and 82%**
+of every considered pool was excluded *before grading* under a single label,
+`FEATURE_INCOMPLETE_OR_R2_INELIGIBLE` — the `OR` is in the name. `is_r2_eligible`
+evaluated four thresholds plus a missingness check and returned a bare `bool`,
+and the excluded pool rows persisted only six keys, so which of the five causes
+applied was **unrecoverable from committed evidence**.
+
+That made a live question permanently unanswerable. `forebet_probability_gap
+<= 0.2` is the R2 gate, and the rows that failed it are the only population able
+to show whether 0.2 is the right number. The question **remains open** — this
+change makes it answerable from future runs, it does not answer it.
+
+**Recorded now.** `baseline_analyzer.r2_ineligibility_reason(features,
+missingness)` returns `None` when the rule admits a record, else
+`primary_reason` (`MISSING_FEATURES` / `THRESHOLD_NOT_MET` / `BOTH`),
+`missing_fields` (named individually), `failed_thresholds` (each carrying
+`feature`, `op`, `threshold` **and the observed value** — gap 0.21 and gap 0.6 no
+longer collapse to the same `False`), `observed_values` (all four features),
+`missingness_flags`, and `rule`. All checks are evaluated regardless of
+short-circuit order, so a row missing `h2h_prior_games` *and* over the gap
+reports `BOTH`. `r2_exclusion` is attached to every considered-pool row (`None`
+when eligible or excluded for a non-R2 reason) and aggregated into a new
+top-level `r2_exclusion_breakdown` manifest section.
+
+**A finding that shaped it.** Driving the real evaluate path with no history
+showed `*_prior_games` arriving as `0.0` with missingness flag `0` — a genuine
+zero meaning "nothing in the bounded last-5 window". So the dominant rejection
+reads as `THRESHOLD_NOT_MET` on `prior_games >= 5` with `observed: 0.0`, which is
+**absent data, not a strict cutoff**. The flags are recorded because without them
+those two cases are indistinguishable and the summary invites exactly the wrong
+conclusion. Values are stored unrounded: a gap of `0.20000000000000004` fails
+`lte 0.2` while displaying as `0.2`, and rounding would hide the boundary cases
+a cutoff review most needs.
+
+**Digest safety, proven on real evidence.** `decision_digest` covers
+`decision_provenance`, whose `considered_pool` is the six-field `pool_for_digest`
+projection, so a new pool-row key cannot reach it. Verified against all four
+committed settled manifests (2026-09-02 / 09-05 / 09-06 / 09-07):
+`canonical_sha256(decision_provenance)` reproduces `decision_digest`; projecting
+the full rows reproduces the committed digest input; injecting `r2_exclusion`
+into every row leaves the digest **byte-identical**; and a negative control
+confirms touching `decision_accounting` *does* change it — which is why the
+aggregate lives in a new top-level section rather than there.
+
+**Left alone deliberately.** `considered_status` still carries the conflated
+label: it *is* a projected field, so refining it would rewrite `decision_digest`
+and `run_id` for historical runs. `is_r2_eligible` is untouched, all thresholds
+unchanged, `config/research_baselines.json` unmodified. `R2_ELIGIBILITY_SPEC` is
+asserted equal to the declared config rule, and `load_frozen_baseline_config`'s
+exact-shape guard still passes, so code and config cannot drift silently.
+
+**Governance.** Recording only. The breakdown carries a `policy` block —
+`purpose: recording_only`, `decides_nothing`, `not_justification_for_tuning` —
+stating the data is **not** a justification for changing `gap <= 0.2` or any
+other R2 threshold; `anti_tuning` prohibits result-driven amendments and any
+threshold change requires a separate, explicit, **owner-approved tuning
+decision**. Recording why a frozen rule rejected a record and weakening that rule
+are different acts.
+
+Regression coverage: `tests/test_r2_exclusion_reason.py` (95 tests), including
+rule/record agreement swept over a 480-point boundary grid across all four
+features.
+
 ## Verification
 
-- pytest → **791 passed, 0 deselected, 0 skipped, 0 errors** (verified 2026-09-07 on `arena/01a07b8b-slumdog`: 718 baseline + 14 rank-4+/pin-drift regression tests + 12 erratum integrity tests + 47 discarded-metadata regression tests)
+- pytest → **887 passed, 0 deselected, 0 skipped, 0 errors** (verified 2026-09-08 on `arena/01a07b8b-slumdog` @ `bf2b9f3`: 718 baseline + 14 rank-4+/pin-drift + 12 erratum integrity + 47 discarded-metadata + 95 R2-exclusion-reason + the intervening 09-07 erratum/`--skip-existing` and blocker-reconciliation tests)
 - pyflakes src/slumdog scripts tests → clean on all new/changed files (14 pre-existing warnings remain in untouched `tests/test_dataset_*`, `test_forward_shadow_batch`, `test_research_incremental_builder`)
 - py_compile scripts/*.py src/slumdog/*.py tests/*.py → ok
 - git diff --check → ok
