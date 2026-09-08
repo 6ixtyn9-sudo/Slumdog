@@ -76,8 +76,15 @@ ALLOWED_FEATURES = REQUIRED_IDENTITY_FEATURES + ALLOWED_PRIOR_FEATURES
 PROHIBITED_KEYS = {
     "odds_1",
     "odds_2",
+    "odds_draw",
     "price",
     "overround",
+    # Kelly fractions are RETAINED as inert post-event metadata in the
+    # settlement artifact (owner directive 2026-09-07) but must never become a
+    # model feature: AGENTS.md invariant 10 forbids EV / de-vigging / Kelly /
+    # staking work. Barring the key here keeps the datum without licensing the
+    # drift — recording a number and staking on it are different acts.
+    "kelly",
     "fair_market_probability",
     "fair_implied_probability",
     "value_edge",
@@ -1136,6 +1143,7 @@ def _validate_settled_dict(d: dict[str, Any]) -> SettledEvent:
     # Odds — allowed in raw but must not affect new dataset (documented exclusion)
     odds1 = d.get("odds_1")
     odds2 = d.get("odds_2")
+    odds_draw = d.get("odds_draw")
 
     # Build SettledEvent — this will validate some fields further
     try:
@@ -1154,6 +1162,7 @@ def _validate_settled_dict(d: dict[str, Any]) -> SettledEvent:
             forebet_pick=d.get("forebet_pick"),
             odds_1=odds1,
             odds_2=odds2,
+            odds_draw=odds_draw,
             league=league,
             period_scores_1=tuple(d.get("period_scores_1", ())),
             period_scores_2=tuple(d.get("period_scores_2", ())),

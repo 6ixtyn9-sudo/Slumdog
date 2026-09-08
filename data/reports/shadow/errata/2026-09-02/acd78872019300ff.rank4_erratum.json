@@ -1,0 +1,159 @@
+{
+  "correction_basis": {
+    "frozen_rule_config_touched": false,
+    "grading_contract_changed": false,
+    "identity_rule": "slumdog.underdog.identify_forebet_underdog",
+    "identity_source": "manifest.input_provenance.capture_record_tuples",
+    "post_event_facts_used": false,
+    "pre_event_only": true,
+    "rule_description": "higher probability = favorite, lower = underdog"
+  },
+  "corrections": [
+    {
+      "committed_grade": "FAILURE",
+      "committed_underdog_index": 0,
+      "corrected_grade": "SUCCESS",
+      "corrected_underdog_index": 1,
+      "disposition": "SETTLED",
+      "event_date": "2026-09-02",
+      "event_id": "football:2452578",
+      "favorite_index": 2,
+      "identity_provenance": "capture_record_tuples",
+      "rank_within_sport_day": 13,
+      "score_1": 2.0,
+      "score_2": 0.0,
+      "sport": "football",
+      "underdog_probability": 0.25,
+      "winner_index": 1
+    },
+    {
+      "committed_grade": "FAILURE",
+      "committed_underdog_index": 0,
+      "corrected_grade": "SUCCESS",
+      "corrected_underdog_index": 1,
+      "disposition": "SETTLED",
+      "event_date": "2026-09-02",
+      "event_id": "football:2489632",
+      "favorite_index": 2,
+      "identity_provenance": "capture_record_tuples",
+      "rank_within_sport_day": 17,
+      "score_1": 5.0,
+      "score_2": 0.0,
+      "sport": "football",
+      "underdog_probability": 0.31,
+      "winner_index": 1
+    },
+    {
+      "committed_grade": "FAILURE",
+      "committed_underdog_index": 0,
+      "corrected_grade": "SUCCESS",
+      "corrected_underdog_index": 2,
+      "disposition": "SETTLED",
+      "event_date": "2026-09-02",
+      "event_id": "football:2493529",
+      "favorite_index": 1,
+      "identity_provenance": "capture_record_tuples",
+      "rank_within_sport_day": 25,
+      "score_1": 2.0,
+      "score_2": 3.0,
+      "sport": "football",
+      "underdog_probability": 0.29,
+      "winner_index": 2
+    },
+    {
+      "committed_grade": "FAILURE",
+      "committed_underdog_index": 0,
+      "corrected_grade": "SUCCESS",
+      "corrected_underdog_index": 1,
+      "disposition": "SETTLED",
+      "event_date": "2026-09-02",
+      "event_id": "football:2512725",
+      "favorite_index": 2,
+      "identity_provenance": "capture_record_tuples",
+      "rank_within_sport_day": 7,
+      "score_1": 2.0,
+      "score_2": 0.0,
+      "sport": "football",
+      "underdog_probability": 0.24,
+      "winner_index": 1
+    },
+    {
+      "committed_grade": "FAILURE",
+      "committed_underdog_index": 0,
+      "corrected_grade": "SUCCESS",
+      "corrected_underdog_index": 2,
+      "disposition": "SETTLED",
+      "event_date": "2026-09-02",
+      "event_id": "football:2523281",
+      "favorite_index": 1,
+      "identity_provenance": "capture_record_tuples",
+      "rank_within_sport_day": 4,
+      "score_1": 0.0,
+      "score_2": 1.0,
+      "sport": "football",
+      "underdog_probability": 0.24,
+      "winner_index": 2
+    },
+    {
+      "committed_grade": "FAILURE",
+      "committed_underdog_index": 0,
+      "corrected_grade": "SUCCESS",
+      "corrected_underdog_index": 1,
+      "disposition": "SETTLED",
+      "event_date": "2026-09-02",
+      "event_id": "football:2528729",
+      "favorite_index": 2,
+      "identity_provenance": "capture_record_tuples",
+      "rank_within_sport_day": 14,
+      "score_1": 2.0,
+      "score_2": 0.0,
+      "sport": "football",
+      "underdog_probability": 0.15,
+      "winner_index": 1
+    }
+  ],
+  "defect": "considered_pool[] entries in manifest.json never carried underdog_index; shadow_settle.grade_all_entries defaulted the missing field to 0, which is the schema's draw sentinel, so grade_underdog_win could never return SUCCESS for a rank-4+ row. Every such row graded FAILURE regardless of the actual match result.",
+  "erratum_schema_version": "rank4_underdog_identity_erratum",
+  "generated_at": "2026-09-07T15:19:20Z",
+  "governance": {
+    "no_force_overwrite_respected": true,
+    "note": "Instrument correction only. These numbers restate the record and must not be used to justify any rule, threshold, or config change.",
+    "original_evidence_overwritten": false,
+    "result_driven_rule_amendment": false
+  },
+  "original_artifact": {
+    "manifest_sha256": "85682ec4481c559c35b0624659d4402fc5d9515878e227c16ed52e489a24fab4",
+    "marker_verified": true,
+    "modified": false,
+    "path": "data/reports/shadow/2026-09-02/acd78872019300ff/settlement.json",
+    "sha256": "e30d90dc722143027359ea1052b7c07c80aad0fc96471960e7647ed17d0707c0"
+  },
+  "rank4_plus": {
+    "committed": {
+      "decided": 22,
+      "failures": 22,
+      "success_rate": 0.0,
+      "successes": 0,
+      "unresolved": 2,
+      "unsettled": 0
+    },
+    "corrected": {
+      "decided": 22,
+      "failures": 16,
+      "success_rate": 0.2727272727272727,
+      "successes": 6,
+      "unresolved": 2,
+      "unsettled": 0
+    },
+    "grades_changed": 6,
+    "identity_provenance": {
+      "capture_record_tuples": 24
+    },
+    "rows_examined": 24,
+    "rows_still_on_draw_sentinel": 0
+  },
+  "review_document": "docs/ADVERSARIAL_REVIEW_RANK4_SETTLEMENT_FINDINGS.md",
+  "run_id": "acd78872019300ff",
+  "scope": "considered_pool rows only (rank 4+); selections[] rows (primary + top-3 cohort) verified unaffected",
+  "target_date": "2026-09-02"
+}

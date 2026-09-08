@@ -122,6 +122,55 @@ class TestGradeUnderdogWin:
             disposition="VOID", sport="cricket",
         ) == GRADE_UNRESOLVED
 
+    def test_unregistered_sport_is_not_a_crash(self):
+        # An unknown sport string must still grade, not raise: SPORTS.get()
+        # returns None and the draw branch treats it as draw-incapable.
+        assert grade_underdog_win(
+            underdog_index=1, winner_index=1,
+            disposition="SETTLED", sport="not_a_real_sport",
+        ) == GRADE_SUCCESS
+
+    # -- guards added after the rank-4+ sentinel audit -------------------
+    # A missing underdog identity used to be defaulted to ``0`` by the caller.
+    # ``0`` is the draw sentinel, so ``winner_index == underdog_index`` could
+    # never fire for a real winner: every such row graded FAILURE no matter
+    # what actually happened. The contract now refuses to guess.
+
+    def test_missing_underdog_index_with_a_winner_is_unresolved(self):
+        assert grade_underdog_win(
+            underdog_index=None, winner_index=2,
+            disposition="SETTLED", sport="football",
+        ) == GRADE_UNRESOLVED
+
+    def test_zero_underdog_index_is_never_success(self):
+        # The historical defect: 0 can only ever "match" a draw, and a draw is
+        # intercepted earlier. Exhaustively, 0 must never yield SUCCESS.
+        for winner in (0, 1, 2, None):
+            for disp in ("SETTLED", "SETTLED_DRAW", "", None):
+                for sport in ("football", "basketball", "unknown"):
+                    assert grade_underdog_win(
+                        underdog_index=0, winner_index=winner,
+                        disposition=disp, sport=sport,
+                    ) != GRADE_SUCCESS
+
+    def test_missing_underdog_index_still_fails_a_draw(self):
+        # A draw is a failed UNDERDOG_WIN regardless of which side was the
+        # underdog, so identity is not needed to grade it. This is the one
+        # decided outcome still available without an identity.
+        assert grade_underdog_win(
+            underdog_index=None, winner_index=0,
+            disposition="SETTLED", sport="football",
+        ) == GRADE_FAILURE
+
+    def test_missing_winner_index_is_unresolved_not_failure(self):
+        # ``None == 0`` and ``None == underdog_index`` are both False, so this
+        # used to fall through to FAILURE — manufacturing a decided loss from a
+        # missing result.
+        assert grade_underdog_win(
+            underdog_index=2, winner_index=None,
+            disposition="SETTLED", sport="football",
+        ) == GRADE_UNRESOLVED
+
 
 # ---------------------------------------------------------------------------
 # Fixture helpers
@@ -192,6 +241,16 @@ def _make_prediction_run(
             },
         ]
     if considered_pool is None:
+        # PRODUCTION SCHEMA FIDELITY. Historically this fixture hand-supplied
+        # ``underdog_index``/``favorite_index``/probabilities, which
+        # ``shadow_evaluator.py`` did not emit for pool entries — so the suite
+        # validated a schema production never produced and every rank-4+ row
+        # silently defaulted to the ``0`` draw sentinel, making SUCCESS
+        # unreachable. These keys must stay in sync with
+        # ``CONSIDERED_POOL_ELIGIBLE_KEYS``; ``test_fixture_pool_entry_matches_
+        # production_schema`` fails if they drift. Identity now arrives via
+        # ``capture_record_tuples`` below (football:12347 → 0.62/0.18 →
+        # underdog_index 2), exactly as it does in production.
         considered_pool = [
             {
                 "sport": "football",
@@ -200,10 +259,6 @@ def _make_prediction_run(
                 "considered_status": "ELIGIBLE_RANKED_BEYOND_TOP3",
                 "eligible": True,
                 "rank_within_sport_day": 4,
-                "underdog_index": 2,
-                "underdog_probability": 0.18,
-                "favorite_index": 1,
-                "favorite_probability": 0.62,
             },
         ]
 
@@ -389,6 +444,49 @@ class TestBuildEventIndex:
                     "TOP3_EVALUATION_COHORT",
                 )
 
+    def test_fixture_pool_entry_never_exceeds_production_schema(self, tmp_path):
+        """SCHEMA-DIVERGENCE GUARD.
+
+        The rank-4+ grading defect survived because this file's fixture
+        hand-supplied ``underdog_index`` while ``shadow_evaluator.py`` never
+        emitted it — the suite tested a shape production did not produce, so
+        settlement silently defaulted to the ``0`` draw sentinel and a rank-4+
+        SUCCESS became unreachable.
+
+        The fixture deliberately models the LEGACY 6-key shape (next test) so
+        the recovery path stays exercised for the manifests already committed.
+        What must never happen again is the fixture carrying a key production
+        does not emit — so the guard is subset, not equality.
+        ``tests/test_shadow_evaluator.py`` pins the other side by asserting
+        production emits exactly ``CONSIDERED_POOL_ELIGIBLE_KEYS``.
+        """
+        from slumdog.shadow_evaluator import CONSIDERED_POOL_ELIGIBLE_KEYS
+
+        _sel, man = _make_prediction_run(tmp_path)
+        eligible = [p for p in man["considered_pool"] if p.get("eligible")]
+        assert eligible, "fixture must contain an eligible rank-4+ pool entry"
+        for entry in eligible:
+            extra = set(entry) - set(CONSIDERED_POOL_ELIGIBLE_KEYS)
+            assert not extra, (
+                "fixture pool entry carries keys production never emits "
+                f"{sorted(extra)} — this is the divergence that hid the "
+                "rank-4+ grading defect"
+            )
+
+    def test_pool_entry_carries_no_underdog_index_by_default(self, tmp_path):
+        """The fixture must model the *legacy* production shape too.
+
+        Rank-4+ identity has to be recoverable from ``capture_record_tuples``
+        because every manifest already committed lacks the field. This asserts
+        the fixture really does omit it, so the recovery path is exercised
+        rather than bypassed.
+        """
+        _sel, man = _make_prediction_run(tmp_path)
+        pool = [p for p in man["considered_pool"] if p.get("eligible")]
+        assert pool, "fixture must contain an eligible rank-4+ pool entry"
+        for entry in pool:
+            assert "underdog_index" not in entry or entry["underdog_index"] is None
+
 
 # ---------------------------------------------------------------------------
 # Grading
@@ -445,6 +543,104 @@ class TestGradeAllEntries:
         grades = grade_all_entries(index, [], sel, man)
         for g in grades:
             assert g.grade == GRADE_UNSETTLED
+
+    # -- rank-4+ identity recovery (regression for the sentinel defect) ----
+
+    def test_r4plus_underdog_win_graded_success(self, tmp_path):
+        """The assertion that was missing: a rank-4+ row CAN grade SUCCESS.
+
+        football:12347 is a considered_pool entry with no ``underdog_index``.
+        Its committed pre-event probabilities are 0.62 / 0.18, so the underdog
+        is participant 2 — and the settled result has ``winner_index == 2``
+        (East FC 0-3 West SC). Before the fix this graded FAILURE, because the
+        missing identity defaulted to the ``0`` draw sentinel.
+        """
+        sel, man = _make_prediction_run(tmp_path)
+        receipt = _make_settlement_receipt(tmp_path)
+        from slumdog.contracts import SettledEvent
+        settled = [SettledEvent(**e) for e in receipt["_settled_events"]]
+        index = _build_event_index(sel, man)
+        grades = grade_all_entries(index, settled, sel, man)
+        g = next(g for g in grades if g.event_id == "football:12347")
+        assert g.source == "considered_pool"
+        assert g.underdog_index == 2
+        assert g.grade == GRADE_SUCCESS
+
+    def test_r4plus_identity_recovered_from_capture_tuples(self, tmp_path):
+        sel, man = _make_prediction_run(tmp_path)
+        receipt = _make_settlement_receipt(tmp_path)
+        from slumdog.contracts import SettledEvent
+        settled = [SettledEvent(**e) for e in receipt["_settled_events"]]
+        grades = grade_all_entries(_build_event_index(sel, man), settled, sel, man)
+        by_id = {g.event_id: g for g in grades}
+        # selections[] carry the identity directly
+        assert by_id["football:12345"].underdog_index_provenance == "entry"
+        # considered_pool[] entries are re-derived from committed pre-event
+        # probabilities, and the recovered probabilities are usable downstream
+        r4 = by_id["football:12347"]
+        assert r4.underdog_index_provenance == "capture_record_tuples"
+        assert r4.underdog_probability == pytest.approx(0.18)
+        assert r4.favorite_probability == pytest.approx(0.62)
+        assert r4.favorite_index == 1
+
+    def test_no_graded_row_uses_the_draw_sentinel_as_underdog(self, tmp_path):
+        """``underdog_index == 0`` must never appear in a settlement row.
+
+        ``0`` means "draw" in this schema, so an underdog_index of 0 is not a
+        participant — it is the absence of one. Rows with no resolvable
+        identity must record ``None``.
+        """
+        sel, man = _make_prediction_run(tmp_path)
+        receipt = _make_settlement_receipt(tmp_path)
+        from slumdog.contracts import SettledEvent
+        settled = [SettledEvent(**e) for e in receipt["_settled_events"]]
+        grades = grade_all_entries(_build_event_index(sel, man), settled, sel, man)
+        for g in grades:
+            assert g.underdog_index != 0, (
+                f"{g.event_id} carries the draw sentinel as its underdog_index"
+            )
+            assert g.underdog_index in (1, 2, None)
+
+    def test_unresolvable_identity_is_unresolved_not_failure(self, tmp_path):
+        """No probabilities anywhere ⇒ no fabricated FAILURE."""
+        sel, man = _make_prediction_run(tmp_path)
+        # Drop the capture tuples so identity is genuinely unrecoverable
+        man["input_provenance"]["capture_record_tuples"] = []
+        receipt = _make_settlement_receipt(tmp_path)
+        from slumdog.contracts import SettledEvent
+        settled = [SettledEvent(**e) for e in receipt["_settled_events"]]
+        grades = grade_all_entries(_build_event_index(sel, man), settled, sel, man)
+        g = next(g for g in grades if g.event_id == "football:12347")
+        assert g.underdog_index is None
+        assert g.underdog_index_provenance == "unavailable"
+        assert g.grade == GRADE_UNRESOLVED
+
+    def test_written_artifact_records_identity_provenance(self, tmp_path):
+        sel, man = _make_prediction_run(tmp_path)
+        receipt = _make_settlement_receipt(tmp_path)
+        from slumdog.contracts import SettledEvent
+        settled = [SettledEvent(**e) for e in receipt["_settled_events"]]
+        grades = grade_all_entries(_build_event_index(sel, man), settled, sel, man)
+        summary = compute_rolling_summary(grades)
+        result = write_settlement_artifact(
+            target_date="2026-09-05",
+            run_id="abcd1234efgh5678",
+            grades=grades,
+            summary=summary,
+            settlement_receipt=receipt,
+            repo_root=tmp_path,
+        )
+        payload = json.loads(Path(result.settlement_artifact_path).read_text())
+        rows = {r["event_id"]: r for r in payload["grades"]}
+        assert rows["football:12347"]["underdog_index_provenance"] == (
+            "capture_record_tuples"
+        )
+        assert rows["football:12345"]["underdog_index_provenance"] == "entry"
+        # no row may persist the sentinel
+        assert all(r["underdog_index"] != 0 for r in payload["grades"])
+        assert payload["grading_contract"][
+            "missing_underdog_identity_is_unresolved"
+        ] is True
 
 
 # ---------------------------------------------------------------------------

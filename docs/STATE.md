@@ -1,6 +1,6 @@
 # Slumdog State — Canonical Current Truth
 
-**Last verified:** 2026-09-07 (UTC) — **`main` @ `02cce6f`** / **AUTOMATED D+1 SETTLEMENT LIVE AND PROVEN IN PRODUCTION** (three dates settled by real dispatches so far: 2026-09-02, 09-05, 09-06; artifacts on `main`) / **UNCAPPED-COHORT AMENDMENT + MILESTONE 7D RETIREMENT + VERSION-SUFFIX CLEANUP (owner directive 2026-09-07: no `_v1`/`_v2` naming, incl. dataset-contract version strings per owner sign-off; addendum folded into HANDOFF.md; sole exception: historical-file compatibility list in `dataset.py`) IMPLEMENTED ON `arena/01a07741-slumdog`, PR PENDING OWNER SIGN-OFF** / **FORWARD SHADOW WORKFLOW LIVE** (`.github/workflows/forward_shadow.yml`, `contents: write`, `actions: read`) / **SHADOW EVIDENCE IN GIT** (runs 2026-09-05..13 + settlements + bundles) / **CONTRACT AMENDED** (owner directive 2026-09-03 "no ledgers in Codespace") / **CODESPACE DEV-ONLY** / **PRODUCTION NOT AUTHORIZED** / **SHORTLIST POLICY NOT AUTHORIZED**. 718 tests pass, zero skips, zero deselects (the orphaned Milestone 7D test file was removed 2026-09-07 — see that milestone's entry).
+**Last verified:** 2026-09-07 (UTC) — **`main` @ `02cce6f`** / **AUTOMATED D+1 SETTLEMENT LIVE AND PROVEN IN PRODUCTION** (three dates settled by real dispatches so far: 2026-09-02, 09-05, 09-06; artifacts on `main`) / **UNCAPPED-COHORT AMENDMENT + MILESTONE 7D RETIREMENT + VERSION-SUFFIX CLEANUP (owner directive 2026-09-07: no `_v1`/`_v2` naming, incl. dataset-contract version strings per owner sign-off; addendum folded into HANDOFF.md; sole exception: historical-file compatibility list in `dataset.py`) IMPLEMENTED ON `arena/01a07741-slumdog`, PR PENDING OWNER SIGN-OFF** / **FORWARD SHADOW WORKFLOW LIVE** (`.github/workflows/forward_shadow.yml`, `contents: write`, `actions: read`) / **SHADOW EVIDENCE IN GIT** (runs 2026-09-05..13 + settlements + bundles) / **CONTRACT AMENDED** (owner directive 2026-09-03 "no ledgers in Codespace") / **CODESPACE DEV-ONLY** / **PRODUCTION NOT AUTHORIZED** / **SHORTLIST POLICY NOT AUTHORIZED**. 744 tests pass, zero skips, zero deselects, zero errors (the orphaned Milestone 7D test file was removed 2026-09-07 — see that milestone's entry).
 
 **Branch:** `arena/01a07741-slumdog` (uncapped-cohort amendment + Milestone 7D retirement session, from `main` @ `02cce6f`); `main` is only permanent branch
 **Doc canonical path:** `docs/STATE.md`
@@ -167,8 +167,8 @@ Real settlement (AUTOMATED, shadow_settle.py output, on main): 2026-09-02
   see docs/REVIEW_2026-09-06_STATUS_PERFORMANCE_RECOMMENDATIONS.md §5 and
   the "Sport Eligibility Findings" section of HANDOFF.md.
 Canonical config SHA-256: 666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1 (VERIFIED)
-New shadow declaration canonical SHA-256: fe031ae550ac25d4f9c11becb701572e798f0d54f37bb8201f3a07e182503e5f (VERIFIED, on branch arena/01a07741-slumdog after the uncapped-cohort amendment; supersedes dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597 which remains the hash of the declaration as merged via PR #16)
-Tests: 718 passed, 0 deselected, 0 skipped (2026-09-07: orphaned
+New shadow declaration canonical SHA-256: 20f9a3a3fc519ae1c08e4d226ed75bc5d6a34246bc74a8e79f6b4f9b8bba25b2 (matches the committed config/shadow_evaluator.json on main; supersedes fe031ae550ac25d4f9c11becb701572e798f0d54f37bb8201f3a07e182503e5f recorded for the uncapped-cohort amendment on arena/01a07741-slumdog, which in turn superseded dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597 as merged via PR #16 — see Verification for why the pin had drifted)
+Tests: 744 passed, 0 deselected, 0 skipped, 0 errors (2026-09-07: orphaned
   Milestone 7D test file removed — its 12 tests had failed on main since
   2026-09-03 when the owner deleted the workflow they police; previously
   masked by --deselect. Uncapped-cohort amendment renames/rewrites 1 test,
@@ -337,14 +337,284 @@ This mirrors the existing raw-capture policy: raw bytes are large and
 immutable; receipts and summaries are small and valuable for
 reproducibility.
 
+## Rank-4+ Settlement Erratum (2026-09-07, extended 2026-09-08)
+
+**Every rank-4+ grade in the committed `settlement.json` files is wrong** — four
+dates now: 2026-09-02, 09-05, 09-06 (original audit) and 2026-09-07 (added
+2026-09-08, produced by `main`'s still-unfixed code via the D+1 automation).
+Full findings: `docs/ADVERSARIAL_REVIEW_RANK4_SETTLEMENT_FINDINGS.md`.
+
+Mechanism: `manifest.json`'s `considered_pool[]` entries never carried
+`underdog_index`, so `shadow_settle.grade_all_entries` defaulted the gap to
+`0` — this schema's **draw sentinel**. `grade_underdog_win` compares
+`winner_index == underdog_index`, and `winner_index == 0` is intercepted by an
+earlier branch, so with `underdog_index == 0` a rank-4+ `SUCCESS` was
+**structurally unreachable** (verified exhaustively: 0 of 768
+sport × disposition × winner combinations). Every rank-4+ row graded `FAILURE`
+regardless of the actual result.
+
+Why tests missed it: `tests/test_shadow_settle.py`'s fixture hand-supplied
+`underdog_index` for pool entries — a field production never emitted — so the
+suite validated a schema that did not exist. `test_r4plus_from_pool` asserted
+only `_source`, never a grade, and `test_shadow_evaluator.py` asserted the
+rank-4+ branch was unreachable while committed manifests held 1317 such rows.
+
+Corrected figures, re-derived from pre-event probabilities already committed in
+each manifest's `input_provenance.capture_record_tuples` via the frozen
+`identify_forebet_underdog` rule (method validated 9/9 against `selections[]`
+rows whose identity is known):
+
+| date | rank-4+ decided | committed SUCCESS | corrected SUCCESS |
+|---|---|---|---|
+| 2026-09-02 | 22 | 0 | 6 |
+| 2026-09-05 | 480 | 0 | 168 |
+| 2026-09-06 | 318 | 0 | 96 |
+| *subtotal — original audit* | *820* | *0 (0.0%)* | *270 (32.9%)* |
+| 2026-09-07 | 35 | 0 | 13 |
+| **total (4 dates)** | **855** | **0 (0.0%)** | **283 (33.1%)** |
+
+Wilson 95% for the corrected rate: **[0.300, 0.363]** (was [0.298, 0.362] over
+three dates). Primary/cohort tiers (ranks 1–3) verified **unaffected** — all 9
+rows re-grade identically.
+
+**2026-09-07 was added on 2026-09-08, and it is evidence that the defect is
+still live on `main`.** That artifact was written by the D+1 automation
+(`github-actions[bot]`, run 34185420153, `settled_at` 2026-09-08T04:00:49Z,
+committed to `main` as `1ee80d4`) — i.e. by the **unfixed** grading code, because
+PR #18 is still open. It carries the identical signature: all 37
+`considered_pool` rows have `underdog_index == 0`, 35 grade FAILURE, and the
+rows have no `underdog_index_provenance` field. Until PR #18 merges, every D+1
+dispatch publishes another defective artifact and another erratum is required to
+correct it. The three original per-date rows above are unchanged; adding a date
+widens the denominator and does not restate any earlier figure.
+
+Note the earlier "ranks_4_plus n=798 across 3 dates" figure was itself wrong
+twice over: 798 = 480 + 318, i.e. **2026-09-02 was never read** (two
+settlement artifacts exist for run `acd78872019300ff` under different schemas —
+see Current Status), and the numerator was forced to zero by the defect above.
+
+Remediation (append-only; no committed evidence was modified):
+
+- `scripts/rank4_settlement_erratum.py` regenerates the correction and writes
+  `data/reports/shadow/errata/<date>/<run_id>.rank4_erratum.json` + `.sha256`.
+  It verifies each original against its marker and **fails closed** rather than
+  overwriting. Originals confirmed byte-identical before and after.
+  `--skip-existing` (added 2026-09-08) gives an append-only incremental mode:
+  without it the generator was one-shot and refused to run at all once any
+  erratum existed, so a newly discovered defective date could only be corrected
+  by deliberately deleting published evidence. With it, already-published
+  errata are hash-verified, reported as skipped and left byte-identical while
+  new dates are appended. The default remains fail-closed (exit 2).
+- Forward fixes: `shadow_evaluator.py` now serialises the identity into every
+  eligible pool entry (`None` when genuinely undecidable, never `0`);
+  `shadow_settle.py` recovers identity from `capture_record_tuples` for legacy
+  manifests, records `underdog_index_provenance` per row, and
+  `grade_underdog_win` returns `UNRESOLVED` instead of fabricating `FAILURE`
+  when identity or winner is missing.
+- Schema pinned on both sides via `CONSIDERED_POOL_ELIGIBLE_KEYS` so fixture and
+  production cannot silently diverge again.
+
+Governance: this is an **instrument correction, not a rule change**.
+`grading_contract`, `grade_underdog_win`'s contract and the frozen R2 rule are
+untouched; `config/research_baselines.json` (the hash `anti_tuning` protects) is
+unchanged at `666dabe7…`. The correction reads only pre-event data already in
+git, so no post-event fact enters a feature and nothing missing is zero-filled.
+**The corrected numbers restate the record and must not be used to justify any
+threshold, rule, or config amendment** — that would be exactly the
+result-driven tuning `anti_tuning` prohibits.
+
+Artifact scope — **RESOLVED 2026-09-08.** `data/reports/shadow/errata/` was a
+new artifact type not enumerated in the `AGENTS.md` scoped commit waiver (which
+listed `shadow_selections.json`, `manifest.json`, `capture_*.json`,
+`*.settlement.json` + markers, `*.bundle.json`, `*.tar.gz.sha256`,
+`status.tsv`). On owner direction the waiver has been **extended** rather than
+the artifacts relocated: `*.rank4_erratum.json` + `.sha256` markers under
+`data/reports/shadow/errata/` are now explicitly covered. Extending was chosen
+over relocating because the three errata are already committed and pushed —
+moving them would rewrite the paths of published, hash-marked corrections to
+immutable evidence for no gain. Measured size 5.2–86 KiB, the same class as the
+`*.settlement.json` files already covered. All other waiver exclusions are
+unchanged (never raw capture bodies, never `*.tar.gz` archives, never history
+ledgers). See `AGENTS.md` → Filesystem Separation.
+
+## Discarded Settlement Metadata Recovered (2026-09-07)
+
+A discard audit of the whole capture → grade lineage found that the settlement
+path collected considerably more from the post-event page than it kept. Two
+classes of loss are now closed. **No grading rule, threshold, or config changed
+— this widens what is recorded, nothing else.**
+
+**1. The draw price (`odds_X`) survived nowhere in the settled record.** Two
+independent discards, which is why neither was visible on its own:
+
+- `parsers._participant_odds` returns `(home, away, raw_values)`. On a
+  three-way board it reads `parsed[1]` — the draw price — and drops it.
+- `settlement.parse_football_settled` read only `best_odd_1` / `best_odd_2`,
+  never `best_odd_X`.
+
+The **pre-event** path did keep it (`parsers.py` reads `best_odd_X` into
+`facets["odds_draw"]`, plus `best_odd_X_am` → `odds_draw_am`), so the same
+number existed before kickoff and vanished afterwards. `SettledEvent.odds_draw`
+is now populated on every settlement parser (JSON, HTML, and the
+mma/esoccer/cricket `**base` path), and rehydrated by `dataset.py`. The
+American-format prices the pre-event path keeps are now captured at settlement
+too.
+
+`_draw_odds` mirrors the branch logic of `_participant_odds` exactly, so the two
+can never disagree about which cell is which: draw-capable sports whose board
+leaves the draw cell blank or dashed (handball, cricket) yield `None`, not the
+away price read positionally. Missing stays missing; nothing is zero-filled.
+
+**2. `SettledEvent.facets` was built and then dropped.** Forebet's own pick,
+league, weather, HT/ET/penalty scores, odds movement and cup flags were
+assembled by the parser, attached to the event, and discarded by
+`write_settlement_artifact`, which serialised a fixed list of grade fields. Each
+grade row now carries a curated `settled_context`.
+
+### Governance binding on the recovered data
+
+The recovered values are **metadata, never signal**, and that is stated in the
+artifact itself rather than only in this file. Every settlement artifact now
+carries a `metadata_policy` block asserting `odds_used_in_grading: false`,
+`odds_used_as_model_features: false`, `odds_gate_candidates: false`,
+`missing_odds_lower_confidence: false`, and naming the invariants
+(AGENTS.md 8–11).
+
+**Retention is the default; withholding is the exception.** Facets are persisted
+in full and `WITHHELD_FACET_KEYS` is an *empty* governance denylist. An earlier
+draft of this change withheld Forebet's `kelly` facet from the artifact on
+invariant-10 grounds; the owner overruled that on 2026-09-07 — collected data is
+not to be discarded, because the mission is to predict the underdog and any tool
+that gets us there should be retained. `kelly` is therefore recorded as inert
+metadata.
+
+The invariant-10 bar moved rather than disappeared: **recording a number and
+staking on it are different acts.** `kelly` was added to `dataset.PROHIBITED_KEYS`
+alongside `overround`, `value_edge` and `ROI`, so the retained datum can never
+become a model feature — the guard that actually prevents EV/de-vigging/Kelly
+drift sits where features are built, not where evidence is recorded. The
+withholding mechanism is kept (not deleted) so any future exclusion is a
+deliberate act named per row under `facets_withheld` instead of a silent drop.
+
+`odds_draw` was added to `dataset.PROHIBITED_KEYS` and to
+`shadow_contracts._FORBIDDEN_RECORD_FIELDS`, and declared in the facet catalogue
+as `PRE_EVENT` display metadata — it is barred as a feature at every layer it
+could otherwise enter. Post-event facts (HT/ET/penalty, weather) remain barred
+from `PreEventRecord` and are legitimate only in the post-event artifact.
+
+### Also in this change
+
+- **`per_rank_band`** — `per_rank` is retained as the audit view, but on a
+  ~500-event sport-day nearly every rank holds one row (2026-09-05 produced 507
+  such cells), so a per-rank hit rate there is n=1 noise presented as a
+  statistic. Six bands (`1`, `2-3`, `4-10`, `11-25`, `26-50`, `51+`) pool the
+  same rows and show `n` per cell, so a reader can see which bands clear the
+  `n>=30` bar. `per_rank` keys now sort numerically rather than
+  lexicographically (`1, 2, 10, 11` not `1, 10, 11, 2`).
+- **Conflicting capture records no longer decide a grade by ordering.**
+  `prob_lookup[key] = …` was last-write-wins: two `capture_record_tuples` rows
+  for the same `sport:event_id:event_date` with *different* pre-event
+  probabilities would silently grade using whichever arrived last. Those keys
+  are now detected and the identity is refused with provenance
+  `unavailable_conflicting_capture` → `UNRESOLVED`. Identical duplicates (the
+  case actually present in the 09-12 data) still resolve normally.
+
+Regression coverage: `tests/test_discarded_settlement_metadata.py` (47 tests).
+
+**Pre-existing observation, not changed here:** `american_football.py`,
+`baseball.py`, `basketball.py`, `cricket.py` and `esports.py` each already
+export `calculate_overround_*` and `devig_probabilities_*`. De-vigging is named
+in invariant 10. These predate this change, sit outside the shadow/certification
+lineage, and were left untouched — flagged for the owner rather than amended
+unilaterally.
+
+## R2 Exclusion Reasons Recovered (2026-09-08)
+
+The same discard class, one stage earlier in the lineage: between **56% and 82%**
+of every considered pool was excluded *before grading* under a single label,
+`FEATURE_INCOMPLETE_OR_R2_INELIGIBLE` — the `OR` is in the name. `is_r2_eligible`
+evaluated four thresholds plus a missingness check and returned a bare `bool`,
+and the excluded pool rows persisted only six keys, so which of the five causes
+applied was **unrecoverable from committed evidence**.
+
+That made a live question permanently unanswerable. `forebet_probability_gap
+<= 0.2` is the R2 gate, and the rows that failed it are the only population able
+to show whether 0.2 is the right number. The question **remains open** — this
+change makes it answerable from future runs, it does not answer it.
+
+**Recorded now.** `baseline_analyzer.r2_ineligibility_reason(features,
+missingness)` returns `None` when the rule admits a record, else
+`primary_reason` (`MISSING_FEATURES` / `THRESHOLD_NOT_MET` / `BOTH`),
+`missing_fields` (named individually), `failed_thresholds` (each carrying
+`feature`, `op`, `threshold` **and the observed value** — gap 0.21 and gap 0.6 no
+longer collapse to the same `False`), `observed_values` (all four features),
+`missingness_flags`, and `rule`. All checks are evaluated regardless of
+short-circuit order, so a row missing `h2h_prior_games` *and* over the gap
+reports `BOTH`. `r2_exclusion` is attached to every considered-pool row (`None`
+when eligible or excluded for a non-R2 reason) and aggregated into a new
+top-level `r2_exclusion_breakdown` manifest section.
+
+**A finding that shaped it.** Driving the real evaluate path with no history
+showed `*_prior_games` arriving as `0.0` with missingness flag `0` — a genuine
+zero meaning "nothing in the bounded last-5 window". So the dominant rejection
+reads as `THRESHOLD_NOT_MET` on `prior_games >= 5` with `observed: 0.0`, which is
+**absent data, not a strict cutoff**. The flags are recorded because without them
+those two cases are indistinguishable and the summary invites exactly the wrong
+conclusion. Values are stored unrounded: a gap of `0.20000000000000004` fails
+`lte 0.2` while displaying as `0.2`, and rounding would hide the boundary cases
+a cutoff review most needs.
+
+**Digest safety, proven on real evidence.** `decision_digest` covers
+`decision_provenance`, whose `considered_pool` is the six-field `pool_for_digest`
+projection, so a new pool-row key cannot reach it. Verified against all four
+committed settled manifests (2026-09-02 / 09-05 / 09-06 / 09-07):
+`canonical_sha256(decision_provenance)` reproduces `decision_digest`; projecting
+the full rows reproduces the committed digest input; injecting `r2_exclusion`
+into every row leaves the digest **byte-identical**; and a negative control
+confirms touching `decision_accounting` *does* change it — which is why the
+aggregate lives in a new top-level section rather than there.
+
+**Left alone deliberately.** `considered_status` still carries the conflated
+label: it *is* a projected field, so refining it would rewrite `decision_digest`
+and `run_id` for historical runs. `is_r2_eligible` is untouched, all thresholds
+unchanged, `config/research_baselines.json` unmodified. `R2_ELIGIBILITY_SPEC` is
+asserted equal to the declared config rule, and `load_frozen_baseline_config`'s
+exact-shape guard still passes, so code and config cannot drift silently.
+
+**Governance.** Recording only. The breakdown carries a `policy` block —
+`purpose: recording_only`, `decides_nothing`, `not_justification_for_tuning` —
+stating the data is **not** a justification for changing `gap <= 0.2` or any
+other R2 threshold; `anti_tuning` prohibits result-driven amendments and any
+threshold change requires a separate, explicit, **owner-approved tuning
+decision**. Recording why a frozen rule rejected a record and weakening that rule
+are different acts.
+
+Regression coverage: `tests/test_r2_exclusion_reason.py` (95 tests), including
+rule/record agreement swept over a 480-point boundary grid across all four
+features.
+
 ## Verification
 
-- pytest → 718 passed, 0 deselected, 0 skipped (verified 2026-09-07 via `python -m pytest` on `arena/01a07741-slumdog` @ uncapped-cohort amendment; bare `pytest` invocation NOT recommended — see Next section)
-- pyflakes src/slumdog scripts tests → clean on all new/changed files
+- pytest → **887 passed, 0 deselected, 0 skipped, 0 errors** (verified 2026-09-08 on `arena/01a07b8b-slumdog` @ `bf2b9f3`: 718 baseline + 14 rank-4+/pin-drift + 12 erratum integrity + 47 discarded-metadata + 95 R2-exclusion-reason + the intervening 09-07 erratum/`--skip-existing` and blocker-reconciliation tests)
+- pyflakes src/slumdog scripts tests → clean on all new/changed files (14 pre-existing warnings remain in untouched `tests/test_dataset_*`, `test_forward_shadow_batch`, `test_research_incremental_builder`)
 - py_compile scripts/*.py src/slumdog/*.py tests/*.py → ok
 - git diff --check → ok
-- Frozen baseline config SHA-256 → `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1` MATCH
-- New shadow declaration canonical SHA-256 → `fe031ae550ac25d4f9c11becb701572e798f0d54f37bb8201f3a07e182503e5f` (changed 2026-09-07 by the uncapped-cohort amendment on `arena/01a07741-slumdog`; previous: `dd08976a262e7a1882a4e29846612094c20447faf587c01a42608d57f4f4d597`)
+- Frozen baseline config SHA-256 → `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1` MATCH (unchanged — this is the hash `anti_tuning` protects)
+- Shadow declaration canonical SHA-256 → **`20f9a3a3fc519ae1c08e4d226ed75bc5d6a34246bc74a8e79f6b4f9b8bba25b2`** (matches the committed `config/shadow_evaluator.json` on `main`).
+- **`fe031ae5…` reconciliation — RESOLVED 2026-09-08, and the earlier note in this file was wrong.** The clone was unshallowed (`git fetch --unshallow`, 168 commits), which made the full config history inspectable. `fe031ae5…` is **fully reproducible**: it is the exact canonical SHA-256 of the shadow declaration as committed at `ebc4e6fc` (`config/shadow_evaluator_v1.json`) and again at `303b09f6` (`config/shadow_evaluator.json`, content preserved through the rename). Verified chain:
+
+  | commit | file | canonical SHA-256 | pin status |
+  |---|---|---|---|
+  | `fc0c563e` | `shadow_evaluator_v1.json` | `dd08976a…` | — |
+  | `ebc4e6fc` | `shadow_evaluator_v1.json` | `fe031ae5…` | pin **introduced here, correct** |
+  | `303b09f6` | `shadow_evaluator.json` | `fe031ae5…` | still correct (rename only) |
+  | `4c63575e` | `shadow_evaluator.json` | `4d6667b7…` | **pin goes stale here** |
+  | `7728803e` | `shadow_evaluator.json` | `40187a0c…` | stale |
+  | `8a064612` | `shadow_evaluator.json` | `65070962…` | stale |
+  | `222abcfa` | `shadow_evaluator.json` | `20f9a3a3…` | stale → now aligned |
+
+  `ebc4e6fc` introduced the config change *and* the matching pin in the same commit, so the pin was correct at birth. **Four consecutive commits** then changed declaration content without refreshing it. Correction to what this file previously asserted: the version-suffix cleanup (`303b09f6`) did **not** orphan the pin — it preserved the content byte-for-byte under the new filename. The pin actually went stale at the *next* commit, `4c63575e` ("Fix stale `research_baselines_v1.json` path refs"). The earlier brute-force search failed because it explored the wrong space (restoring `_v1` suffixes / dropping single keys from the *current* config) instead of reading the real history.
+  **Consequence:** aligning the pin to `20f9a3a3…` was correct, and is now *proven* rather than inferred from three corroborating sources. The HOLD previously placed on that part of PR #18 is lifted. `test_pinned_config_hashes_match_the_committed_configs` still fails at the source with an actionable message if either side drifts again.
 - Golden regression → `1a97cb81fc6521a99f1055a873975d562cae33fefce7468ceca929739f8fca0d` (unchanged)
 - CLI: `python -m slumdog.shadow_evaluator --help` → exit 0
 - CLI: `python -m slumdog.shadow_settle --help` → exit 0

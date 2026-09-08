@@ -47,9 +47,12 @@ from pathlib import Path
 from typing import Any
 
 from .baseline_analyzer import (
+    FROZEN_R2_RULE_NAME,
+    R2_ELIGIBILITY_SPEC,
     canonical_json_bytes,
     is_r2_eligible,
     r1_sort_key as _baseline_r1_sort_key,
+    r2_ineligibility_reason,
 )
 from .capture_loader import (
     CaptureLoadResult,
@@ -73,6 +76,49 @@ FROZEN_R2_KEY = "R2_CONSERVATIVE_FIXED_RULE"
 FROZEN_R2_PATH = (
     f"{FROZEN_BASELINE_CONFIG_PATH}:rules.{FROZEN_R2_KEY}"
 )
+
+
+# ---------------------------------------------------------------------------
+# considered_pool[] schema contract
+# ---------------------------------------------------------------------------
+# Single source of truth for the manifest's ``considered_pool[]`` entry shape.
+# Both sides are pinned to these so a fixture cannot silently diverge from what
+# production emits: ``tests/test_shadow_evaluator.py`` asserts real manifests
+# match, and ``tests/test_shadow_settle.py`` asserts its fixture matches.
+#
+# The eligible shape MUST carry the underdog identity. Omitting it left the
+# settlement stage with no underdog to compare the real winner against, so it
+# defaulted to ``0`` — the draw sentinel — and a rank-4+ SUCCESS became
+# structurally unreachable (every such row graded FAILURE regardless of the
+# actual result). Identity values are ``None`` when genuinely undecidable,
+# never ``0``: missing stays missing.
+#
+# Adding or removing a key here does NOT change ``decision_digest`` or
+# ``run_id``: ``pool_for_digest`` projects a fixed 6-field tuple.
+# ``r2_exclusion`` is present on EVERY pool row (``None`` when the row is
+# eligible or was excluded for a non-R2 reason) so the shape stays uniform.
+#
+# Digest-safe by construction: ``pool_for_digest`` projects a fixed 6-field
+# tuple (sport, event_id, event_date, considered_status, eligible,
+# rank_within_sport_day), so adding a key here cannot perturb
+# ``decision_digest`` or ``run_id`` -- the same property the rank-4+ identity
+# fix relied on. Note that ``considered_status`` IS one of the six projected
+# fields, which is why the existing status label is left exactly as it is and
+# the decomposition rides alongside it instead of refining the label.
+# ``decision_accounting`` is likewise part of the digest payload, so aggregate
+# exclusion counts go in a separate top-level manifest section rather than
+# there. Proven on real evidence by
+# tests/test_r2_exclusion_reason.py::TestDigestSafety.
+CONSIDERED_POOL_ELIGIBLE_KEYS = frozenset({
+    "sport", "event_id", "event_date", "considered_status", "eligible",
+    "rank_within_sport_day", "r2_exclusion",
+    "underdog_index", "underdog_probability",
+    "favorite_index", "favorite_probability", "draw_probability",
+})
+CONSIDERED_POOL_INELIGIBLE_KEYS = frozenset({
+    "sport", "event_id", "event_date", "considered_status", "eligible",
+    "rank_within_sport_day", "r2_exclusion",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -427,6 +473,10 @@ def _evaluate_for_decision_stage(
             "status": reason or "IDENTITY_INELIGIBLE",
             "features": {}, "missingness": {}, "identity": None,
             "rank_key": (),
+            # Never reached R2: identity failed first, so there is no R2
+            # reason to record. Kept as an explicit None so every pool row
+            # has the same shape.
+            "r2_exclusion": None,
         }
     identity = identify_forebet_underdog(
         probability_1=record.probability_1, probability_2=record.probability_2,
@@ -440,9 +490,18 @@ def _evaluate_for_decision_stage(
     if not is_r2_eligible(features):
         return {
             "record": record, "eligible": False,
+            # Status label left EXACTLY as it was: considered_status is one of
+            # the six fields pool_for_digest projects, so refining the label
+            # would perturb decision_digest. The decomposition rides alongside.
             "status": "FEATURE_INCOMPLETE_OR_R2_INELIGIBLE",
             "features": features, "missingness": missingness,
             "identity": identity, "rank_key": (),
+            # WHY, with real values. is_r2_eligible returned a bare False here
+            # and the reason was discarded, so 56-82% of every pool was
+            # recorded under one label that merged "Forebet gave us no
+            # history" with "the gap was 0.21 against a 0.2 cutoff".
+            # r2_ineligibility_reason decides nothing; it records.
+            "r2_exclusion": r2_ineligibility_reason(features, missingness),
         }
     rank_key = _baseline_r1_sort_key({"event_id": record.event_id, "features": features})
     return {
@@ -450,6 +509,7 @@ def _evaluate_for_decision_stage(
         "status": "ELIGIBLE_PENDING_RANK",
         "features": features, "missingness": missingness,
         "identity": identity, "rank_key": rank_key,
+        "r2_exclusion": None,  # passed R2; nothing to record
     }
 
 
@@ -733,6 +793,75 @@ def _now_utc_iso(dt: _dt.datetime) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _summarise_r2_exclusions(
+    considered_pool_dicts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate the per-row R2 exclusion reasons into one manifest section.
+
+    Deliberately a SEPARATE top-level section rather than extra keys in
+    ``decision_accounting``: ``decision_accounting`` is part of
+    ``decision_digest_payload``, so adding counts there would perturb
+    ``decision_digest`` and ``run_id``. A new top-level manifest key is not in
+    any digest payload, so this widens the record without touching it.
+
+    Counts only. The actual observed values live per row in
+    ``considered_pool[].r2_exclusion.observed_values``, which is what makes the
+    excluded population analysable — an aggregate can never answer "is 0.2 the
+    right cutoff?", the individual numbers can.
+    """
+    by_reason: dict[str, int] = {}
+    missing_counts: dict[str, int] = {}
+    failed_counts: dict[str, int] = {}
+    rows = 0
+    for row in considered_pool_dicts:
+        reason = row.get("r2_exclusion")
+        if not reason:
+            continue
+        rows += 1
+        primary = reason.get("primary_reason", "UNKNOWN")
+        by_reason[primary] = by_reason.get(primary, 0) + 1
+        for field_name in reason.get("missing_fields", []):
+            missing_counts[field_name] = missing_counts.get(field_name, 0) + 1
+        for failure in reason.get("failed_thresholds", []):
+            key = f'{failure.get("feature")} {failure.get("op")} {failure.get("threshold")}'
+            failed_counts[key] = failed_counts.get(key, 0) + 1
+
+    return {
+        "policy": {
+            "purpose": "recording_only",
+            "decides_nothing": True,
+            "r2_rule_modified": False,
+            "thresholds_changed": False,
+            "recorded_for": (
+                "future analysis of why records were excluded before grading"
+            ),
+            "not_justification_for_tuning": True,
+            "note": (
+                "These reasons and observed values are recorded so the excluded "
+                "population can finally be studied — 56-82% of every considered "
+                "pool was previously dropped under a single label that merged "
+                "'Forebet gave us no history' with 'the probability gap was "
+                "0.21 against a 0.2 cutoff'. They are NOT a justification for "
+                "changing gap <= 0.2 or any other R2 threshold. anti_tuning "
+                "prohibits result-driven amendments, and any threshold change "
+                "requires a separate, explicit, owner-approved tuning decision. "
+                "Recording why a frozen rule rejected a record and weakening "
+                "that rule are different acts; this is the first only."
+            ),
+        },
+        "rule": FROZEN_R2_RULE_NAME,
+        "frozen_baseline_config_sha256": FROZEN_BASELINE_CONFIG_SHA256,
+        "thresholds_in_force": [
+            {"feature": feature, "op": op, "value": value}
+            for feature, op, value in R2_ELIGIBILITY_SPEC
+        ],
+        "rows_with_a_recorded_reason": rows,
+        "by_primary_reason": dict(sorted(by_reason.items())),
+        "missing_field_counts": dict(sorted(missing_counts.items())),
+        "failed_threshold_counts": dict(sorted(failed_counts.items())),
+    }
+
+
 def _emit_run(
     *,
     target_date: str,
@@ -797,6 +926,8 @@ def _emit_run(
                     "considered_status": "DECISION_CONFLICT_EXCLUDED",
                     "eligible": False,
                     "rank_within_sport_day": None,
+                    # Excluded before R2 ran; uniform shape, no reason to give.
+                    "r2_exclusion": None,
                 })
     # 2) Single-fingerprint duplicate extras (collapsed under the
     #    canonical record). One entry per extra observation.
@@ -811,6 +942,7 @@ def _emit_run(
                 "considered_status": "EXACT_DECISION_DUPLICATE_OBSERVATION",
                 "eligible": False,
                 "rank_within_sport_day": None,
+                "r2_exclusion": None,
             })
 
     # Stage 3: per-canonical identity / features / R2 / R1.
@@ -841,6 +973,7 @@ def _emit_run(
                 "event_date": r.event_date,
                 "considered_status": "MALFORMED_OR_UNKEYABLE",
                 "eligible": False, "rank_within_sport_day": None,
+                "r2_exclusion": None,
             })
         else:
             considered_pool_dicts.append({
@@ -848,6 +981,7 @@ def _emit_run(
                 "event_date": r.event_date,
                 "considered_status": "TIMING_REJECTED",
                 "eligible": False, "rank_within_sport_day": None,
+                "r2_exclusion": None,
             })
     # 3) Per-sport-day ranking for the admitted canonicals that
     #    passed the decision stage.
@@ -946,6 +1080,10 @@ def _emit_run(
     #    rank loop (identity-ineligible, feature-incomplete).
     for ev in per_record_evals:
         cs = ev.get("considered_status") or ev.get("status")
+        # Bound per-iteration on purpose: the rank loop above also uses the name
+        # ``identity``, and relying on that binding leaking would attach the
+        # LAST event's identity to every pool entry.
+        identity = ev.get("identity")
         if cs in (
             "PRIMARY_SHADOW_SELECTION",
             "TOP3_EVALUATION_COHORT",
@@ -958,6 +1096,26 @@ def _emit_run(
                 "considered_status": cs,
                 "eligible": True,
                 "rank_within_sport_day": ev.get("rank_within_sport_day"),
+                # The underdog identity is serialised for EVERY eligible pool
+                # entry, not just the top-3 ``selections[]``. Without it the
+                # settlement stage has no underdog to compare the real winner
+                # against, and defaulting the gap to ``0`` collides with the
+                # draw sentinel — which made a rank-4+ SUCCESS structurally
+                # unreachable. ``identity`` is already in scope here (the rank
+                # loop above dereferences it to build ``selections[]``).
+                # Missing stays missing: these are ``None``, never ``0``.
+                # Digest-safe: ``pool_for_digest`` projects a fixed 6-field
+                # tuple, so ``decision_digest``/``run_id`` are unchanged.
+                "underdog_index": getattr(identity, "underdog_index", None),
+                "underdog_probability": getattr(
+                    identity, "underdog_probability", None
+                ),
+                "favorite_index": getattr(identity, "favorite_index", None),
+                "favorite_probability": getattr(
+                    identity, "favorite_probability", None
+                ),
+                "draw_probability": getattr(identity, "draw_probability", None),
+                "r2_exclusion": ev.get("r2_exclusion"),
             })
         else:
             considered_pool_dicts.append({
@@ -967,6 +1125,11 @@ def _emit_run(
                 "considered_status": cs,
                 "eligible": False,
                 "rank_within_sport_day": None,
+                # The recovered reason. Non-null only for
+                # FEATURE_INCOMPLETE_OR_R2_INELIGIBLE rows; every other
+                # ineligible status was rejected before R2 ran and carries
+                # None, so the field is always present and always honest.
+                "r2_exclusion": ev.get("r2_exclusion"),
             })
     considered_pool_dicts.sort(key=lambda d: (d["sport"], d["event_date"], d["event_id"]))
 
@@ -1184,6 +1347,10 @@ def _emit_run(
         "decision_digest": decision_digest,
         "decision_provenance": decision_digest_payload,
         "considered_pool": considered_pool_dicts,
+        # Aggregate of the per-row r2_exclusion reasons above. Separate section
+        # on purpose: decision_accounting is inside the digest payload, this is
+        # not, so recording it cannot perturb decision_digest or run_id.
+        "r2_exclusion_breakdown": _summarise_r2_exclusions(considered_pool_dicts),
         "decision_conflicts": conflict_fingerprints,
         "capture_provenance": {
             "receipt_path": capture_result.receipt_path,

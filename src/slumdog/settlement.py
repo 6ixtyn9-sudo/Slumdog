@@ -9,8 +9,38 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 
 from .contracts import SettledEvent
-from .parsers import _event_day, _load_football_payload, _number, _participant_odds, _slug, _text
+from .parsers import (
+    _event_day,
+    _load_football_payload,
+    _number,
+    _participant_odds,
+    _slug,
+    _text,
+    decimal_odds,
+)
 from .sports import SPORTS
+
+
+def _draw_odds(row, draw_possible: bool) -> float | None:
+    """Recover the draw price from a three-way ``.haodd`` board.
+
+    ``parsers._participant_odds`` returns only the two participant prices: for a
+    three-way board it reads ``parsed[1]`` — the draw price — and drops it,
+    returning ``(parsed[0], parsed[2], raw_values)``. That function feeds the
+    pre-event capture path where its return shape is load-bearing, so the draw
+    price is recovered here instead, in the post-event settlement path only.
+
+    Returns ``None`` for two-way sports and for draw-capable sports whose board
+    leaves the draw cell blank (handball, cricket) — matching the branch logic
+    in ``_participant_odds`` so the two never disagree about which cell is which.
+    """
+    if not draw_possible:
+        return None
+    values = [_text(span) for span in row.select(".haodd span") if _text(span)]
+    parsed = [decimal_odds(value) for value in values]
+    if len(parsed) >= 3 and parsed[0] is not None and parsed[2] is not None:
+        return parsed[1]
+    return None
 
 
 def parse_html_settled(body: bytes, sport: str, target_date: str) -> list[SettledEvent]:
@@ -45,6 +75,7 @@ def parse_html_settled(body: bytes, sport: str, target_date: str) -> list[Settle
         pred = _text(row.select_one(".forepr span"))
         forebet_pick = int(pred) if pred in {"1", "2"} else None
         odds_1, odds_2, _ = _participant_odds(row, spec.draw_possible)
+        odds_draw = _draw_odds(row, spec.draw_possible)
         href = str(link.get("href") or "")
         event_id = href.rstrip("/").split("/")[-1]
         periods_1 = []
@@ -60,7 +91,8 @@ def parse_html_settled(body: bytes, sport: str, target_date: str) -> list[Settle
             winner_index=winner, score_1=score_1, score_2=score_2,
             probability_1=probability_1, probability_2=probability_2,
             draw_probability=draw_probability, forebet_pick=forebet_pick,
-            odds_1=odds_1, odds_2=odds_2, league=_text(row.select_one(".shortTag")),
+            odds_1=odds_1, odds_2=odds_2, odds_draw=odds_draw,
+            league=_text(row.select_one(".shortTag")),
             period_scores_1=tuple(periods_1), period_scores_2=tuple(periods_2),
             source_url=href,
         ))
@@ -123,6 +155,10 @@ def parse_football_settled(body: bytes, target_date: str) -> list[SettledEvent]:
             "move_1", "move_X", "move_2", "isCup", "is_international_club_cup",
             "is_nationalteam_cup", "code", "host_short", "guest_short",
             "Host_SC_HT", "Guest_SC_HT", "extra_time_score", "penalty_score",
+            # American-format prices. parsers.py already retains these pre-event
+            # (odds_1_am / odds_draw_am / odds_2_am); the settlement path used to
+            # drop them, so a three-way board's draw price survived nowhere.
+            "best_odd_1_am", "best_odd_X_am", "best_odd_2_am",
         ):
             value = row.get(key)
             if value not in (None, ""):
@@ -139,6 +175,7 @@ def parse_football_settled(body: bytes, target_date: str) -> list[SettledEvent]:
             draw_probability=px/100 if px is not None else None,
             forebet_pick=best if best in (1, 2) else None,
             odds_1=_number(row.get("best_odd_1")), odds_2=_number(row.get("best_odd_2")),
+            odds_draw=_number(row.get("best_odd_X")),
             league=str(row.get("short_tag") or ""),
             period_scores_1=tuple(periods_1), period_scores_2=tuple(periods_2),
             source_url=detail_url, disposition=disposition,
@@ -185,6 +222,9 @@ def _base_row(row, sport: str, target_date: str):
         "probability_1": probability_1, "probability_2": probability_2,
         "draw_probability": draw_probability, "forebet_pick": forebet_pick,
         "odds_1": odds_1, "odds_2": odds_2,
+        # Two-way sports (mma, esoccer) have no draw price; _draw_odds returns
+        # None for them, so this is uniform across every settlement parser.
+        "odds_draw": _draw_odds(row, spec.draw_possible),
         "league": _text(row.select_one(".shortTag")), "source_url": href,
     }
 

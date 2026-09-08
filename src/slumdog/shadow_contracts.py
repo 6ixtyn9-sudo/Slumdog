@@ -25,7 +25,7 @@ from .sports import SPORTS
 _FORBIDDEN_RECORD_FIELDS = frozenset({
     "score_1", "score_2", "winner_index", "disposition",
     "period_scores_1", "period_scores_2", "extra_time_score", "penalty_score",
-    "odds_1", "odds_2", "price", "overround", "implied_probability",
+    "odds_1", "odds_2", "odds_draw", "price", "overround", "implied_probability",
     "live_score", "result", "result_text",
 })
 
