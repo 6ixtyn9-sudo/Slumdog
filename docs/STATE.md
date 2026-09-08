@@ -595,7 +595,8 @@ features.
 
 ## Verification
 
-- pytest → **887 passed, 0 deselected, 0 skipped, 0 errors** (verified 2026-09-08 on `arena/01a07b8b-slumdog` @ `bf2b9f3`: 718 baseline + 14 rank-4+/pin-drift + 12 erratum integrity + 47 discarded-metadata + 95 R2-exclusion-reason + the intervening 09-07 erratum/`--skip-existing` and blocker-reconciliation tests)
+- pytest → **887 passed, 0 deselected, 0 skipped, 0 errors** under BOTH invocations (verified 2026-09-08: `pytest` bare, exactly as `.github/workflows/pipeline.yml` runs it, and `python -m pytest`; 718 baseline + 14 rank-4+/pin-drift + 12 erratum integrity + 47 discarded-metadata + 95 R2-exclusion-reason + the intervening 09-07 erratum/`--skip-existing` and blocker-reconciliation tests)
+- **Invocation matters and was previously unstated here.** `python -m pytest` prepends the CWD to `sys.path`; bare `pytest` does not. With `pythonpath = ["src"]` and no `scripts/__init__.py`, all 39 tests in `tests/test_forward_shadow_batch.py` that do `from scripts.forward_shadow_batch import ...` failed under CI's bare `pytest` while passing locally. Fixed by `pythonpath = ["src", "."]`. Before: 39 failed / 848 passed. After: 887 passed. Repo root on the path was checked for shadowing — none of `config`, `data`, `docs`, `examples`, `scripts`, `tests`, `src` collides with an installed distribution.
 - pyflakes src/slumdog scripts tests → clean on all new/changed files (14 pre-existing warnings remain in untouched `tests/test_dataset_*`, `test_forward_shadow_batch`, `test_research_incremental_builder`)
 - py_compile scripts/*.py src/slumdog/*.py tests/*.py → ok
 - git diff --check → ok
