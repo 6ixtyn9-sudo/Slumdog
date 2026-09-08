@@ -7,7 +7,7 @@ Prior state (same session): **RANK-4+ SETTLEMENT GRADING DEFECT FOUND, QUANTIFIE
 Prior state: **TWO CHANGES IMPLEMENTED ON `arena/01a07741-slumdog`, PR PENDING OWNER SIGN-OFF** — (1) uncapped-cohort amendment: `cohort_policy.top3_cohort_per_sport_day = null` so every R2-eligible, R1-ranked event per sport-day is recorded (downstream recording width ONLY — R2 thresholds and R1 ranking untouched/frozen); (2) Milestone 7D retired: orphaned `tests/test_cloud_backup_workflow.py` deleted (its workflow was owner-deleted from `main` 2026-09-03, `5641111`, leaving 12 tests failing and masked by `--deselect` ever since). Before that: Milestone 7E (automated D+1 settlement) MERGED VIA PR #16 (`c06659c`) AND PROVEN IN PRODUCTION — three dates settled by real dispatches (2026-09-02, 09-05, 09-06); `972b79a` fixed the `SHADOW_RUN_BLOCKED` history-selection bug; review + addendum docs archived. Training FROZEN, PRODUCTION NOT AUTHORIZED.
 
 **Branch:** `arena/01a07b8b-slumdog` (adversarial review + rank-4+ remediation session, from `main` @ `edd5ff2`)
-**Base commit:** `edd5ff22bd5ad499247b6dcb97d3aee11e5807d1` (main tip at this verification; shallow clone — only this one commit is present locally)
+**Base commit:** `edd5ff22bd5ad499247b6dcb97d3aee11e5807d1` (main tip when this branch was cut). The clone **was unshallowed 2026-09-08** (`git fetch --unshallow`, 168 commits), which is what made the `fe031ae5…` reconciliation possible. `origin/main` has since advanced by one automated evidence commit, `1ee80d4` (github-actions[bot], "chore: shadow evidence (run 34185420153)"); `edd5ff2` remains an ancestor of it and PR #18 still reports `MERGEABLE`.
 **Tests:** 791 passed, 0 failed, 0 deselected, 0 skipped (`python -m pytest`)
 **Working tree:** committed and **pushed** on `arena/01a07b8b-slumdog`; local `HEAD` == remote tip == `b3441e5`. **PR #18 OPEN against `main`, `MERGEABLE`, NOT merged** (owner sign-off still required; `AGENTS.md` forbids merging without explicit authorization). Four commits: `8ddb2da` (review doc) → `2136535` (rank-4+ fix + erratum + pin) → `03006f3` (discard audit: odds_X, settled_context, per_rank_band) → `b3441e5` (retain facets by default; invariant-10 bar moved to the feature layer). The earlier "push blocked / no GitHub credential path" note is **superseded**, but note the Arena `GH_TOKEN` is **intermittently invalid** — pushes on 2026-09-07 failed with `Bad credentials` / `no longer valid` and then succeeded on retry minutes later. On a push failure, retry and re-check `gh auth status` before concluding the connection is broken; ask the owner to reconnect GitHub in Arena only if it stays dead.
 
@@ -168,17 +168,35 @@ post-event fact enters a feature and nothing missing is zero-filled.
 any threshold, rule, or config amendment.**
 
 **Open items for the owner.**
-1. `data/reports/shadow/errata/` is a new artifact type **not enumerated in the
-   `AGENTS.md` scoped commit waiver**. Small JSON (5–86 KB), same spirit — but
-   extend the waiver explicitly or relocate.
-2. The declaration-hash pin in `scripts/synthetic_shadow_fixture.py` was stale
-   (`fe031ae5…` vs the committed config's `20f9a3a3…`), failing all 6 tests in
-   that module on `main`. Aligned to the committed config, because three
-   sources corroborate the config content (evaluator validation, its passing
-   uncapped tests, the `edd5ff2` commit message) versus one stale constant.
-   `fe031ae5…` is not reproducible from the current config by restoring any
-   `_v1` suffix or dropping any single key — **reconcile against full git
-   history**; this shallow clone has one commit.
+1. ~~`data/reports/shadow/errata/` is a new artifact type not enumerated in the
+   `AGENTS.md` scoped commit waiver.~~ **RESOLVED 2026-09-08** — waiver extended
+   on owner direction to cover `*.rank4_erratum.json` + `.sha256` markers under
+   `data/reports/shadow/errata/` (measured 5.2–86 KiB, same class as the
+   `*.settlement.json` files already covered). Extended rather than relocated:
+   the errata are already committed and pushed, and moving published
+   hash-marked corrections to immutable evidence would rewrite their paths for
+   no gain. See `AGENTS.md` → Filesystem Separation.
+2. ~~The declaration-hash pin in `scripts/synthetic_shadow_fixture.py` was
+   stale; `fe031ae5…` is not reproducible — reconcile against full git
+   history.~~ **RESOLVED 2026-09-08, and the earlier reasoning was partly
+   wrong.** `git fetch --unshallow` recovered 168 commits, and `fe031ae5…` is
+   **fully reproducible**: it is the canonical SHA-256 of the declaration as
+   committed at `ebc4e6fc` (`shadow_evaluator_v1.json`) and `303b09f6`
+   (`shadow_evaluator.json`, content preserved through the rename). That commit
+   introduced the config change *and* the matching pin together, so the pin was
+   correct at birth; **four consecutive commits** then changed declaration
+   content without refreshing it — `4c63575e` (`4d6667b7…`, where it actually
+   went stale), `7728803e` (`40187a0c…`), `8a064612` (`65070962…`), `222abcfa`
+   (`20f9a3a3…`, current).
+   **Correction:** the version-suffix cleanup did *not* orphan the pin, as this
+   file and `docs/STATE.md` both previously claimed — it preserved content
+   byte-for-byte. The break was the *next* commit, the `research_baselines_v1`
+   path-refs fix. The old brute-force search failed because it explored the
+   wrong space (restoring `_v1` suffixes / dropping single keys from the
+   *current* config) rather than reading real history.
+   **Consequence:** aligning the pin to `20f9a3a3…` was correct and is now
+   *proven*, not inferred. The HOLD on that part of PR #18 is lifted. Full
+   table in `docs/STATE.md` → Verification.
 3. Forward consequence: with `top3_cohort_per_sport_day = null` the rank-4+
    branch is unreachable, so `ranks_4_plus` will read **n = 0 for every future
    date** while the 867 historical rows stay corrected only via the erratum.
@@ -530,7 +548,7 @@ The original 6A implementation was found not to scale (it materialized all examp
 - **Pull request:** #18 https://github.com/6ixtyn9-sudo/Slumdog/pull/18 — "Fix rank-4+ settlement grading (sentinel default made SUCCESS unreachable); append-only erratum; unbreak 6 stale-pin tests" — **OPEN into `main`, NOT merged** (awaiting owner sign-off; `AGENTS.md` forbids merging without explicit authorization).
 - **Merge approves only:** (a) the rank-4+ identity-resolution fix and the 6 stale declaration-hash pin tests; (b) publication of the append-only erratum as a **new artifact type**; (c) recording-width recovery of already-collected settlement metadata — `odds_draw`, `settled_context`, `per_rank_band`, capture-conflict refusal — plus their governance bindings.
 - **Merge does NOT approve:** any change to grading rules, thresholds, ranking, R1/R2 policy, or frozen config; model training; threshold optimization; production publication; real Forebet capture; use of odds, Kelly, or any `settled_context` value as a feature, gate, or staking input; any restatement of the committed `settlement.json` files (left byte-identical).
-- **Owner decisions requested:** (1) extend the `AGENTS.md` scoped-commit waiver to cover `data/reports/shadow/errata/**`, or relocate those artifacts; (2) reconcile the unreproducible `fe031ae5…` declaration pin against full git history (this clone is shallow); (3) **settled 2026-09-07** — the owner directed that `kelly` be retained (data is not to be discarded); it is now persisted as inert metadata and barred from the feature layer via `dataset.PROHIBITED_KEYS`; (4) rule on the pre-existing `calculate_overround_*` / `devig_probabilities_*` helpers in the per-sport modules against invariant 10.
+- **Owner decisions requested:** (1) **settled 2026-09-08** — the `AGENTS.md` scoped-commit waiver was extended to cover `data/reports/shadow/errata/**`; (2) **settled 2026-09-08** — the `fe031ae5…` pin was reconciled against full git history after `git fetch --unshallow`; it is reproducible and the alignment to `20f9a3a3…` is proven correct; (3) **settled 2026-09-07** — the owner directed that `kelly` be retained (data is not to be discarded); it is now persisted as inert metadata and barred from the feature layer via `dataset.PROHIBITED_KEYS`; (4) rule on the pre-existing `calculate_overround_*` / `devig_probabilities_*` helpers in the per-sport modules against invariant 10.
 - **Next:** owner reviews PR #18; on approval, merge, then re-run settlement for a fresh date to produce the first artifact carrying `settled_context` + `per_rank_band`.
 
 - **Active branch:** `arena/01a0512f-slumdog` — Milestone 7D cloud-only bundle backup (base `main` @ `41b345f`).

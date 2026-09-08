@@ -513,7 +513,21 @@ unilaterally.
 - py_compile scripts/*.py src/slumdog/*.py tests/*.py → ok
 - git diff --check → ok
 - Frozen baseline config SHA-256 → `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1` MATCH (unchanged — this is the hash `anti_tuning` protects)
-- Shadow declaration canonical SHA-256 → **`20f9a3a3fc519ae1c08e4d226ed75bc5d6a34246bc74a8e79f6b4f9b8bba25b2`** (matches the committed `config/shadow_evaluator.json` on `main`). Supersession: `dd08976a…` (as merged via PR #16, capped cohort) → `fe031ae5…` (recorded here for the uncapped-cohort amendment on `arena/01a07741-slumdog`) → `20f9a3a3…` (current). `fe031ae5…` is **not reproducible** from the current config by restoring any `_v1` suffix or dropping any single key, so it appears to predate a later edit (version-suffix cleanup) that never refreshed the pin in `scripts/synthetic_shadow_fixture.py`. That stale pin made all 6 `tests/test_synthetic_shadow_fixture.py` tests fail closed on `main`; the pin is now aligned to the committed config and `test_pinned_config_hashes_match_the_committed_configs` fails at the source with an actionable message if either side drifts again. **Owner should reconcile against full git history** — this shallow clone has one commit, so the intermediate content could not be inspected.
+- Shadow declaration canonical SHA-256 → **`20f9a3a3fc519ae1c08e4d226ed75bc5d6a34246bc74a8e79f6b4f9b8bba25b2`** (matches the committed `config/shadow_evaluator.json` on `main`).
+- **`fe031ae5…` reconciliation — RESOLVED 2026-09-08, and the earlier note in this file was wrong.** The clone was unshallowed (`git fetch --unshallow`, 168 commits), which made the full config history inspectable. `fe031ae5…` is **fully reproducible**: it is the exact canonical SHA-256 of the shadow declaration as committed at `ebc4e6fc` (`config/shadow_evaluator_v1.json`) and again at `303b09f6` (`config/shadow_evaluator.json`, content preserved through the rename). Verified chain:
+
+  | commit | file | canonical SHA-256 | pin status |
+  |---|---|---|---|
+  | `fc0c563e` | `shadow_evaluator_v1.json` | `dd08976a…` | — |
+  | `ebc4e6fc` | `shadow_evaluator_v1.json` | `fe031ae5…` | pin **introduced here, correct** |
+  | `303b09f6` | `shadow_evaluator.json` | `fe031ae5…` | still correct (rename only) |
+  | `4c63575e` | `shadow_evaluator.json` | `4d6667b7…` | **pin goes stale here** |
+  | `7728803e` | `shadow_evaluator.json` | `40187a0c…` | stale |
+  | `8a064612` | `shadow_evaluator.json` | `65070962…` | stale |
+  | `222abcfa` | `shadow_evaluator.json` | `20f9a3a3…` | stale → now aligned |
+
+  `ebc4e6fc` introduced the config change *and* the matching pin in the same commit, so the pin was correct at birth. **Four consecutive commits** then changed declaration content without refreshing it. Correction to what this file previously asserted: the version-suffix cleanup (`303b09f6`) did **not** orphan the pin — it preserved the content byte-for-byte under the new filename. The pin actually went stale at the *next* commit, `4c63575e` ("Fix stale `research_baselines_v1.json` path refs"). The earlier brute-force search failed because it explored the wrong space (restoring `_v1` suffixes / dropping single keys from the *current* config) instead of reading the real history.
+  **Consequence:** aligning the pin to `20f9a3a3…` was correct, and is now *proven* rather than inferred from three corroborating sources. The HOLD previously placed on that part of PR #18 is lifted. `test_pinned_config_hashes_match_the_committed_configs` still fails at the source with an actionable message if either side drifts again.
 - Golden regression → `1a97cb81fc6521a99f1055a873975d562cae33fefce7468ceca929739f8fca0d` (unchanged)
 - CLI: `python -m slumdog.shadow_evaluator --help` → exit 0
 - CLI: `python -m slumdog.shadow_settle --help` → exit 0
