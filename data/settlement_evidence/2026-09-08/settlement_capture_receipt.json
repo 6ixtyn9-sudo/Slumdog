@@ -1,0 +1,21 @@
+{
+  "capture_type": "settlement_evidence",
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-08/football/20260909T040046.718897+0000_516a5118e307.txt",
+      "bytes": 336038,
+      "captured_at": "2026-09-09T04:00:46.718897+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-08/football/20260909T040046.718897+0000_516a5118e307.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-08&ord=0&tz=0&tzs=&tze=",
+      "route": "relay_markdown",
+      "sha256": "516a5118e3073c85586385666fa11a83656dc6d949fd08fb4866181cea4d1b47",
+      "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-08&ord=0&tz=0&tzs=&tze=",
+      "sport": "football",
+      "target_date": "2026-09-08"
+    }
+  ],
+  "failures": [],
+  "generated_at": "2026-09-09T04:00:46.719636+00:00",
+  "target_date": "2026-09-08"
+}
