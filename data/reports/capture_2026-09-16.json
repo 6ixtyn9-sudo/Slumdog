@@ -1,0 +1,132 @@
+{
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/raw/football/2026-09-16/20260910T040539.451392+0000_1fde014abf22.txt",
+      "bytes": 45181,
+      "captured_at": "2026-09-10T04:05:39.451392+00:00",
+      "metadata_path": "data/raw/football/2026-09-16/20260910T040539.451392+0000_1fde014abf22.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-16&ord=0&tz=0&tzs=&tze=",
+      "route": "relay_markdown",
+      "sha256": "1fde014abf22322948aeeb41a8c587e1adf6f7eee10e5b706feba620ea87fa66",
+      "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-16&ord=0&tz=0&tzs=&tze=",
+      "sport": "football",
+      "target_date": "2026-09-16"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/raw/basketball/2026-09-16/20260910T040541.710722+0000_bf6afb5835b6.txt",
+      "bytes": 144599,
+      "captured_at": "2026-09-10T04:05:41.710722+00:00",
+      "metadata_path": "data/raw/basketball/2026-09-16/20260910T040541.710722+0000_bf6afb5835b6.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/basketball/predictions/2026-09-16",
+      "route": "relay",
+      "sha256": "bf6afb5835b678bf66cf707fc83e609c44d6b6bfc86c0d13f2c1c9aa426539a5",
+      "source_url": "https://www.forebet.com/en/basketball/predictions/2026-09-16",
+      "sport": "basketball",
+      "target_date": "2026-09-16"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/raw/tennis/2026-09-16/20260910T040543.860705+0000_f760d0481329.txt",
+      "bytes": 150735,
+      "captured_at": "2026-09-10T04:05:43.860705+00:00",
+      "metadata_path": "data/raw/tennis/2026-09-16/20260910T040543.860705+0000_f760d0481329.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/tennis/predictions/2026-09-16",
+      "route": "relay",
+      "sha256": "f760d04813295d7e3b55d9b09cf79f1e38a81c61a6bd1765f2fa6b05894e1901",
+      "source_url": "https://www.forebet.com/en/tennis/predictions/2026-09-16",
+      "sport": "tennis",
+      "target_date": "2026-09-16"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/raw/american_football/2026-09-16/20260910T040546.763511+0000_a2f8c2003c09.txt",
+      "bytes": 57165,
+      "captured_at": "2026-09-10T04:05:46.763511+00:00",
+      "metadata_path": "data/raw/american_football/2026-09-16/20260910T040546.763511+0000_a2f8c2003c09.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/american-football/predictions/2026-09-16",
+      "route": "relay",
+      "sha256": "a2f8c2003c099bc5158996bbabeec917547426db9ab9b3a42926724a5c3828ad",
+      "source_url": "https://www.forebet.com/en/american-football/predictions/2026-09-16",
+      "sport": "american_football",
+      "target_date": "2026-09-16"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/raw/rugby/2026-09-16/20260910T040548.854982+0000_e40568aea715.txt",
+      "bytes": 95137,
+      "captured_at": "2026-09-10T04:05:48.854982+00:00",
+      "metadata_path": "data/raw/rugby/2026-09-16/20260910T040548.854982+0000_e40568aea715.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/rugby/predictions/2026-09-16",
+      "route": "relay",
+      "sha256": "e40568aea715ce9aa27488b3b06ec832cfffe934a6ec4957e5e650ad8c3f45a3",
+      "source_url": "https://www.forebet.com/en/rugby/predictions/2026-09-16",
+      "sport": "rugby",
+      "target_date": "2026-09-16"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/raw/handball/2026-09-16/20260910T040550.797852+0000_523d8c801ee5.txt",
+      "bytes": 111328,
+      "captured_at": "2026-09-10T04:05:50.797852+00:00",
+      "metadata_path": "data/raw/handball/2026-09-16/20260910T040550.797852+0000_523d8c801ee5.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/handball/predictions/2026-09-16",
+      "route": "relay",
+      "sha256": "523d8c801ee59071b6d07d95fd8ba3862d34575fa964c090caaa88d0d0b7b25d",
+      "source_url": "https://www.forebet.com/en/handball/predictions/2026-09-16",
+      "sport": "handball",
+      "target_date": "2026-09-16"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/raw/cricket/2026-09-16/20260910T040553.274483+0000_82c19bce7073.txt",
+      "bytes": 149193,
+      "captured_at": "2026-09-10T04:05:53.274483+00:00",
+      "metadata_path": "data/raw/cricket/2026-09-16/20260910T040553.274483+0000_82c19bce7073.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/cricket/predictions/2026-09-16",
+      "route": "relay",
+      "sha256": "82c19bce7073ae99e2e785140ec81f5b9194f534d8392eff9f633e96b5f3183f",
+      "source_url": "https://www.forebet.com/en/cricket/predictions/2026-09-16",
+      "sport": "cricket",
+      "target_date": "2026-09-16"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/raw/esoccer/2026-09-16/20260910T040557.448211+0000_3ef884fcfd63.txt",
+      "bytes": 263088,
+      "captured_at": "2026-09-10T04:05:57.448211+00:00",
+      "metadata_path": "data/raw/esoccer/2026-09-16/20260910T040557.448211+0000_3ef884fcfd63.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/esoccer",
+      "route": "relay",
+      "sha256": "3ef884fcfd63f958f0c47304fc409c99a341ea31b46d39bf118a6bc7de94fc08",
+      "source_url": "https://www.forebet.com/en/esoccer",
+      "sport": "esoccer",
+      "target_date": "2026-09-16"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/raw/afl/2026-09-16/20260910T040559.386196+0000_18f789fda792.txt",
+      "bytes": 44071,
+      "captured_at": "2026-09-10T04:05:59.386196+00:00",
+      "metadata_path": "data/raw/afl/2026-09-16/20260910T040559.386196+0000_18f789fda792.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/afl",
+      "route": "relay",
+      "sha256": "18f789fda792cb59a164ebc7020837bf0abc88e8f25ea2e324264a485331d095",
+      "source_url": "https://www.forebet.com/en/afl",
+      "sport": "afl",
+      "target_date": "2026-09-16"
+    }
+  ],
+  "failures": [
+    "hockey:ValueError:target date missing from HTML: 2026-09-16",
+    "baseball:ValueError:target date missing from HTML: 2026-09-16",
+    "volleyball:ValueError:target date missing from HTML: 2026-09-16",
+    "mma:ValueError:target date missing from HTML: 2026-09-16",
+    "esports:ValueError:Forebet returned a 404 content page"
+  ],
+  "football_markets": "data/raw/football/2026-09-16/markets.json",
+  "generated_at": "2026-09-10T04:06:10.740085+00:00",
+  "reused": -5,
+  "target_date": "2026-09-16"
+}
