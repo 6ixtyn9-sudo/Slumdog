@@ -428,16 +428,18 @@ not modify any workflow file. Glob coverage was checked with `fnmatch`,
 including same-second `_2` collision filenames and the `.json.sha256`
 marker shape.
 
-**Remaining (documentation only, non-blocking):** the `AGENTS.md`
-Filesystem Separation waiver-extension bullet mirroring the 2026-09-08
-erratum one — `settlement_supplement_*.json` + `.sha256` under
+**AGENTS.md waiver — DONE (agent, same day).** The Filesystem Separation
+waiver-extension bullet mirroring the 2026-09-08 erratum one was appended
+by the agent after the owner pointed out it was repo documentation, not an
+owner-only workflow file (precedent: agent AGENTS.md edit in `64d113e`):
+`settlement_supplement_*.json` + `.sha256` under
 `data/reports/shadow/<date>/<run>/` and
 `settlement_capture_receipt_completion_*.json` receipts under
 `data/settlement_evidence/` are covered by the small-evidence waiver;
 append-only supplements never modify the original `settlement.json`
 (re-verified marker; decided grades immutable); raw completion capture
-bodies stay out of git as before. The full verbatim bullet is in
-`HANDOFF.md` item 3.
+bodies stay out of git. Nothing remains owner-pasted for this feature
+except any future change under `.github/workflows/`.
 
 The next forward-shadow dispatch runs the completion pass live and commits
 supplements plus completion receipts to `main`; raw completion capture

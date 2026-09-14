@@ -78,6 +78,21 @@ This is NOT a value-betting, odds-first, EV, de-vigging, Kelly, or bookmaker-cov
   the originals, which remain byte-identical and authoritative. All other
   exclusions in the waiver above are unchanged: still never raw capture
   bodies, never `*.tar.gz` archives, never history ledgers.
+- **Waiver extension (2026-09-14, owner directive `build_include_unresolved`):**
+  `settlement_supplement_*.json` + `.sha256` markers under
+  `data/reports/shadow/<date>/<run>/` and
+  `settlement_capture_receipt_completion_*.json` receipts under
+  `data/settlement_evidence/<date>/` are added to the scoped waiver. These
+  are the settlement completion pass's append-only records: they close rows
+  the one-shot D+1 settlement left UNSETTLED/UNRESOLVED (retry window D+1
+  through D+14), and never modify or overwrite the original
+  `settlement.json` — its SHA-256 marker is re-verified before a supplement
+  is written, decided SUCCESS/FAILURE grades are immutable and never
+  re-graded, and every supplement carries its own marker. They are the same
+  small-JSON size class as the `*.settlement.json` files already covered.
+  Raw completion capture bodies (HTML/JSON) remain outside git (30-day
+  Actions artifacts); all other exclusions in the waiver above are
+  unchanged.
 
 ## Change Control
 
