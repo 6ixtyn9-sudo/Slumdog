@@ -331,8 +331,9 @@ settlement grading. Policy:
 
 - **Small receipts** (`settlement_capture_receipt.json`, and the
   completion-pass `settlement_capture_receipt_completion_*.json` added
-  2026-09-14 — see the Settlement completion pass section): commit to git
-  once the owner-pasted workflow glob includes them.
+  2026-09-14 — see the Settlement completion pass section): committed to
+  git; the completion-receipt glob reached the workflow in owner commit
+  `864c56a`.
 - **Large raw bodies** (HTML/JSON capture files): keep out of git; back up
   via GitHub Actions artifacts (30-day retention) or durable object storage.
 - Settlement artifacts (`settlement.json` + `.sha256`) live inside the
@@ -408,33 +409,42 @@ the D+1 backlog and before the forward pass (both gated by `--skip-settlement`;
 re-capture minutes later at the same 04:00 UTC hour cannot have the evening
 results yet; it becomes due at the next dispatch (age D+2). The pass runs
 automatically inside the existing workflow step — no workflow command change
-is needed — but supplements/completion receipts are only **committed** once
-the owner pastes the glob extension below.
+is needed.
 
-**Owner paste required (workflow files stay owner-hand-authored; no workflow
-file was modified by the agent):**
+**Workflow glob extension — DONE (owner commit `864c56a`, 2026-09-14
+12:14 UTC).** The owner hand-edited `.github/workflows/forward_shadow.yml`
+("Update forward_shadow.yml for improved settlement handling", workflow
+file only, 5 insertions/3 deletions); the committed file was verified
+**byte-identical** to the agent-validated replacement (YAML parses; pinned
+action SHAs `checkout@3d3c42e5…`, `setup-python@5fda3b95…`,
+`upload-artifact@043fb46d…a0a` unchanged; trigger still
+`workflow_dispatch` only — the daily ~04:00 UTC run is owner/externally
+dispatched, this file has never carried a `schedule:`). It now (1) adds
+`-o -name 'settlement_supplement_*.json' -o -name
+'settlement_supplement_*.sha256'` to the shadow `find` group and (2)
+extends the evidence find to `\( -name 'settlement_capture_receipt.json'
+-o -name 'settlement_capture_receipt_completion_*.json' \)`. The agent did
+not modify any workflow file. Glob coverage was checked with `fnmatch`,
+including same-second `_2` collision filenames and the `.json.sha256`
+marker shape.
 
-1. `.github/workflows/forward_shadow.yml` line 54 — add the two supplement
-   globs inside the existing `find … \( … \)` expression (before the closing
-   `\) | xargs …`):
-   `-o -name 'settlement_supplement_*.json' -o -name 'settlement_supplement_*.sha256'`
-2. Same file line 55 — replace the single-name receipt find with:
-   `find data/settlement_evidence -type f \( -name 'settlement_capture_receipt.json' -o -name 'settlement_capture_receipt_completion_*.json' \) 2>/dev/null | xargs -r git add -f`
-3. `AGENTS.md` Filesystem Separation — append a 2026-09-14 waiver-extension
-   bullet mirroring the 2026-09-08 erratum one: `settlement_supplement_*.json`
-   + `.sha256` under `data/reports/shadow/<date>/<run>/` and
-   `settlement_capture_receipt_completion_*.json` receipts under
-   `data/settlement_evidence/` are covered by the small-evidence waiver;
-   append-only supplements never modify the original `settlement.json`
-   (re-verified marker; decided grades immutable); raw completion capture
-   bodies stay out of git as before.
+**Remaining (documentation only, non-blocking):** the `AGENTS.md`
+Filesystem Separation waiver-extension bullet mirroring the 2026-09-08
+erratum one — `settlement_supplement_*.json` + `.sha256` under
+`data/reports/shadow/<date>/<run>/` and
+`settlement_capture_receipt_completion_*.json` receipts under
+`data/settlement_evidence/` are covered by the small-evidence waiver;
+append-only supplements never modify the original `settlement.json`
+(re-verified marker; decided grades immutable); raw completion capture
+bodies stay out of git as before. The full verbatim bullet is in
+`HANDOFF.md` item 3.
 
-Until those globs are pasted, supplements are still written inside the
-workflow run and retained in its 30-day artifact, but are not pushed to
-`main`; recovery of the 86+2 backlog is delayed until the paste lands (no
-data loss — the 14-day window is measured from each run's target date; the
-oldest pending date, 2026-09-08, is last eligible at the 2026-09-22 04:00
-UTC dispatch and ages out at the 2026-09-23 dispatch).
+The next forward-shadow dispatch runs the completion pass live and commits
+supplements plus completion receipts to `main`; raw completion capture
+bodies still go only to the 30-day run artifact. The 14-day window is
+measured from each run's target date; the oldest pending date,
+2026-09-08, is last eligible at the 2026-09-22 04:00 UTC dispatch and ages
+out at the 2026-09-23 dispatch.
 
 As of 2026-09-14 the driver's queue (`find_completable_runs`, verified-locally
 against the committed artifacts) holds **137 open rows across 9 settled
