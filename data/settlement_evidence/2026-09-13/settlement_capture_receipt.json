@@ -1,0 +1,75 @@
+{
+  "capture_type": "settlement_evidence",
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-13/football/20260914T040046.917218+0000_9dba8f346386.txt",
+      "bytes": 1591012,
+      "captured_at": "2026-09-14T04:00:46.917218+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-13/football/20260914T040046.917218+0000_9dba8f346386.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-13&ord=0&tz=0&tzs=&tze=",
+      "route": "relay_markdown",
+      "sha256": "9dba8f3463867e7349d8bfa64d5b3ac995868149437513c23d1a77173ee06063",
+      "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-13&ord=0&tz=0&tzs=&tze=",
+      "sport": "football",
+      "target_date": "2026-09-13"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-13/hockey/20260914T040151.325166+0000_ed10afde321b.txt",
+      "bytes": 213648,
+      "captured_at": "2026-09-14T04:01:51.325166+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-13/hockey/20260914T040151.325166+0000_ed10afde321b.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/hockey/predictions/2026-09-13",
+      "route": "relay",
+      "sha256": "ed10afde321b317b0dc0b9e5fe30c6eace1916ec0e5471d8847fdca125aef193",
+      "source_url": "https://www.forebet.com/en/hockey/predictions/2026-09-13",
+      "sport": "hockey",
+      "target_date": "2026-09-13"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-13/baseball/20260914T040255.860142+0000_dc40433f39f4.txt",
+      "bytes": 170905,
+      "captured_at": "2026-09-14T04:02:55.860142+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-13/baseball/20260914T040255.860142+0000_dc40433f39f4.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/baseball/predictions/2026-09-13",
+      "route": "relay",
+      "sha256": "dc40433f39f4a6e7061556386e148cd0875ec1eda333abf07950ccdab2f7bf1e",
+      "source_url": "https://www.forebet.com/en/baseball/predictions/2026-09-13",
+      "sport": "baseball",
+      "target_date": "2026-09-13"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-13/american_football/20260914T040359.937544+0000_002c8344a023.txt",
+      "bytes": 96406,
+      "captured_at": "2026-09-14T04:03:59.937544+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-13/american_football/20260914T040359.937544+0000_002c8344a023.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/american-football/predictions/2026-09-13",
+      "route": "relay",
+      "sha256": "002c8344a023bf5fce3fdd44f603b81948117b1efb8f07c8843b90853a098257",
+      "source_url": "https://www.forebet.com/en/american-football/predictions/2026-09-13",
+      "sport": "american_football",
+      "target_date": "2026-09-13"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-13/rugby/20260914T040504.101797+0000_52c115c0d26e.txt",
+      "bytes": 96410,
+      "captured_at": "2026-09-14T04:05:04.101797+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-13/rugby/20260914T040504.101797+0000_52c115c0d26e.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/rugby/predictions/2026-09-13",
+      "route": "relay",
+      "sha256": "52c115c0d26ed8bc12ac1f6f61d63b3925e9ca8c76c1605613a41477c470e132",
+      "source_url": "https://www.forebet.com/en/rugby/predictions/2026-09-13",
+      "sport": "rugby",
+      "target_date": "2026-09-13"
+    }
+  ],
+  "failures": [
+    "handball:ValueError:target date missing from HTML: 2026-09-13"
+  ],
+  "generated_at": "2026-09-14T04:06:06.361519+00:00",
+  "target_date": "2026-09-13"
+}
