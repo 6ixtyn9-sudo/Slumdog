@@ -20,10 +20,12 @@ from slumdog.shadow_settle import (
     GRADE_UNSETTLED,
     SettlementError,
     _build_event_index,
+    complete_settlement,
     compute_rolling_summary,
     grade_all_entries,
     grade_underdog_win,
     load_prediction_run,
+    load_settlement_supplements,
     settle_run,
     write_settlement_artifact,
 )
@@ -1137,3 +1139,468 @@ class TestFetchSettlementCaptureSportScoping:
         )
         assert receipt["captured"] == []
         assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# Settlement completion pass (append-only supplements, 2026-09-14)
+# ---------------------------------------------------------------------------
+
+
+TARGET = "2026-09-05"
+RUN = "abcd1234efgh5678"
+
+
+def _se(
+    event_id: str,
+    sport: str,
+    *,
+    winner_index,
+    disposition: str = "SETTLED",
+    event_date: str = TARGET,
+    p1: float = 0.6,
+    p2: float = 0.2,
+    draw: float | None = 0.2,
+    participant_1: str = "Home FC",
+    participant_2: str = "Away United",
+    score_1=None,
+    score_2=None,
+):
+    from slumdog.contracts import SettledEvent
+    return SettledEvent(
+        event_id=event_id, sport=sport, event_date=event_date,
+        participant_1=participant_1, participant_2=participant_2,
+        winner_index=winner_index, score_1=score_1, score_2=score_2,
+        probability_1=p1, probability_2=p2, draw_probability=draw,
+        forebet_pick=1, disposition=disposition,
+    )
+
+
+def _settled_fixture(tmp_path, settled_events, *, target_date=TARGET, run_id=RUN,
+                     selections=None, considered_pool=None):
+    """Create a run + a real D+1 settlement.json graded against ``settled_events``."""
+    sel, man = _make_prediction_run(
+        tmp_path, target_date=target_date, run_id=run_id,
+        selections=selections, considered_pool=considered_pool,
+    )
+    grades = grade_all_entries(_build_event_index(sel, man), settled_events, sel, man)
+    result = write_settlement_artifact(
+        target_date=target_date, run_id=run_id, grades=grades,
+        summary=compute_rolling_summary(grades),
+        settlement_receipt={
+            "target_date": target_date, "captured": [], "failures": [],
+        },
+        repo_root=tmp_path, settled_at="2026-09-06T08:00:00Z",
+    )
+    run_dir = Path(result.settlement_artifact_path).parent
+    return sel, man, run_dir
+
+
+def _supplements(run_dir: Path):
+    return sorted(run_dir.glob("settlement_supplement_*.json"))
+
+
+class TestSettlementCompletion:
+    def test_resolves_unsettled_rows_into_supplement(self, tmp_path):
+        # D+1 capture only had football:12345 decided; the other three rows
+        # froze UNSETTLED. The completion capture now carries all results.
+        _settled_fixture(tmp_path, [_se("football:12345", "football", winner_index=2)])
+        run_dir = tmp_path / "data/reports/shadow" / TARGET / RUN
+        original_bytes = (run_dir / "settlement.json").read_bytes()
+
+        fresh = [
+            _se("football:12345", "football", winner_index=2),
+            _se("football:12346", "football", participant_1="City FC",
+                participant_2="Town SC", p1=0.55, p2=0.25,
+                winner_index=0, score_1=1.0, score_2=1.0),
+            _se("basketball:99001", "basketball", draw=None, p1=0.65, p2=0.35,
+                participant_1="Team Alpha", participant_2="Team Beta",
+                winner_index=1, score_1=100.0, score_2=95.0),
+            _se("football:12347", "football", participant_1="East FC",
+                participant_2="West SC", p1=0.62, p2=0.18,
+                winner_index=2, score_1=0.0, score_2=3.0),
+        ]
+        import datetime as _dt
+        out = complete_settlement(
+            target_date=TARGET, run_id=RUN, repo_root=tmp_path,
+            settled_rows_override=fresh, as_of=_dt.date(2026, 9, 8),
+        )
+        assert out.status == "SUPPLEMENT_WRITTEN"
+        assert out.resolved_successes == 1   # rank-4+ football:12347
+        assert out.resolved_failures == 2    # draw + favorite win
+        assert out.still_pending == 0
+        assert len(_supplements(run_dir)) == 1
+        # the original frozen artifact is byte-identical
+        assert (run_dir / "settlement.json").read_bytes() == original_bytes
+
+        payload = json.loads(_supplements(run_dir)[0].read_text())
+        ids = {r["event_id"] for r in payload["rows"]}
+        assert ids == {"football:12346", "basketball:99001", "football:12347"}
+        # already-decided rows are never recomputed, even into a fresh file
+        assert "football:12345" not in ids
+        assert all(r["previous_grade"] == GRADE_UNSETTLED for r in payload["rows"])
+
+    def test_fresh_capture_contradicting_a_decided_grade_is_ignored(self, tmp_path):
+        # football:12345 decided SUCCESS at D+1; a later capture would grade it
+        # FAILURE. The completion pass must never touch the decided row.
+        _settled_fixture(tmp_path, [_se("football:12345", "football", winner_index=2)])
+        run_dir = tmp_path / "data/reports/shadow" / TARGET / RUN
+        original = json.loads((run_dir / "settlement.json").read_text())
+        original_grade = {r["event_id"]: r["grade"] for r in original["grades"]}
+
+        fresh = [
+            _se("football:12345", "football", winner_index=1),  # contradiction
+            _se("football:12347", "football", participant_1="East FC",
+                participant_2="West SC", p1=0.62, p2=0.18, winner_index=2),
+        ]
+        import datetime as _dt
+        out = complete_settlement(
+            target_date=TARGET, run_id=RUN, repo_root=tmp_path,
+            settled_rows_override=fresh, as_of=_dt.date(2026, 9, 8),
+        )
+        assert out.status == "SUPPLEMENT_WRITTEN"
+        assert out.resolved_successes == 1  # 12347 only
+        payload = json.loads(_supplements(run_dir)[0].read_text())
+        assert [r["event_id"] for r in payload["rows"]] == ["football:12347"]
+        # original artifact untouched and still records SUCCESS
+        reread = json.loads((run_dir / "settlement.json").read_text())
+        grades = {r["event_id"]: r["grade"] for r in reread["grades"]}
+        assert grades == original_grade
+        assert grades["football:12345"] == GRADE_SUCCESS
+
+    def test_nothing_pending_writes_nothing(self, tmp_path):
+        fresh = [
+            _se("football:12345", "football", winner_index=2),
+            _se("football:12346", "football", participant_1="City FC",
+                participant_2="Town SC", p1=0.55, p2=0.25, winner_index=0),
+            _se("basketball:99001", "basketball", draw=None, p1=0.65, p2=0.35,
+                participant_1="Team Alpha", participant_2="Team Beta",
+                winner_index=1),
+            _se("football:12347", "football", participant_1="East FC",
+                participant_2="West SC", p1=0.62, p2=0.18, winner_index=2),
+        ]
+        _settled_fixture(tmp_path, fresh)
+        run_dir = tmp_path / "data/reports/shadow" / TARGET / RUN
+        import datetime as _dt
+        out = complete_settlement(
+            target_date=TARGET, run_id=RUN, repo_root=tmp_path,
+            settled_rows_override=fresh, as_of=_dt.date(2026, 9, 8),
+        )
+        assert out.status == "NOTHING_PENDING"
+        assert _supplements(run_dir) == []
+
+    def test_no_new_resolutions_writes_nothing_and_is_idempotent(self, tmp_path):
+        # Everything UNSETTLED at D+1; completion capture still has nothing.
+        _settled_fixture(tmp_path, [])
+        run_dir = tmp_path / "data/reports/shadow" / TARGET / RUN
+        import datetime as _dt
+        for _ in range(2):
+            out = complete_settlement(
+                target_date=TARGET, run_id=RUN, repo_root=tmp_path,
+                settled_rows_override=[], as_of=_dt.date(2026, 9, 8),
+            )
+            assert out.status == "NO_NEW_RESOLUTIONS"
+            assert out.still_pending == 4
+        assert _supplements(run_dir) == []
+
+    def test_second_supplement_closes_remaining_rows(self, tmp_path):
+        # Append-only sequence: supplement 1 closes one row, supplement 2 (a
+        # later dispatch) closes the rest.
+        _settled_fixture(tmp_path, [])
+        run_dir = tmp_path / "data/reports/shadow" / TARGET / RUN
+        import datetime as _dt
+        out1 = complete_settlement(
+            target_date=TARGET, run_id=RUN, repo_root=tmp_path,
+            settled_rows_override=[_se("football:12345", "football", winner_index=2)],
+            as_of=_dt.date(2026, 9, 7), generated_at="2026-09-07T09:00:00Z",
+        )
+        assert out1.status == "SUPPLEMENT_WRITTEN"
+        out2 = complete_settlement(
+            target_date=TARGET, run_id=RUN, repo_root=tmp_path,
+            settled_rows_override=[
+                _se("football:12345", "football", winner_index=2),
+                _se("football:12347", "football", participant_1="East FC",
+                    participant_2="West SC", p1=0.62, p2=0.18, winner_index=2),
+            ],
+            as_of=_dt.date(2026, 9, 8), generated_at="2026-09-08T09:00:00Z",
+        )
+        assert out2.status == "SUPPLEMENT_WRITTEN"
+        files = _supplements(run_dir)
+        assert len(files) == 2
+        # both load and hash-verify; covered keys never reappear
+        loaded = load_settlement_supplements(run_dir)
+        first_ids = {r["event_id"] for r in loaded[0]["rows"]}
+        second_ids = {r["event_id"] for r in loaded[1]["rows"]}
+        assert first_ids == {"football:12345"}
+        assert second_ids == {"football:12347"}
+        assert not (first_ids & second_ids)
+
+    def test_unresolved_from_an_older_artifact_upgrades_to_success(self, tmp_path):
+        # The parser contract always carries a winner for matched events, so
+        # today's pipeline produces recoverable rows as UNSETTLED (no match);
+        # but an UNRESOLVED row committed by ANY code version must still be
+        # retried, and a later capture with a clean identity + result must
+        # upgrade it. Hand-write the legacy artifact to model that state.
+        import hashlib
+        _make_prediction_run(tmp_path, target_date=TARGET, run_id=RUN)
+        run_dir = tmp_path / "data/reports/shadow" / TARGET / RUN
+        grades = [
+            {"sport": "football", "event_id": "football:12345",
+             "event_date": TARGET, "source": "selections",
+             "considered_status": "PRIMARY_SHADOW_SELECTION",
+             "rank_within_sport_day": 1, "underdog_index": 2,
+             "underdog_probability": 0.2, "favorite_index": 1,
+             "favorite_probability": 0.6, "grade": GRADE_SUCCESS,
+             "winner_index": 2, "disposition": "SETTLED", "score_1": 1.0,
+             "score_2": 2.0, "settled_participant_1": "Home FC",
+             "settled_participant_2": "Away United", "match_method":
+             "exact_event_id", "underdog_index_provenance": "entry",
+             "settled_context": {}},
+            {"sport": "football", "event_id": "football:12347",
+             "event_date": TARGET, "source": "considered_pool",
+             "considered_status": "ELIGIBLE_RANKED_BEYOND_TOP3",
+             "rank_within_sport_day": 4, "underdog_index": None,
+             "underdog_probability": None, "favorite_index": None,
+             "favorite_probability": None, "grade": GRADE_UNRESOLVED,
+             "winner_index": None, "disposition": None, "score_1": None,
+             "score_2": None, "settled_participant_1": "",
+             "settled_participant_2": "", "match_method": "no_match",
+             "underdog_index_provenance": "unavailable", "settled_context": {}},
+        ]
+        artifact = {
+            "settlement_schema_version": "shadow_settlement",
+            "target_date": TARGET, "run_id": RUN,
+            "settled_at": "2026-09-06T08:00:00Z",
+            "grading_contract": {"target": "UNDERDOG_WIN"},
+            "metadata_policy": {}, "grades": grades, "summary": {},
+            "settlement_capture_receipt": {},
+        }
+        data = json.dumps(artifact, indent=2, sort_keys=True).encode()
+        (run_dir / "settlement.json").write_bytes(data)
+        (run_dir / "settlement.json.sha256").write_text(
+            f"{hashlib.sha256(data).hexdigest()}  settlement.json\n"
+        )
+
+        import datetime as _dt
+        out = complete_settlement(
+            target_date=TARGET, run_id=RUN, repo_root=tmp_path,
+            settled_rows_override=[
+                _se("football:12347", "football", participant_1="East FC",
+                    participant_2="West SC", p1=0.62, p2=0.18,
+                    winner_index=2, score_1=0.0, score_2=3.0),
+            ],
+            as_of=_dt.date(2026, 9, 8),
+        )
+        assert out.status == "SUPPLEMENT_WRITTEN"
+        row = json.loads(_supplements(run_dir)[0].read_text())["rows"][0]
+        assert row["event_id"] == "football:12347"
+        assert row["grade"] == GRADE_SUCCESS
+        assert row["previous_grade"] == GRADE_UNRESOLVED
+        assert row["resolution_kind"] == "decided"
+
+    def test_void_match_closes_as_terminal_unresolved(self, tmp_path):
+        _settled_fixture(tmp_path, [])
+        run_dir = tmp_path / "data/reports/shadow" / TARGET / RUN
+        import datetime as _dt
+        out = complete_settlement(
+            target_date=TARGET, run_id=RUN, repo_root=tmp_path,
+            settled_rows_override=[
+                _se("football:12346", "football", participant_1="City FC",
+                    participant_2="Town SC", p1=0.55, p2=0.25,
+                    winner_index=0, disposition="VOID"),
+            ],
+            as_of=_dt.date(2026, 9, 8),
+        )
+        assert out.status == "SUPPLEMENT_WRITTEN"
+        assert out.terminal_unresolved == 1
+        row = json.loads(_supplements(run_dir)[0].read_text())["rows"][0]
+        assert row["grade"] == GRADE_UNRESOLVED
+        assert row["resolution_kind"] == "terminal_unresolved"
+        assert row["terminal_reason"] == "void_no_contest_or_cancelled"
+        # the terminal row is no longer retried on the next dispatch
+        again = complete_settlement(
+            target_date=TARGET, run_id=RUN, repo_root=tmp_path,
+            settled_rows_override=[
+                _se("football:12346", "football", participant_1="City FC",
+                    participant_2="Town SC", p1=0.55, p2=0.25,
+                    winner_index=0, disposition="VOID"),
+            ],
+            as_of=_dt.date(2026, 9, 9),
+        )
+        assert again.status == "NO_NEW_RESOLUTIONS"
+        assert len(_supplements(run_dir)) == 1
+
+    def test_anomalous_two_way_draw_is_terminal(self, tmp_path):
+        _settled_fixture(tmp_path, [])
+        run_dir = tmp_path / "data/reports/shadow" / TARGET / RUN
+        import datetime as _dt
+        out = complete_settlement(
+            target_date=TARGET, run_id=RUN, repo_root=tmp_path,
+            settled_rows_override=[
+                _se("basketball:99001", "basketball", draw=None, p1=0.65, p2=0.35,
+                    participant_1="Team Alpha", participant_2="Team Beta",
+                    winner_index=0),
+            ],
+            as_of=_dt.date(2026, 9, 8),
+        )
+        assert out.terminal_unresolved == 1
+        row = json.loads(_supplements(run_dir)[0].read_text())["rows"][0]
+        assert row["event_id"] == "basketball:99001"
+        assert row["terminal_reason"] == "anomalous_draw_two_way_sport"
+
+    def test_unrecoverable_identity_is_terminal_not_refetched_forever(self, tmp_path):
+        # Identity comes from FROZEN pre-event data: if the manifest carries
+        # no probabilities for an event, a later post-event capture cannot
+        # manufacture an underdog, so the matched loss closes as terminal.
+        sel, man = _make_prediction_run(tmp_path, target_date=TARGET, run_id=RUN)
+        man["input_provenance"]["capture_record_tuples"] = [
+            t for t in man["input_provenance"]["capture_record_tuples"]
+            if t[1] != "football:12347"
+        ]
+        # completion reloads the run from disk, so persist the redacted manifest
+        run_dir = tmp_path / "data/reports/shadow" / TARGET / RUN
+        (run_dir / "manifest.json").write_text(json.dumps(man, sort_keys=True))
+        grades = grade_all_entries(_build_event_index(sel, man), [
+            _se("football:12347", "football", participant_1="East FC",
+                participant_2="West SC", p1=0.62, p2=0.18, winner_index=1),
+        ], sel, man)
+        r4 = next(g for g in grades if g.event_id == "football:12347")
+        assert r4.grade == GRADE_UNRESOLVED
+        write_settlement_artifact(
+            target_date=TARGET, run_id=RUN, grades=grades,
+            summary=compute_rolling_summary(grades),
+            settlement_receipt={"target_date": TARGET, "captured": [], "failures": []},
+            repo_root=tmp_path, settled_at="2026-09-06T08:00:00Z",
+        )
+        run_dir = tmp_path / "data/reports/shadow" / TARGET / RUN
+        import datetime as _dt
+        out = complete_settlement(
+            target_date=TARGET, run_id=RUN, repo_root=tmp_path,
+            settled_rows_override=[
+                _se("football:12347", "football", participant_1="East FC",
+                    participant_2="West SC", p1=0.62, p2=0.18, winner_index=1),
+            ],
+            as_of=_dt.date(2026, 9, 8),
+        )
+        assert out.terminal_unresolved == 1
+        row = json.loads(_supplements(run_dir)[0].read_text())["rows"][0]
+        assert row["terminal_reason"] == "underdog_identity_unavailable"
+
+    def test_retry_window_expiry_fetches_no_more(self, tmp_path, monkeypatch):
+        _settled_fixture(tmp_path, [])
+        run_dir = tmp_path / "data/reports/shadow" / TARGET / RUN
+
+        def _boom(*a, **k):
+            raise AssertionError("the window is closed; no capture may run")
+        monkeypatch.setattr(
+            "slumdog.shadow_settle.fetch_settlement_capture", _boom,
+        )
+        import datetime as _dt
+        out = complete_settlement(
+            target_date=TARGET, run_id=RUN, repo_root=tmp_path,
+            as_of=_dt.date(2026, 9, 25),  # 20 days old > 14-day window
+        )
+        assert out.status == "RETRY_WINDOW_EXPIRED"
+        assert out.still_pending == 4
+        assert _supplements(run_dir) == []
+
+    def test_within_window_without_result_is_not_expired(self, tmp_path):
+        # Exactly at the 14-day boundary the row still retries (and, with no
+        # result, reports NO_NEW_RESOLUTIONS rather than expiring).
+        _settled_fixture(tmp_path, [])
+        import datetime as _dt
+        out = complete_settlement(
+            target_date=TARGET, run_id=RUN, repo_root=tmp_path,
+            settled_rows_override=[], as_of=_dt.date(2026, 9, 19),
+        )
+        assert out.status == "NO_NEW_RESOLUTIONS"
+
+    def test_tampered_settlement_fails_closed(self, tmp_path):
+        _settled_fixture(tmp_path, [])
+        run_dir = tmp_path / "data/reports/shadow" / TARGET / RUN
+        (run_dir / "settlement.json").write_bytes(b'{"grades": []}')
+        import datetime as _dt
+        out = complete_settlement(
+            target_date=TARGET, run_id=RUN, repo_root=tmp_path,
+            settled_rows_override=[], as_of=_dt.date(2026, 9, 8),
+        )
+        assert out.status == "COMPLETION_FAILED"
+        assert "marker" in (out.error or "")
+        assert _supplements(run_dir) == []
+
+    def test_missing_settlement_fails_closed(self, tmp_path):
+        # Run exists but was never settled (the D+1 pass owns that).
+        _make_prediction_run(tmp_path, target_date=TARGET, run_id=RUN)
+        import datetime as _dt
+        out = complete_settlement(
+            target_date=TARGET, run_id=RUN, repo_root=tmp_path,
+            settled_rows_override=[], as_of=_dt.date(2026, 9, 8),
+        )
+        assert out.status == "COMPLETION_FAILED"
+
+    def test_supplement_schema_marker_and_original_hash(self, tmp_path):
+        import hashlib
+        _settled_fixture(tmp_path, [_se("football:12345", "football", winner_index=2)])
+        run_dir = tmp_path / "data/reports/shadow" / TARGET / RUN
+        original_sha = hashlib.sha256(
+            (run_dir / "settlement.json").read_bytes()
+        ).hexdigest()
+        import datetime as _dt
+        complete_settlement(
+            target_date=TARGET, run_id=RUN, repo_root=tmp_path,
+            settled_rows_override=[
+                _se("football:12345", "football", winner_index=2),
+                _se("football:12347", "football", participant_1="East FC",
+                    participant_2="West SC", p1=0.62, p2=0.18, winner_index=2),
+            ],
+            as_of=_dt.date(2026, 9, 8),
+        )
+        path = _supplements(run_dir)[0]
+        payload = json.loads(path.read_text())
+        assert payload["settlement_supplement_schema_version"] == (
+            "shadow_settlement_supplement"
+        )
+        assert payload["completes"]["artifact"] == "settlement.json"
+        assert payload["completes"]["artifact_sha256"] == original_sha
+        assert payload["grading_contract"]["target"] == "UNDERDOG_WIN"
+        assert payload["metadata_policy"][
+            "completion_never_modifies_decided_grades"
+        ] is True
+        # marker verifies
+        marker = Path(str(path) + ".sha256").read_text().split()[0]
+        assert marker == hashlib.sha256(path.read_bytes()).hexdigest()
+        # loader agrees
+        assert len(load_settlement_supplements(run_dir)) == 1
+
+    def test_same_second_dispatch_never_overwrites(self, tmp_path):
+        _settled_fixture(tmp_path, [])
+        import datetime as _dt
+        kwargs = dict(
+            target_date=TARGET, run_id=RUN, repo_root=tmp_path,
+            as_of=_dt.date(2026, 9, 8), generated_at="2026-09-08T09:00:00Z",
+        )
+        complete_settlement(
+            **kwargs,
+            settled_rows_override=[_se("football:12345", "football", winner_index=2)],
+        )
+        complete_settlement(
+            **kwargs,
+            settled_rows_override=[_se("football:12346", "football",
+                                      participant_1="City FC", participant_2="Town SC",
+                                      p1=0.55, p2=0.25, winner_index=0)],
+        )
+        files = _supplements(tmp_path / "data/reports/shadow" / TARGET / RUN)
+        assert len(files) == 2
+        assert all(f.suffix == ".json" for f in files)
+
+
+class TestCompletionCLI:
+    def test_complete_offline_without_newer_receipt_is_failure_exit(self, tmp_path):
+        _settled_fixture(tmp_path, [])
+        result = subprocess.run(
+            [sys.executable, "-m", "slumdog.shadow_settle",
+             "--date", TARGET, "--run-id", RUN, "--root", str(tmp_path),
+             "--complete", "--offline"],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 2
+        assert "COMPLETION_FAILED" in result.stdout

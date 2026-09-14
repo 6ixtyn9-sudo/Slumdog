@@ -19,6 +19,18 @@ prediction run, never blocks the forward pass, and is fully isolated
 per date — one date's settlement failure does not affect any other
 date or the forward capture that follows.
 
+The one-shot D+1 settlement runs at 04:00 UTC, so evening
+US-timezone fixtures are often not posted yet and freeze as
+``UNSETTLED`` (and a handful of rows as ``UNRESOLVED``). After the
+D+1 pass the driver therefore runs a bounded **completion pass**
+(``find_completable_runs`` / ``run_completion_for_date``): for each
+recently settled run it re-fetches post-event listings and closes
+open rows with an append-only ``settlement_supplement_*.json``. The
+original ``settlement.json`` is never modified, decided grades are
+never recomputed, and retries stop after
+``DEFAULT_COMPLETION_WINDOW_DAYS`` days. Same isolation guarantees as
+D+1 settlement.
+
 CLI::
 
     python scripts/forward_shadow_batch.py [--dates N] [--root ROOT]
@@ -281,6 +293,228 @@ def run_settlement_backlog(
     return results
 
 
+# ---------------------------------------------------------------------------
+# Settlement completion pass (owner-authorized 2026-09-14): re-grade rows
+# left UNSETTLED/UNRESOLVED by the one-shot D+1 settlement, append-only.
+# ---------------------------------------------------------------------------
+
+DEFAULT_COMPLETION_WINDOW_DAYS = 14
+# Statuses the completion instrument is allowed to revisit. Mirrors
+# slumdog.shadow_settle.OPEN_GRADES — duplicated as data (not imported at
+# module load time) so a broken install shows up as a test failure rather
+# than as an import cycle; the two are pinned together in tests.
+COMPLETION_OPEN_GRADES = frozenset({"UNSETTLED", "UNRESOLVED"})
+
+
+def _completion_pending_count(run_dir: Path) -> int | None:
+    """Open rows in a run's settlement after applying all supplements.
+
+    Returns the pending count (0..n), or ``None`` when the run cannot safely
+    be completed (no settlement.json, or an artifact/supplement that does
+    not parse or hash-verify — the completion instrument itself then fails
+    closed; the driver merely skips scanning it).
+    """
+    import hashlib
+
+    settlement_path = run_dir / "settlement.json"
+    if not settlement_path.is_file():
+        return None
+
+    def _marker_ok(json_path: Path) -> bool:
+        marker = Path(str(json_path) + ".sha256")
+        if not marker.is_file():
+            return False
+        token = marker.read_text().split()
+        return bool(
+            token
+            and token[0].strip().lower()
+            == hashlib.sha256(json_path.read_bytes()).hexdigest()
+        )
+
+    try:
+        if not _marker_ok(settlement_path):
+            return None
+        settlement = json.loads(settlement_path.read_text())
+        grades = settlement.get("grades") if isinstance(settlement, dict) else None
+        if not isinstance(grades, list):
+            return 0
+        covered: set[str] = set()
+        for supplement in sorted(run_dir.glob("settlement_supplement_*.json")):
+            if not _marker_ok(supplement):
+                return None
+            payload = json.loads(supplement.read_text())
+            for row in payload.get("rows", []):
+                covered.add(
+                    f"{row.get('sport')}:{row.get('event_id')}:{row.get('event_date')}"
+                )
+        pending = 0
+        for row in grades:
+            if not isinstance(row, dict):
+                continue
+            if row.get("grade") not in COMPLETION_OPEN_GRADES:
+                continue
+            key = f"{row.get('sport')}:{row.get('event_id')}:{row.get('event_date')}"
+            if key not in covered:
+                pending += 1
+        return pending
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+        return None
+
+
+def find_completable_runs(
+    repo_root: Path,
+    *,
+    as_of: dt.date | None = None,
+    max_age_days: int = DEFAULT_COMPLETION_WINDOW_DAYS,
+) -> list[tuple[str, str, int]]:
+    """Return ``(target_date, run_id, pending_count)`` due for completion.
+
+    A run qualifies when:
+    - it is a completed run (``shadow_selections.json``) with a committed
+      ``settlement.json``;
+    - ``D+1 <= target_date age <= max_age_days`` (never same-day, and only
+      within the bounded retry window);
+    - at least one grade is still UNSETTLED/UNRESOLVED after applying
+      every existing ``settlement_supplement_*.json``.
+
+    Oldest date first. Never raises on malformed artifacts (skips them).
+    """
+    as_of = as_of or dt.datetime.now(dt.timezone.utc).date()
+    shadow_root = repo_root / "data" / "reports" / "shadow"
+    if not shadow_root.is_dir():
+        return []
+    out: list[tuple[str, str, int]] = []
+    for date_dir in sorted(shadow_root.iterdir()):
+        if not date_dir.is_dir() or not _is_target_date_dir(date_dir.name):
+            continue
+        target_date = date_dir.name
+        try:
+            target = dt.date.fromisoformat(target_date)
+        except ValueError:
+            continue
+        age_days = (as_of - target).days
+        if age_days < 1 or age_days > max_age_days:
+            continue
+        for run_dir in sorted(date_dir.iterdir()):
+            if not run_dir.is_dir() or run_dir.name == "BLOCKED":
+                continue
+            if not (run_dir / "shadow_selections.json").is_file():
+                continue
+            if not (run_dir / "settlement.json").is_file():
+                continue  # the D+1 pass owns the first settlement
+            pending = _completion_pending_count(run_dir)
+            if pending:
+                out.append((target_date, run_dir.name, pending))
+    return out
+
+
+def run_completion_for_date(
+    target_date: str,
+    run_id: str,
+    repo_root: Path,
+    *,
+    pause_seconds: int = 62,
+    timeout: int = 45,
+    max_age_days: int = DEFAULT_COMPLETION_WINDOW_DAYS,
+) -> dict:
+    """Run the completion pass for one settled run. Never raises.
+
+    Mirrors :func:`run_settlement_for_date`'s contract: every failure mode
+    (integrity, network, malformed artifact) is recorded in the returned
+    dict, never propagated, so one bad date cannot block another or the
+    forward pass.
+    """
+    from slumdog.shadow_settle import complete_settlement
+
+    result: dict = {
+        "target_date": target_date,
+        "run_id": run_id,
+        "status": "PENDING",
+        "error": None,
+    }
+    try:
+        completion = complete_settlement(
+            target_date=target_date,
+            run_id=run_id,
+            repo_root=repo_root,
+            pause_seconds=pause_seconds,
+            timeout=timeout,
+            max_age_days=max_age_days,
+        )
+        result["status"] = completion.status
+        result["rows_in_supplement"] = completion.rows_in_supplement
+        result["resolved_successes"] = completion.resolved_successes
+        result["resolved_failures"] = completion.resolved_failures
+        result["terminal_unresolved"] = completion.terminal_unresolved
+        result["still_pending"] = completion.still_pending
+        result["supplement_sha256"] = completion.supplement_sha256
+        if completion.error:
+            result["error"] = completion.error
+    except Exception as exc:  # never let one date's failure abort the batch
+        result["status"] = "COMPLETION_FAILED"
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+def run_completion_backlog(
+    repo_root: Path,
+    *,
+    as_of: dt.date | None = None,
+    pause_seconds: int = 62,
+    timeout: int = 45,
+    max_age_days: int = DEFAULT_COMPLETION_WINDOW_DAYS,
+    dry_run: bool = False,
+    skip_dates: set[str] | None = None,
+) -> list[dict]:
+    """Complete every due run with open grades, oldest date first.
+
+    Isolated per date and idempotent: runs with no newly-available result
+    write no file, so this is safe on every scheduled invocation.
+
+    ``skip_dates`` lists dates the D+1 first-settlement pass settled during
+    THIS invocation: re-capturing them minutes later at the same 04:00 UTC
+    hour cannot surface evening US results that were not posted moments ago,
+    so their first completion attempt waits for the next daily dispatch
+    (they are then age D+2).
+    """
+    skip_dates = skip_dates or set()
+    due = [
+        item for item in find_completable_runs(
+            repo_root, as_of=as_of, max_age_days=max_age_days,
+        )
+        if item[0] not in skip_dates
+    ]
+    results = []
+    for i, (target_date, run_id, pending_count) in enumerate(due):
+        if dry_run:
+            results.append({
+                "target_date": target_date,
+                "run_id": run_id,
+                "status": "DRY_RUN",
+                "pending_at_start": pending_count,
+                # Uniform keys with a live result (nothing closes in dry-run,
+                # so every pending row stays pending).
+                "rows_in_supplement": 0,
+                "resolved_successes": 0,
+                "resolved_failures": 0,
+                "terminal_unresolved": 0,
+                "still_pending": pending_count,
+                "supplement_sha256": None,
+                "error": None,
+            })
+            continue
+        if i > 0:
+            time.sleep(pause_seconds)
+        entry = run_completion_for_date(
+            target_date, run_id, repo_root,
+            pause_seconds=pause_seconds, timeout=timeout,
+            max_age_days=max_age_days,
+        )
+        entry["pending_at_start"] = pending_count
+        results.append(entry)
+    return results
+
+
 def run_capture(target_date: str, repo_root: Path, *, pause_seconds: int = 62, timeout: int = 45) -> dict:
     """Capture Forebet listings for a target date.
 
@@ -490,8 +724,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="Show what would be done without executing")
     parser.add_argument("--skip-settlement", action="store_true",
-                        help="Skip the D+1 settlement backlog pass "
-                             "(forward capture only)")
+                        help="Skip BOTH settlement passes — the D+1 first "
+                             "settlement backlog and the completion pass "
+                             "that closes UNSETTLED/UNRESOLVED rows via "
+                             "append-only supplements (forward capture only)")
+    parser.add_argument("--completion-window-days", type=int,
+                        default=DEFAULT_COMPLETION_WINDOW_DAYS,
+                        help=f"Maximum age (days) of a settled run the "
+                             f"completion pass retries "
+                             f"(default {DEFAULT_COMPLETION_WINDOW_DAYS})")
     args = parser.parse_args(argv)
 
     repo_root = args.root.resolve()
@@ -500,6 +741,7 @@ def main(argv: list[str] | None = None) -> int:
     # before capturing/ranking new ones. Isolated per date and fully
     # idempotent — safe on every invocation, including this one.
     settlement_results: list[dict] = []
+    completion_results: list[dict] = []
     if not args.skip_settlement:
         settlement_results = run_settlement_backlog(
             repo_root,
@@ -515,6 +757,41 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"    Error: {sr['error']}", file=sys.stderr)
         else:
             print("Settlement backlog: nothing overdue", file=sys.stderr)
+
+        # Completion pass second: revisit recently settled runs whose
+        # one-shot D+1 grade left rows UNSETTLED/UNRESOLVED (typically
+        # evening US fixtures not posted by 04:00 UTC) and close what a
+        # fresh capture now decides, append-only.
+        just_settled = {
+            sr["target_date"]
+            for sr in settlement_results
+            if sr["status"] == "SETTLED"
+        }
+        completion_results = run_completion_backlog(
+            repo_root,
+            pause_seconds=args.pause_seconds,
+            timeout=args.capture_timeout,
+            dry_run=args.dry_run,
+            # In dry-run the D+1 entries are status DRY_RUN, so this set is
+            # empty there; live, it holds the dates first-settled minutes ago.
+            skip_dates=just_settled,
+            max_age_days=args.completion_window_days,
+        )
+        if completion_results:
+            print(f"Settlement completion: {len(completion_results)} run(s) with open rows", file=sys.stderr)
+            for cr in completion_results:
+                print(
+                    f"  {cr['target_date']} ({cr['run_id']}): {cr['status']} "
+                    f"(+{cr.get('resolved_successes', 0)}W "
+                    f"+{cr.get('resolved_failures', 0)}L, "
+                    f"{cr.get('terminal_unresolved', 0)} terminal, "
+                    f"{cr.get('still_pending', 0)} still pending)",
+                    file=sys.stderr,
+                )
+                if cr.get("error"):
+                    print(f"    Error: {cr['error']}", file=sys.stderr)
+        else:
+            print("Settlement completion: nothing due", file=sys.stderr)
 
     targets = compute_target_dates(args.dates)
     print(f"Forward shadow batch: {len(targets)} dates starting from {targets[0]}", file=sys.stderr)
@@ -548,6 +825,7 @@ def main(argv: list[str] | None = None) -> int:
         "target_dates": targets,
         "results": results,
         "settlement_backlog": settlement_results,
+        "settlement_completion": completion_results,
         "summary": {
             "total": len(results),
             "completed": sum(1 for r in results if r["status"] == "COMPLETED"),
@@ -560,6 +838,22 @@ def main(argv: list[str] | None = None) -> int:
             ),
             "settlement_backlog_failed": sum(
                 1 for r in settlement_results if r["status"] == "SETTLEMENT_FAILED"
+            ),
+            "settlement_completion_runs": len(completion_results),
+            "settlement_completion_supplements": sum(
+                1 for r in completion_results if r["status"] == "SUPPLEMENT_WRITTEN"
+            ),
+            "settlement_completion_resolved_successes": sum(
+                r.get("resolved_successes", 0) for r in completion_results
+            ),
+            "settlement_completion_resolved_failures": sum(
+                r.get("resolved_failures", 0) for r in completion_results
+            ),
+            "settlement_completion_terminal_unresolved": sum(
+                r.get("terminal_unresolved", 0) for r in completion_results
+            ),
+            "settlement_completion_failed": sum(
+                1 for r in completion_results if r["status"] == "COMPLETION_FAILED"
             ),
         },
     }

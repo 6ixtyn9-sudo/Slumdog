@@ -329,7 +329,10 @@ Next: (1) owner sign-off + merge of arena/01a07741-slumdog PR
 `data/settlement_evidence/` holds post-event Forebet captures used for
 settlement grading. Policy:
 
-- **Small receipts** (`settlement_capture_receipt.json`): commit to git.
+- **Small receipts** (`settlement_capture_receipt.json`, and the
+  completion-pass `settlement_capture_receipt_completion_*.json` added
+  2026-09-14 — see the Settlement completion pass section): commit to git
+  once the owner-pasted workflow glob includes them.
 - **Large raw bodies** (HTML/JSON capture files): keep out of git; back up
   via GitHub Actions artifacts (30-day retention) or durable object storage.
 - Settlement artifacts (`settlement.json` + `.sha256`) live inside the
@@ -338,6 +341,127 @@ settlement grading. Policy:
 This mirrors the existing raw-capture policy: raw bytes are large and
 immutable; receipts and summaries are small and valuable for
 reproducibility.
+
+## Settlement completion pass (owner-authorized 2026-09-14; implemented same day)
+
+**The one-shot D+1 settlement at 04:00 UTC froze rows before late US fixtures
+finished, and `find_settleable_run` never revisits a run with a
+`settlement.json`.** Census of the six settled dates 2026-09-08…09-13 (grade
+rows vs each artifact's own `summary` — they match): **86 UNSETTLED + 2
+UNRESOLVED** rows are still open (UNSETTLED per date 09-08…13: 1, 0, 9, 5,
+41, 30; the 2 UNRESOLVED on 09-12 are both rank-4+ `VOID` matches
+`football:2481333`, `football:2516375`). The owner decision
+(`build_include_unresolved`, 2026-09-14) was to build an append-only
+completion pass that retries **both** UNSETTLED and UNRESOLVED rows, upgrading
+an UNRESOLVED row only when a fresh capture yields a clean identity plus a
+result, and never touching decided grades.
+
+Instrument (`src/slumdog/shadow_settle.py`):
+
+- New `complete_settlement(...)` (never raises; returns `CompletionResult`
+  with status `NOT_DUE` / `NOTHING_PENDING` / `RETRY_WINDOW_EXPIRED` /
+  `NO_NEW_RESOLUTIONS` / `SUPPLEMENT_WRITTEN` / `COMPLETION_FAILED`).
+- Window: run age D+1…**14 days** (`COMPLETION_RETRY_WINDOW_DAYS`;
+  `--completion-window-days` on both CLIs). Same-day is `NOT_DUE`; past 14
+  days no capture is attempted and rows stay as frozen.
+- Writes **append-only supplements**, never touching `settlement.json`:
+  `data/reports/shadow/<date>/<run>/settlement_supplement_<UTCstamp>.json`
+  (+ `.sha256`; canonical bytes, atomic `os.replace`, same-second collision
+  suffix). Payload: `settlement_supplement_schema_version:
+  "shadow_settlement_supplement"`, `completes.{artifact, artifact_sha256,
+  marker}` binding to the original, the copied grading contract, an explicit
+  append-only `metadata_policy`, full grade rows (serialized through the same
+  shared `grade_to_dict` the D+1 writer uses, so row shape cannot drift) plus
+  `previous_grade` / `resolution_kind` / optional `terminal_reason`, a
+  supplement `summary`, and the fresh completion capture receipt.
+- **Fail-closed integrity:** the original marker is re-verified before
+  anything is written (`load_verified_settlement`); every earlier supplement
+  is hash-verified (`load_settlement_supplements`) and its row keys excluded;
+  a bad/missing marker → `COMPLETION_FAILED`, no supplement.
+- Re-grade rules: fresh SUCCESS/FAILURE on an open row closes it
+  (`resolution_kind: decided`); fresh UNSETTLED, or UNRESOLVED with
+  `match_method == no_match`, or a matched event with no winner yet, stays
+  pending and writes nothing; matched rows that cannot change later close as
+  **terminal UNRESOLVED** with reason `void_no_contest_or_cancelled`,
+  `anomalous_draw_two_way_sport`, `underdog_identity_unavailable` (identity
+  derives from frozen *pre-event* data and cannot be fixed post-event), or
+  `ungradeable_result` — so the relay is not fetched forever for them.
+  Decided rows are never re-fed to grading, even when the fresh capture
+  contradicts them.
+- Fresh captures are scoped to the sports of pending rows and write
+  **separate receipts** so the embedded D+1 receipt is never overwritten:
+  `data/settlement_evidence/<date>/settlement_capture_receipt_completion_<stamp>.json`
+  (`fetch_settlement_capture(..., receipt_name=...)`, receipt carries
+  `capture_purpose: settlement_completion`). CLI:
+  `python -m slumdog.shadow_settle --date … --run-id … --complete
+  [--offline --settlement-receipt …] [--completion-window-days N]`
+  (exit 2 only on `COMPLETION_FAILED`).
+
+Driver (`scripts/forward_shadow_batch.py`): `find_completable_runs()` lists
+settled runs D+1…14 with open rows after applying all supplements
+(oldest first; hash-verified; malformed runs skipped, never raised),
+`run_completion_for_date()` / `run_completion_backlog()` mirror the D+1
+per-date isolation contract, and `main()` runs the completion backlog after
+the D+1 backlog and before the forward pass (both gated by `--skip-settlement`;
+`--dry-run` supported; counts land in `forward_batch_receipt.json`). A date
+**first-settled during the same invocation is skipped** (`skip_dates`): a
+re-capture minutes later at the same 04:00 UTC hour cannot have the evening
+results yet; it becomes due at the next dispatch (age D+2). The pass runs
+automatically inside the existing workflow step — no workflow command change
+is needed — but supplements/completion receipts are only **committed** once
+the owner pastes the glob extension below.
+
+**Owner paste required (workflow files stay owner-hand-authored; no workflow
+file was modified by the agent):**
+
+1. `.github/workflows/forward_shadow.yml` line 54 — add the two supplement
+   globs inside the existing `find … \( … \)` expression (before the closing
+   `\) | xargs …`):
+   `-o -name 'settlement_supplement_*.json' -o -name 'settlement_supplement_*.sha256'`
+2. Same file line 55 — replace the single-name receipt find with:
+   `find data/settlement_evidence -type f \( -name 'settlement_capture_receipt.json' -o -name 'settlement_capture_receipt_completion_*.json' \) 2>/dev/null | xargs -r git add -f`
+3. `AGENTS.md` Filesystem Separation — append a 2026-09-14 waiver-extension
+   bullet mirroring the 2026-09-08 erratum one: `settlement_supplement_*.json`
+   + `.sha256` under `data/reports/shadow/<date>/<run>/` and
+   `settlement_capture_receipt_completion_*.json` receipts under
+   `data/settlement_evidence/` are covered by the small-evidence waiver;
+   append-only supplements never modify the original `settlement.json`
+   (re-verified marker; decided grades immutable); raw completion capture
+   bodies stay out of git as before.
+
+Until those globs are pasted, supplements are still written inside the
+workflow run and retained in its 30-day artifact, but are not pushed to
+`main`; recovery of the 86+2 backlog is delayed until the paste lands (no
+data loss — the 14-day window is measured from each run's target date; the
+oldest pending date, 2026-09-08, is last eligible at the 2026-09-22 04:00
+UTC dispatch and ages out at the 2026-09-23 dispatch).
+
+As of 2026-09-14 the driver's queue (`find_completable_runs`, verified-locally
+against the committed artifacts) holds **137 open rows across 9 settled
+runs**: the 88 on 09-08…13 above, plus 49 on the older in-window dates —
+09-02: 2, 09-05: 24, 09-06: 21, 09-07: 2. Those 49 comprise **16 exact-match
+`VOID` rows** (the pass closes them terminal-UNRESOLVED with
+`void_no_contest_or_cancelled`) and **33 `no_match` UNSETTLED rank-4+ rows**
+(Forebet rotates old listings, so most will never re-match and simply age out
+at the window; writing nothing is the designed outcome). These supplements do
+**not** interact with the rank-4+ errata: errata restate *decided* grades and
+live under `data/reports/shadow/errata/<date>/`; supplements only close rows
+that were never decided, in the run directory. At the 2026-09-15 dispatch all
+9 runs are still in window (oldest, 09-02, is age 12; last eligible dispatch
+for it is 2026-09-16).
+
+Tests (verified-locally, Python 3.11 venv): **972 passed in 51.24s, exit 0**
+(bare `.venv/bin/pytest`; +36 vs the 936 baseline — 16 in
+`tests/test_shadow_settle.py`, 20 in `tests/test_forward_shadow_batch.py`),
+covering happy-path late results, decided-grade immutability under
+contradiction, two-supplement append sequences and dedupe, no-match/no-result
+staying pending, void/anomalous-draw/unrecoverable-identity terminal reasons,
+UNRESOLVED-from-an-older-artifact upgrading to SUCCESS, marker tampering and
+missing artifacts failing closed, window boundaries, NOTHING_PENDING
+idempotence, same-second filename collisions, queue filtering/window/dry-run/
+failure isolation in the driver, and the OPEN_GRADES vocabulary pin.
+`py_compile` ok; pyflakes **0** warnings under `src/` and `scripts/`;
+`git diff --check` ok.
 
 ## Rank-4+ Settlement Erratum (2026-09-07; extended 2026-09-08; scope narrowed 2026-09-14)
 

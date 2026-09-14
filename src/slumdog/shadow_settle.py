@@ -49,6 +49,7 @@ import json
 import math
 import os
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -301,6 +302,7 @@ def fetch_settlement_capture(
     pause_seconds: int = 62,
     timeout: int = 45,
     sports: list[str] | None = None,
+    receipt_name: str | None = None,
 ) -> dict[str, Any]:
     """Fetch post-event Forebet listings for sports on ``target_date``.
 
@@ -394,10 +396,19 @@ def fetch_settlement_capture(
         "target_date": target_date,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "capture_type": "settlement_evidence",
+        # ``settlement`` for the one-shot D+1 capture (the committed
+        # ``settlement_capture_receipt.json``); ``settlement_completion`` for a
+        # later completion-pass re-capture, which must NOT overwrite the D+1
+        # receipt already embedded in settlement.json.
+        "capture_purpose": (
+            "settlement_completion" if receipt_name is not None else "settlement"
+        ),
         "captured": [asdict(item) for item in captured],
         "failures": failures,
     }
-    receipt_path = evidence_root / "settlement_capture_receipt.json"
+    receipt_path = evidence_root / (
+        receipt_name or "settlement_capture_receipt.json"
+    )
     receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True))
     return receipt
 
@@ -921,6 +932,40 @@ class SettlementResult:
     settlement_capture_receipt: dict[str, Any]
 
 
+def grade_to_dict(g: SettlementGrade) -> dict[str, Any]:
+    """Serialise one grade with the exact key set committed in settlement.json.
+
+    Both the one-shot D+1 artifact and the completion-pass supplements use
+    this, so a supplement row can never drift in shape from the rows it
+    completes.
+    """
+    return {
+        "sport": g.sport,
+        "event_id": g.event_id,
+        "event_date": g.event_date,
+        "source": g.source,
+        "considered_status": g.considered_status,
+        "rank_within_sport_day": g.rank_within_sport_day,
+        "underdog_index": g.underdog_index,
+        "underdog_probability": g.underdog_probability,
+        "favorite_index": g.favorite_index,
+        "favorite_probability": g.favorite_probability,
+        "grade": g.grade,
+        "winner_index": g.winner_index,
+        "disposition": g.disposition,
+        "score_1": g.score_1,
+        "score_2": g.score_2,
+        "settled_participant_1": g.settled_participant_1,
+        "settled_participant_2": g.settled_participant_2,
+        "match_method": g.match_method,
+        "underdog_index_provenance": g.underdog_index_provenance,
+        # Post-event display/audit context (Forebet pick, league, all three
+        # board prices, published probabilities, period scores, curated
+        # facets). Metadata only — see metadata_policy below.
+        "settled_context": g.settled_context,
+    }
+
+
 def write_settlement_artifact(
     *,
     target_date: str,
@@ -954,33 +999,7 @@ def write_settlement_artifact(
     )
 
     # Build the settlement payload
-    grade_dicts = []
-    for g in grades:
-        grade_dicts.append({
-            "sport": g.sport,
-            "event_id": g.event_id,
-            "event_date": g.event_date,
-            "source": g.source,
-            "considered_status": g.considered_status,
-            "rank_within_sport_day": g.rank_within_sport_day,
-            "underdog_index": g.underdog_index,
-            "underdog_probability": g.underdog_probability,
-            "favorite_index": g.favorite_index,
-            "favorite_probability": g.favorite_probability,
-            "grade": g.grade,
-            "winner_index": g.winner_index,
-            "disposition": g.disposition,
-            "score_1": g.score_1,
-            "score_2": g.score_2,
-            "settled_participant_1": g.settled_participant_1,
-            "settled_participant_2": g.settled_participant_2,
-            "match_method": g.match_method,
-            "underdog_index_provenance": g.underdog_index_provenance,
-            # Post-event display/audit context (Forebet pick, league, all three
-            # board prices, published probabilities, period scores, curated
-            # facets). Metadata only — see metadata_policy below.
-            "settled_context": g.settled_context,
-        })
+    grade_dicts = [grade_to_dict(g) for g in grades]
 
     settlement_payload = {
         "settlement_schema_version": "shadow_settlement",
@@ -1039,7 +1058,6 @@ def write_settlement_artifact(
     payload_bytes = canonical_json_bytes(settlement_payload)
 
     # Atomic write
-    import tempfile
     fd, tmp = tempfile.mkstemp(
         prefix="settlement.", suffix=".json.tmp", dir=str(run_dir),
     )
@@ -1173,6 +1191,455 @@ def settle_run(
 
 
 # ---------------------------------------------------------------------------
+# Settlement completion pass (append-only supplements, 2026-09-14)
+# ---------------------------------------------------------------------------
+#
+# The one-shot D+1 settlement runs at 04:00 UTC the day after the target
+# date. Evening US-timezone fixtures are often still in play or not yet
+# posted at that hour, so grade_all_entries records them UNSETTLED and the
+# D+1 artifact is then frozen forever: find_settleable_run never revisits a
+# run that has a settlement.json. Rows can also stay UNRESOLVED when the
+# first capture carries no result yet.
+#
+# The completion pass re-fetches ONLY while a run is inside a bounded retry
+# window and writes what it finds into append-only supplements:
+#
+#     data/reports/shadow/<date>/<run>/settlement_supplement_<stamp>.json
+#     data/reports/shadow/<date>/<run>/settlement_supplement_<stamp>.json.sha256
+#
+# Invariants (test-pinned):
+#   * the original settlement.json and its marker are never modified; the
+#     original marker is re-verified before a supplement is written;
+#   * only rows whose current grade is UNSETTLED/UNRESOLVED are retried,
+#     and only rows still open after earlier supplements;
+#   * a SUCCESS/FAILURE in the original or an earlier supplement is NEVER
+#     recomputed or overwritten, even if the fresh capture contradicts it;
+#   * genuinely missing results stay UNSETTLED/UNRESOLVED and are retried
+#     on later dispatches until the window closes;
+#   * void/no-contest/cancelled events, anomalous draws in two-way sports,
+#     and rows whose underdog identity the frozen pre-event data cannot
+#     resolve close as terminal UNRESOLVED (with a reason) so they are not
+#     fetched forever;
+#   * the grading contract, R2 rule, thresholds and config are untouched.
+
+SUPPLEMENT_SCHEMA_VERSION = "shadow_settlement_supplement"
+COMPLETION_RETRY_WINDOW_DAYS = 14
+
+# Dispositions for which an event is permanently excluded from grading — a
+# later capture cannot turn a void/no-contest into a result.
+TERMINAL_VOID_DISPOSITIONS = frozenset({
+    "VOID", "NO_CONTEST", "CANCELLED", "ABANDONED", "ABANDON",
+})
+
+# Statuses the completion pass is allowed to revisit.
+OPEN_GRADES = frozenset({GRADE_UNSETTLED, GRADE_UNRESOLVED})
+
+# resolution_kind values in supplement rows:
+RESOLUTION_DECIDED = "decided"              # fresh grade SUCCESS/FAILURE
+RESOLUTION_TERMINAL_UNRESOLVED = "terminal_unresolved"
+
+
+@dataclass(frozen=True)
+class CompletionResult:
+    target_date: str
+    run_id: str
+    status: str
+    supplement_path: str | None = None
+    supplement_sha256: str | None = None
+    rows_in_supplement: int = 0
+    resolved_successes: int = 0
+    resolved_failures: int = 0
+    terminal_unresolved: int = 0
+    still_pending: int = 0
+    error: str | None = None
+
+
+def _composite_key(sport: str, event_id: str, event_date: str) -> str:
+    return f"{sport}:{event_id}:{event_date}"
+
+
+def load_verified_settlement(run_dir: Path) -> dict[str, Any]:
+    """Load a committed ``settlement.json`` after checking its marker.
+
+    Fails closed on a missing artifact/marker or a hash mismatch: a
+    supplement must never be written next to a settlement whose integrity
+    cannot be established.
+    """
+    artifact = run_dir / "settlement.json"
+    marker = run_dir / "settlement.json.sha256"
+    if not artifact.is_file():
+        raise SettlementError(f"settlement artifact not found: {artifact}")
+    if not marker.is_file():
+        raise SettlementError(f"settlement marker not found: {marker}")
+    tokens = marker.read_text().split()
+    if not tokens:
+        raise SettlementError(f"empty settlement marker: {marker}")
+    expected = tokens[0].strip().lower()
+    actual = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    if expected != actual:
+        raise SettlementError(
+            f"settlement marker mismatch for {artifact}: marker={expected[:12]} "
+            f"actual={actual[:12]} — refusing to write a supplement"
+        )
+    payload = json.loads(artifact.read_text())
+    if not isinstance(payload, dict) or not isinstance(payload.get("grades"), list):
+        raise SettlementError(f"malformed settlement payload: {artifact}")
+    return payload
+
+
+def load_settlement_supplements(run_dir: Path) -> list[dict[str, Any]]:
+    """Load every ``settlement_supplement_*.json`` after hash verification.
+
+    A missing/mismatched marker or malformed supplement fails closed — an
+    unverifiable supplement must not silently suppress a retry.
+    """
+    out: list[dict[str, Any]] = []
+    for path in sorted(run_dir.glob("settlement_supplement_*.json")):
+        marker = Path(str(path) + ".sha256")
+        if not marker.is_file():
+            raise SettlementError(f"supplement marker not found: {marker}")
+        tokens = marker.read_text().split()
+        if not tokens or tokens[0].strip().lower() != hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest():
+            raise SettlementError(f"supplement marker mismatch: {path}")
+        payload = json.loads(path.read_text())
+        if not isinstance(payload, dict) or not isinstance(payload.get("rows"), list):
+            raise SettlementError(f"malformed supplement payload: {path}")
+        out.append(payload)
+    return out
+
+
+def _supplement_covered_keys(supplements: list[dict[str, Any]]) -> set[str]:
+    """Composite keys already closed by an earlier supplement."""
+    covered: set[str] = set()
+    for supplement in supplements:
+        for row in supplement.get("rows", []):
+            covered.add(_composite_key(
+                str(row.get("sport", "")),
+                str(row.get("event_id", "")),
+                str(row.get("event_date", "")),
+            ))
+    return covered
+
+
+def _pending_rows(
+    settlement: dict[str, Any],
+    covered: set[str],
+) -> list[dict[str, Any]]:
+    """Open grade rows that no supplement has closed yet."""
+    pending: list[dict[str, Any]] = []
+    for row in settlement.get("grades", []):
+        if row.get("grade") not in OPEN_GRADES:
+            continue
+        key = _composite_key(
+            str(row.get("sport", "")),
+            str(row.get("event_id", "")),
+            str(row.get("event_date", "")),
+        )
+        if key in covered:
+            continue
+        pending.append(row)
+    return pending
+
+
+def _terminal_unresolved_reason(fresh: SettlementGrade) -> str:
+    """Why a matched-but-ungradeable row may be closed, assuming it has one.
+
+    Caller first excludes genuinely-not-ready rows (no match or a matched
+    event with no winner posted yet), which stay pending.
+    """
+    disp = (fresh.disposition or "SETTLED").upper()
+    if disp in TERMINAL_VOID_DISPOSITIONS:
+        return "void_no_contest_or_cancelled"
+    if fresh.winner_index == 0:
+        # draw_possible sports grade a draw FAILURE before reaching here; a
+        # winner of 0 in a two-way sport is an anomalous draw that cannot
+        # grade UNDERDOG_WIN and will not change on re-fetch.
+        return "anomalous_draw_two_way_sport"
+    if fresh.underdog_index not in (1, 2):
+        # Identity is re-derived from frozen PRE-event data; if it cannot be
+        # resolved now, a later post-event capture cannot fix it.
+        return "underdog_identity_unavailable"
+    return "ungradeable_result"
+
+
+def write_settlement_supplement(
+    *,
+    target_date: str,
+    run_id: str,
+    original: dict[str, Any],
+    original_sha256: str,
+    rows: list[dict[str, Any]],
+    summary: dict[str, Any],
+    fresh_receipt: dict[str, Any],
+    run_dir: Path,
+    retry_window_days: int,
+    generated_at: str,
+) -> tuple[Path, str]:
+    """Write one append-only supplement + marker atomically. Never overwrites.
+
+    Returns ``(supplement_path, sha256)``.
+    """
+    payload = {
+        "settlement_supplement_schema_version": SUPPLEMENT_SCHEMA_VERSION,
+        "target_date": target_date,
+        "run_id": run_id,
+        "generated_at": generated_at,
+        "retry_window_days": retry_window_days,
+        "completes": {
+            "artifact": "settlement.json",
+            "artifact_sha256": original_sha256,
+            "marker": "settlement.json.sha256",
+        },
+        "grading_contract": original.get("grading_contract", {}),
+        "metadata_policy": {
+            **(original.get("metadata_policy") or {}),
+            "append_only_completion": True,
+            "completion_never_modifies_decided_grades": True,
+            "only_open_rows_completed": sorted(OPEN_GRADES),
+            "note": (
+                "This supplement only closes rows listed here, each of which "
+                "was UNSETTLED or UNRESOLVED in the original settlement.json "
+                "(or remains so after this pass). Decided grades in the "
+                "original and earlier supplements are immutable and are not "
+                "recalculated. settled_context stays display-only metadata."
+            ),
+        },
+        "rows": sorted(
+            rows,
+            key=lambda d: (d["sport"], d["event_date"], d["event_id"],
+                           d.get("rank_within_sport_day") or 999),
+        ),
+        "summary": summary,
+        "settlement_capture_receipt": fresh_receipt,
+    }
+    payload_bytes = canonical_json_bytes(payload)
+
+    stamp = generated_at.replace("-", "").replace(":", "").replace("+00:00", "")
+    base = f"settlement_supplement_{stamp}"
+    candidate = run_dir / f"{base}.json"
+    n = 2
+    while candidate.exists():  # same-second dispatches must not overwrite
+        candidate = run_dir / f"{base}_{n}.json"
+        n += 1
+
+    fd, tmp = tempfile.mkstemp(prefix="supplement.", suffix=".json.tmp",
+                               dir=str(run_dir))
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload_bytes)
+        os.replace(tmp, candidate)
+    except Exception:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+    digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+    Path(str(candidate) + ".sha256").write_text(
+        f"{digest}  {candidate.name}\n"
+    )
+    return candidate, digest
+
+
+def complete_settlement(
+    *,
+    target_date: str,
+    run_id: str,
+    repo_root: str | Path,
+    offline: bool = False,
+    settlement_receipt_path: str | Path | None = None,
+    settled_rows_override: list[SettledEvent] | None = None,
+    as_of: _dt.date | None = None,
+    max_age_days: int = COMPLETION_RETRY_WINDOW_DAYS,
+    pause_seconds: int = 62,
+    timeout: int = 45,
+    sports: list[str] | None = None,
+    generated_at: str | None = None,
+) -> CompletionResult:
+    """Re-grade rows left open by the one-shot D+1 settlement (never raises
+    :class:`SettlementError` to callers — returns a result with a status;
+    unexpected failures are returned as ``COMPLETION_FAILED`` so the batch
+    driver's isolation contract holds).
+    """
+    repo_root = Path(repo_root).resolve()
+    run_dir = (
+        repo_root / "data" / "reports" / "shadow" / target_date / run_id
+    )
+    as_of = as_of or _dt.datetime.now(_dt.timezone.utc).date()
+    try:
+        target = _dt.date.fromisoformat(target_date)
+    except ValueError:
+        return CompletionResult(
+            target_date, run_id, "COMPLETION_FAILED",
+            error=f"bad target_date {target_date!r}",
+        )
+    age_days = (as_of - target).days
+    if age_days < 1:
+        return CompletionResult(target_date, run_id, "NOT_DUE")
+
+    try:
+        original = load_verified_settlement(run_dir)
+        supplements = load_settlement_supplements(run_dir)
+        covered = _supplement_covered_keys(supplements)
+        pending = _pending_rows(original, covered)
+        if not pending:
+            return CompletionResult(target_date, run_id, "NOTHING_PENDING")
+        if age_days > max_age_days:
+            return CompletionResult(
+                target_date, run_id, "RETRY_WINDOW_EXPIRED",
+                still_pending=len(pending),
+            )
+
+        # Fresh evidence -------------------------------------------------
+        if settled_rows_override is not None:
+            settled_rows = list(settled_rows_override)
+            fresh_receipt: dict[str, Any] = {
+                "target_date": target_date,
+                "capture_type": "settlement_evidence",
+                "capture_purpose": "settlement_completion",
+                "generated_at": generated_at
+                or _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                "captured": [],
+                "failures": [],
+                "injected_for_testing": True,
+            }
+        elif offline:
+            if settlement_receipt_path is None:
+                return CompletionResult(
+                    target_date, run_id, "COMPLETION_FAILED",
+                    still_pending=len(pending),
+                    error="offline completion requires an explicit newer "
+                          "settlement receipt (--settlement-receipt)",
+                )
+            fresh_receipt = load_settlement_receipt(
+                target_date, repo_root, Path(settlement_receipt_path),
+            )
+            settled_rows = parse_settled_from_receipt(fresh_receipt, repo_root)
+        else:
+            pending_sports = sorted({r.get("sport") for r in pending
+                                     if r.get("sport")})
+            stamp = _dt.datetime.now(_dt.timezone.utc).strftime(
+                "%Y%m%dT%H%M%SZ"
+            )
+            receipt_name = (
+                f"settlement_capture_receipt_completion_{stamp}.json"
+            )
+            fresh_receipt = fetch_settlement_capture(
+                target_date, repo_root,
+                pause_seconds=pause_seconds, timeout=timeout,
+                sports=sports if sports is not None else pending_sports,
+                receipt_name=receipt_name,
+            )
+            settled_rows = parse_settled_from_receipt(fresh_receipt, repo_root)
+
+        # Grade against the frozen run with the fresh capture ------------
+        selections_payload, manifest = load_prediction_run(
+            target_date, run_id, repo_root,
+        )
+        event_index = _build_event_index(selections_payload, manifest)
+        fresh_grades = grade_all_entries(
+            event_index, settled_rows, selections_payload, manifest,
+        )
+        fresh_by_key = {
+            _composite_key(g.sport, g.event_id, g.event_date): g
+            for g in fresh_grades
+        }
+
+        closed_rows: list[dict[str, Any]] = []
+        n_success = n_failure = n_terminal = 0
+        for row in pending:
+            key = _composite_key(
+                str(row.get("sport", "")),
+                str(row.get("event_id", "")),
+                str(row.get("event_date", "")),
+            )
+            fresh = fresh_by_key.get(key)
+            if fresh is None:
+                continue
+            if fresh.grade in (GRADE_SUCCESS, GRADE_FAILURE):
+                out = grade_to_dict(fresh)
+                out["previous_grade"] = row.get("grade")
+                out["resolution_kind"] = RESOLUTION_DECIDED
+                closed_rows.append(out)
+                if fresh.grade == GRADE_SUCCESS:
+                    n_success += 1
+                else:
+                    n_failure += 1
+                continue
+            if fresh.grade == GRADE_UNSETTLED:
+                continue  # result still not posted
+            # fresh UNRESOLVED:
+            if fresh.match_method == "no_match":
+                continue  # event absent from the fresh listing; retry later
+            # A matched event with no winner posted yet is not ready; a
+            # missing identity or a terminal disposition is.
+            disp = (fresh.disposition or "SETTLED").upper()
+            if (
+                fresh.winner_index is None
+                and disp not in TERMINAL_VOID_DISPOSITIONS
+            ):
+                continue
+            reason = _terminal_unresolved_reason(fresh)
+            out = grade_to_dict(fresh)
+            out["previous_grade"] = row.get("grade")
+            out["resolution_kind"] = RESOLUTION_TERMINAL_UNRESOLVED
+            out["terminal_reason"] = reason
+            closed_rows.append(out)
+            n_terminal += 1
+
+        still_pending = len(pending) - len(closed_rows)
+        if not closed_rows:
+            return CompletionResult(
+                target_date, run_id, "NO_NEW_RESOLUTIONS",
+                still_pending=still_pending,
+            )
+
+        generated = generated_at or _dt.datetime.now(_dt.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        original_sha = hashlib.sha256(
+            (run_dir / "settlement.json").read_bytes()
+        ).hexdigest()
+        summary = {
+            "pending_at_start": len(pending),
+            "rows_in_supplement": len(closed_rows),
+            "resolved_successes": n_success,
+            "resolved_failures": n_failure,
+            "terminal_unresolved": n_terminal,
+            "still_pending": still_pending,
+        }
+        path, digest = write_settlement_supplement(
+            target_date=target_date, run_id=run_id,
+            original=original, original_sha256=original_sha,
+            rows=closed_rows, summary=summary, fresh_receipt=fresh_receipt,
+            run_dir=run_dir, retry_window_days=max_age_days,
+            generated_at=generated,
+        )
+        return CompletionResult(
+            target_date, run_id, "SUPPLEMENT_WRITTEN",
+            supplement_path=str(path), supplement_sha256=digest,
+            rows_in_supplement=len(closed_rows),
+            resolved_successes=n_success,
+            resolved_failures=n_failure,
+            terminal_unresolved=n_terminal,
+            still_pending=still_pending,
+        )
+    except SettlementError as exc:
+        return CompletionResult(
+            target_date, run_id, "COMPLETION_FAILED",
+            error=f"{type(exc).__name__}: {exc}",
+        )
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError,
+            ValueError) as exc:
+        # Malformed fixtures/files must never abort the batch driver.
+        return CompletionResult(
+            target_date, run_id, "COMPLETION_FAILED",
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1200,6 +1667,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                         "settlement capture (default: all non-current_only "
                         "sports). Grading is unaffected by this flag; it "
                         "only limits which post-event listings are fetched.")
+    p.add_argument("--complete", action="store_true",
+                   help="Completion pass: re-grade rows left UNSETTLED/"
+                        "UNRESOLVED by the one-shot D+1 settlement and write "
+                        "an append-only settlement_supplement_*.json. Never "
+                        "modifies the original settlement.json.")
+    p.add_argument("--completion-window-days", type=int,
+                   default=COMPLETION_RETRY_WINDOW_DAYS,
+                   help=f"Maximum age (days) of a run the completion pass "
+                        f"retries (default {COMPLETION_RETRY_WINDOW_DAYS}).")
     return p
 
 
@@ -1209,6 +1685,31 @@ def main(argv: list[str] | None = None) -> int:
     if args.sports:
         sports = [s.strip() for s in args.sports.split(",") if s.strip()]
     try:
+        if args.complete:
+            completion = complete_settlement(
+                target_date=args.date,
+                run_id=args.run_id,
+                repo_root=args.root,
+                offline=args.offline,
+                settlement_receipt_path=args.settlement_receipt,
+                pause_seconds=args.pause_seconds,
+                timeout=args.timeout,
+                sports=sports,
+                max_age_days=args.completion_window_days,
+            )
+            print(json.dumps({
+                "target_date": completion.target_date,
+                "run_id": completion.run_id,
+                "status": completion.status,
+                "supplement_path": completion.supplement_path,
+                "supplement_sha256": completion.supplement_sha256,
+                "resolved_successes": completion.resolved_successes,
+                "resolved_failures": completion.resolved_failures,
+                "terminal_unresolved": completion.terminal_unresolved,
+                "still_pending": completion.still_pending,
+                "error": completion.error,
+            }, indent=2, sort_keys=True))
+            return 0 if completion.status != "COMPLETION_FAILED" else 2
         result = settle_run(
             target_date=args.date,
             run_id=args.run_id,

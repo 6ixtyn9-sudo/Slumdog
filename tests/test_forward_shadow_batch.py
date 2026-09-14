@@ -693,3 +693,319 @@ class TestRunSettlementBacklog:
             tmp_path, as_of=dt.date(2026, 9, 12), pause_seconds=0,
         )
         assert results == []
+
+
+# ---------------------------------------------------------------------------
+# Settlement completion pass (append-only supplements, owner-authorized
+# 2026-09-14): closes rows the one-shot D+1 settlement left UNSETTLED /
+# UNRESOLVED (evening US fixtures not posted by the 04:00 UTC run).
+# ---------------------------------------------------------------------------
+
+
+def _grade_row(event_id: str, grade: str, *, sport: str = "football",
+               target_date: str = "2026-09-10") -> dict:
+    return {
+        "sport": sport,
+        "event_id": event_id,
+        "event_date": target_date,
+        "source": "selections",
+        "considered_status": "PRIMARY_SHADOW_SELECTION",
+        "rank_within_sport_day": 1,
+        "underdog_index": 2,
+        "grade": grade,
+        "match_method": "no_match" if grade == "UNSETTLED" else "exact_event_id",
+    }
+
+
+def _make_settled_run(repo_root: Path, target_date: str, run_id: str,
+                      grades: list[dict]) -> Path:
+    """A completed run with a hash-valid settlement.json carrying ``grades``."""
+    import hashlib
+
+    run_dir = _make_completed_run(repo_root, target_date, run_id)
+    payload = {
+        "settlement_schema_version": "shadow_settlement",
+        "target_date": target_date,
+        "run_id": run_id,
+        "settled_at": f"{target_date}T08:00:00Z",
+        "grading_contract": {"target": "UNDERDOG_WIN"},
+        "metadata_policy": {},
+        "grades": grades,
+        "summary": {},
+        "settlement_capture_receipt": {},
+    }
+    data = json.dumps(payload, indent=2, sort_keys=True).encode()
+    (run_dir / "settlement.json").write_bytes(data)
+    (run_dir / "settlement.json.sha256").write_text(
+        f"{hashlib.sha256(data).hexdigest()}  settlement.json\n"
+    )
+    return run_dir
+
+
+def _write_supplement(run_dir: Path, rows: list[dict], *,
+                      stamp: str = "20260912T090000Z") -> None:
+    import hashlib
+
+    name = f"settlement_supplement_{stamp}.json"
+    payload = {
+        "settlement_supplement_schema_version": "shadow_settlement_supplement",
+        "rows": rows,
+    }
+    data = json.dumps(payload, indent=2, sort_keys=True).encode()
+    (run_dir / name).write_bytes(data)
+    (run_dir / f"{name}.sha256").write_text(
+        f"{hashlib.sha256(data).hexdigest()}  {name}\n"
+    )
+
+
+class TestCompletionOpenGradesPin:
+    def test_driver_matches_module_vocabulary(self):
+        from scripts.forward_shadow_batch import COMPLETION_OPEN_GRADES
+        from slumdog.shadow_settle import OPEN_GRADES
+        assert COMPLETION_OPEN_GRADES == OPEN_GRADES == {"UNSETTLED", "UNRESOLVED"}
+
+
+class TestFindCompletableRuns:
+    def test_no_settlement_excluded(self, tmp_path):
+        from scripts.forward_shadow_batch import find_completable_runs
+        _make_completed_run(tmp_path, "2026-09-10", "run0001aaaaaaaaaa")
+        assert find_completable_runs(tmp_path, as_of=dt.date(2026, 9, 12)) == []
+
+    def test_all_decided_excluded(self, tmp_path):
+        from scripts.forward_shadow_batch import find_completable_runs
+        _make_settled_run(tmp_path, "2026-09-10", "run0001aaaaaaaaaa", [
+            _grade_row("football:1", "SUCCESS"),
+            _grade_row("football:2", "FAILURE"),
+        ])
+        assert find_completable_runs(tmp_path, as_of=dt.date(2026, 9, 12)) == []
+
+    def test_unsettled_within_window_included_with_count(self, tmp_path):
+        from scripts.forward_shadow_batch import find_completable_runs
+        _make_settled_run(tmp_path, "2026-09-10", "run0001aaaaaaaaaa", [
+            _grade_row("football:1", "SUCCESS"),
+            _grade_row("football:2", "UNSETTLED"),
+            _grade_row("football:3", "UNRESOLVED"),
+        ])
+        due = find_completable_runs(tmp_path, as_of=dt.date(2026, 9, 12))
+        assert due == [("2026-09-10", "run0001aaaaaaaaaa", 2)]
+
+    def test_supplement_closed_rows_not_recounted(self, tmp_path):
+        from scripts.forward_shadow_batch import find_completable_runs
+        run_dir = _make_settled_run(tmp_path, "2026-09-10", "run0001aaaaaaaaaa", [
+            _grade_row("football:2", "UNSETTLED"),
+            _grade_row("football:3", "UNSETTLED"),
+        ])
+        _write_supplement(run_dir, [_grade_row("football:2", "SUCCESS")])
+        due = find_completable_runs(tmp_path, as_of=dt.date(2026, 9, 12))
+        assert due == [("2026-09-10", "run0001aaaaaaaaaa", 1)]
+        # closing the last row removes the run from the queue
+        _write_supplement(run_dir, [_grade_row("football:3", "FAILURE")],
+                          stamp="20260913T090000Z")
+        assert find_completable_runs(tmp_path, as_of=dt.date(2026, 9, 13)) == []
+
+    def test_same_day_and_future_excluded(self, tmp_path):
+        from scripts.forward_shadow_batch import find_completable_runs
+        _make_settled_run(tmp_path, "2026-09-12", "run0001aaaaaaaaaa",
+                          [_grade_row("football:2", "UNSETTLED")])
+        assert find_completable_runs(tmp_path, as_of=dt.date(2026, 9, 12)) == []
+
+    def test_d_plus_1_included_but_d_plus_15_excluded(self, tmp_path):
+        from scripts.forward_shadow_batch import find_completable_runs
+        _make_settled_run(tmp_path, "2026-09-11", "runyoungaaaaaaaaaa",
+                          [_grade_row("football:1", "UNSETTLED")])
+        _make_settled_run(tmp_path, "2026-08-28", "runold00000000000",
+                          [_grade_row("football:9", "UNSETTLED")])
+        as_of = dt.date(2026, 9, 12)
+        due = find_completable_runs(tmp_path, as_of=as_of)
+        assert [d for d, _r, _n in due] == ["2026-09-11"]
+
+    def test_non_date_and_blocked_dirs_ignored(self, tmp_path):
+        from scripts.forward_shadow_batch import find_completable_runs
+        shadow = tmp_path / "data/reports/shadow"
+        (shadow / "bundles").mkdir(parents=True)
+        blocked = shadow / "2026-09-10" / "BLOCKED"
+        blocked.mkdir(parents=True)
+        (blocked / "BLOCKED_x.json").write_text("{}")
+        _make_settled_run(tmp_path, "2026-09-10", "run0001aaaaaaaaaa",
+                          [_grade_row("football:2", "UNSETTLED")])
+        due = find_completable_runs(tmp_path, as_of=dt.date(2026, 9, 12))
+        assert due == [("2026-09-10", "run0001aaaaaaaaaa", 1)]
+
+    def test_malformed_settlement_skipped_not_raised(self, tmp_path):
+        from scripts.forward_shadow_batch import find_completable_runs
+        run_dir = _make_completed_run(tmp_path, "2026-09-10", "run0001aaaaaaaaaa")
+        (run_dir / "settlement.json").write_text(json.dumps(["not", "a", "dict"]))
+        import hashlib
+        data = (run_dir / "settlement.json").read_bytes()
+        (run_dir / "settlement.json.sha256").write_text(
+            f"{hashlib.sha256(data).hexdigest()}  settlement.json\n")
+        assert find_completable_runs(tmp_path, as_of=dt.date(2026, 9, 12)) == []
+
+    def test_bad_marker_skips_run(self, tmp_path):
+        from scripts.forward_shadow_batch import find_completable_runs
+        run_dir = _make_settled_run(tmp_path, "2026-09-10", "run0001aaaaaaaaaa",
+                                    [_grade_row("football:2", "UNSETTLED")])
+        (run_dir / "settlement.json.sha256").write_text(
+            "0" * 64 + "  settlement.json\n"
+        )
+        assert find_completable_runs(tmp_path, as_of=dt.date(2026, 9, 12)) == []
+
+    def test_oldest_first_and_counts(self, tmp_path):
+        from scripts.forward_shadow_batch import find_completable_runs
+        _make_settled_run(tmp_path, "2026-09-11", "run0002bbbbbbbbbb",
+                          [_grade_row(f"football:{i}", "UNSETTLED") for i in range(3)])
+        _make_settled_run(tmp_path, "2026-09-09", "run0001aaaaaaaaaa",
+                          [_grade_row("football:9", "UNSETTLED")])
+        due = find_completable_runs(tmp_path, as_of=dt.date(2026, 9, 12))
+        assert due == [
+            ("2026-09-09", "run0001aaaaaaaaaa", 1),
+            ("2026-09-11", "run0002bbbbbbbbbb", 3),
+        ]
+
+
+class TestRunCompletionForDate:
+    def test_missing_run_is_failure_not_raise(self, tmp_path):
+        from scripts.forward_shadow_batch import run_completion_for_date
+        result = run_completion_for_date(
+            "2026-09-10", "doesnotexist0000", tmp_path,
+        )
+        assert result["status"] == "COMPLETION_FAILED"
+        assert result["error"]
+
+    def test_success_fields_propagated(self, tmp_path, monkeypatch):
+        from scripts.forward_shadow_batch import run_completion_for_date
+        _make_settled_run(tmp_path, "2026-09-10", "run0001aaaaaaaaaa",
+                          [_grade_row("football:2", "UNSETTLED")])
+        import slumdog.shadow_settle as ss
+
+        def _fake(**kwargs):
+            return ss.CompletionResult(
+                target_date=kwargs["target_date"], run_id=kwargs["run_id"],
+                status="SUPPLEMENT_WRITTEN", supplement_sha256="abc",
+                rows_in_supplement=1, resolved_successes=1,
+            )
+        monkeypatch.setattr(ss, "complete_settlement", _fake)
+        result = run_completion_for_date(
+            "2026-09-10", "run0001aaaaaaaaaa", tmp_path,
+        )
+        assert result["status"] == "SUPPLEMENT_WRITTEN"
+        assert result["resolved_successes"] == 1
+        assert result["still_pending"] == 0
+
+    def test_unexpected_exception_isolated(self, tmp_path, monkeypatch):
+        from scripts.forward_shadow_batch import run_completion_for_date
+        _make_settled_run(tmp_path, "2026-09-10", "run0001aaaaaaaaaa",
+                          [_grade_row("football:2", "UNSETTLED")])
+
+        def _boom(**kwargs):
+            raise RuntimeError("unexpected")
+        monkeypatch.setattr("slumdog.shadow_settle.complete_settlement", _boom)
+        result = run_completion_for_date(
+            "2026-09-10", "run0001aaaaaaaaaa", tmp_path,
+        )
+        assert result["status"] == "COMPLETION_FAILED"
+        assert "unexpected" in result["error"]
+
+
+class TestRunCompletionBacklog:
+    def test_empty_backlog(self, tmp_path):
+        from scripts.forward_shadow_batch import run_completion_backlog
+        assert run_completion_backlog(
+            tmp_path, as_of=dt.date(2026, 9, 12)) == []
+
+    def test_dry_run_does_not_call_completion(self, tmp_path, monkeypatch):
+        from scripts.forward_shadow_batch import run_completion_backlog
+        _make_settled_run(tmp_path, "2026-09-10", "run0001aaaaaaaaaa",
+                          [_grade_row("football:2", "UNSETTLED")])
+
+        def _boom(**kwargs):
+            raise AssertionError("complete_settlement must not run in dry-run")
+        monkeypatch.setattr("slumdog.shadow_settle.complete_settlement", _boom)
+        results = run_completion_backlog(
+            tmp_path, as_of=dt.date(2026, 9, 12), dry_run=True,
+        )
+        assert len(results) == 1
+        assert results[0]["status"] == "DRY_RUN"
+        assert results[0]["pending_at_start"] == 1
+
+    def test_one_failure_does_not_block_others(self, tmp_path, monkeypatch):
+        from scripts.forward_shadow_batch import run_completion_backlog
+        import slumdog.shadow_settle as ss
+        _make_settled_run(tmp_path, "2026-09-09", "run0001aaaaaaaaaa",
+                          [_grade_row("football:1", "UNSETTLED",
+                                      target_date="2026-09-09")])
+        _make_settled_run(tmp_path, "2026-09-10", "run0002bbbbbbbbbb",
+                          [_grade_row("football:2", "UNSETTLED",
+                                      target_date="2026-09-10")])
+
+        def _flaky(*, target_date, **kwargs):
+            if target_date == "2026-09-09":
+                return ss.CompletionResult(
+                    target_date=target_date, run_id=kwargs["run_id"],
+                    status="COMPLETION_FAILED", error="simulated relay outage",
+                )
+            return ss.CompletionResult(
+                target_date=target_date, run_id=kwargs["run_id"],
+                status="SUPPLEMENT_WRITTEN", resolved_successes=1,
+            )
+        monkeypatch.setattr(ss, "complete_settlement", _flaky)
+        results = run_completion_backlog(
+            tmp_path, as_of=dt.date(2026, 9, 12), pause_seconds=0,
+        )
+        by_date = {r["target_date"]: r["status"] for r in results}
+        assert by_date == {
+            "2026-09-09": "COMPLETION_FAILED",
+            "2026-09-10": "SUPPLEMENT_WRITTEN",
+        }
+
+
+    def test_dates_just_settled_this_invocation_are_skipped(self, tmp_path):
+        # A run the D+1 pass settled minutes ago must not be re-captured at
+        # the same hour; it re-enters the queue at the next daily dispatch.
+        from scripts.forward_shadow_batch import run_completion_backlog
+        _make_settled_run(tmp_path, "2026-09-10", "run0001aaaaaaaaaa",
+                          [_grade_row("football:2", "UNSETTLED")])
+        listed = run_completion_backlog(
+            tmp_path, as_of=dt.date(2026, 9, 12), dry_run=True,
+        )
+        assert [r["target_date"] for r in listed] == ["2026-09-10"]
+        skipped = run_completion_backlog(
+            tmp_path, as_of=dt.date(2026, 9, 12), dry_run=True,
+            skip_dates={"2026-09-10"},
+        )
+        assert skipped == []
+
+
+class TestCompletionInDriverMain:
+    def test_skip_settlement_skips_completion(self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+        _make_settled_run(tmp_path, "2026-09-10", "run0001aaaaaaaaaa",
+                          [_grade_row("football:2", "UNSETTLED")])
+
+        def _boom(*a, **k):
+            raise AssertionError("completion pass must be skippable")
+        monkeypatch.setattr(fsb, "run_completion_backlog", _boom)
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "1",
+            "--skip-settlement", "--dry-run",
+        ])
+        assert rc == 0
+
+    def test_dry_run_reports_completion_in_batch_receipt(self, tmp_path):
+        import scripts.forward_shadow_batch as fsb
+        two_days_ago = (
+            dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=2)
+        ).isoformat()
+        _make_settled_run(tmp_path, two_days_ago, "run0001aaaaaaaaaa",
+                          [_grade_row("football:2", "UNSETTLED",
+                                      target_date=two_days_ago)])
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "1", "--dry-run",
+        ])
+        assert rc == 0
+        receipt = json.loads(
+            (tmp_path / "data/reports/shadow/forward_batch_receipt.json").read_text()
+        )
+        assert receipt["summary"]["settlement_completion_runs"] == 1
+        assert receipt["settlement_completion"][0]["status"] == "DRY_RUN"
+        assert receipt["settlement_completion"][0]["pending_at_start"] == 1
