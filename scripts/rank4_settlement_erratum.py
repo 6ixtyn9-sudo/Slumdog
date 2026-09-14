@@ -29,6 +29,17 @@ evidence stays exactly as written, byte for byte. Instead it publishes a
   post-event fact, nothing invented;
 - records the corrected aggregates and the individual rows whose grade changed.
 
+Scope: a run is only in scope when its committed evidence still carries the
+defect — that is, when at least one rank-4+ row was graded against
+``underdog_index == 0``, the draw sentinel. Runs settled after the grading fix
+merged carry a real identity (``1``/``2``, or ``None`` when the identity is
+genuinely undecidable) and record rank-4+ SUCCESSes; publishing an erratum for
+those would assert "a rank-4+ SUCCESS was unreachable" about evidence where a
+SUCCESS is on the record, and would dilute the corrected totals with rows
+nothing ever got wrong. Out-of-scope runs are still visited, hash-verified
+against their ``.sha256`` marker and reported as clean, so a silently altered
+artifact cannot hide behind "no erratum needed".
+
 This is an instrument correction, not a rule change: ``grading_contract``,
 ``grade_underdog_win`` and the frozen R2 rule are untouched, and
 ``config/research_baselines.json`` (the hash ``anti_tuning`` protects) is not
@@ -133,6 +144,25 @@ def discover_runs() -> list[tuple[str, str, Path]]:
             if artifact.is_file() and (run_dir / "manifest.json").is_file():
                 runs.append((date_dir.name, run_dir.name, run_dir))
     return runs
+
+
+def draw_sentinel_rows(artifact: Path) -> list[dict[str, Any]]:
+    """Rank-4+ rows of ``artifact`` still carrying the draw-sentinel identity.
+
+    This is the defect's signature on committed evidence: the row was graded
+    against ``underdog_index == 0`` because the manifest never carried an
+    underdog identity. An empty list means the run is NOT defect-affected — it
+    was settled by the fixed code, every rank-4+ row carries a real identity,
+    and there is nothing for an erratum to correct.
+
+    ``None`` is deliberately not treated as the sentinel: post-fix, an
+    undecidable identity stays missing rather than collapsing to ``0``.
+    """
+    payload = json.loads(artifact.read_text())
+    return [
+        row for row in payload.get("grades", [])
+        if row.get("source") == "considered_pool" and row.get("underdog_index") == 0
+    ]
 
 
 def build_erratum(target_date: str, run_id: str, run_dir: Path) -> dict[str, Any]:
@@ -296,7 +326,15 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     errata = []
+    clean: list[tuple[str, str]] = []
     for target_date, run_id, run_dir in runs:
+        artifact = run_dir / "settlement.json"
+        # Every settled run is hash-verified, in scope or not: "clean" must be
+        # a claim about verified evidence, never a reason to skip reading it.
+        _verify_marker(artifact)
+        if not draw_sentinel_rows(artifact):
+            clean.append((target_date, run_id))
+            continue
         errata.append(build_erratum(target_date, run_id, run_dir))
 
     if args.stdout:
@@ -321,7 +359,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"    identity provenance      : {r4['identity_provenance']}")
         print(f"    rows on draw sentinel    : {r4['rows_still_on_draw_sentinel']}")
 
+    for target_date, run_id in clean:
+        print(f"{target_date} {run_id}")
+        print("    not defect-affected   : no rank-4+ row on the draw sentinel "
+              "(settled after the identity fix - nothing to correct)")
+
     print(f"\ntotal corrected rows across {len(errata)} run(s): {total_changed}")
+    print(f"{len(clean)} settled run(s) out of scope: no rank-4+ row on the "
+          "draw sentinel, nothing to correct")
 
     if args.check:
         print("--check: nothing written")

@@ -317,6 +317,23 @@ class TestRunEvaluatorHistorySelection:
         assert not any(a.endswith("history_basketball.json") for a in history_args)
         assert not any(a.endswith("history_mma.json") for a in history_args)
 
+    @staticmethod
+    def _clock_safe_target_date(days_ahead: int = 3) -> str:
+        """A target date whose pre-event timing gate is still open.
+
+        The evaluator refuses to commit a decision once the run clock is past
+        ``target_date 00:00:00 UTC - 24h``
+        (``DECISION_COMMITTED_AT_AFTER_SAFE_CUTOFF``). This regression is about
+        history-file selection, not the timing gate, so the date has to travel
+        with the clock. The date was originally pinned to ``2026-09-10``; that
+        pin silently started blocking on timing the moment the runner clock
+        passed 2026-09-09T00:00Z, which masked the very property under test
+        behind a block for an unrelated reason.
+        """
+        return (
+            dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=days_ahead)
+        ).strftime("%Y-%m-%d")
+
     def test_real_evaluator_does_not_block_on_seeded_manifests(self, tmp_path):
         """End-to-end regression: run the REAL shadow_evaluator CLI (no
         subprocess mocking) against a data/reports/ layout that matches what
@@ -332,6 +349,7 @@ class TestRunEvaluatorHistorySelection:
         import gzip
         import scripts.forward_shadow_batch as fsb
 
+        target_date = self._clock_safe_target_date()
         repo_root = Path(__file__).resolve().parents[1]
         (tmp_path / "config").mkdir()
         shutil.copy(
@@ -344,18 +362,21 @@ class TestRunEvaluatorHistorySelection:
         )
         reports_dir = tmp_path / "data" / "reports"
         reports_dir.mkdir(parents=True)
-        (reports_dir / "capture_2026-09-10.json").write_text(
-            json.dumps({"target_date": "2026-09-10", "captured": [], "failures": []})
+        (reports_dir / f"capture_{target_date}.json").write_text(
+            json.dumps({"target_date": target_date, "captured": [], "failures": []})
         )
         for sport in ("football", "basketball", "mma"):
             (reports_dir / f"history_{sport}.json").write_text(
                 json.dumps({"sport": sport, "daily_receipts": [], "settled_rows": 0})
             )
-            with gzip.open(reports_dir / f"history_{sport}.jsonl.gz", "wt") as f:
-                pass
+            with gzip.open(reports_dir / f"history_{sport}.jsonl.gz", "wt"):
+                pass  # a valid, empty gzipped JSONL ledger — nothing decoded
 
-        result = fsb.run_evaluator("2026-09-10", tmp_path)
-        assert result["run_status"] != "SHADOW_RUN_BLOCKED"
+        result = fsb.run_evaluator(target_date, tmp_path)
+        assert result["run_status"] != "SHADOW_RUN_BLOCKED", (
+            f"real evaluator blocked on {target_date} — history selection is "
+            f"broken again: {result}"
+        )
 
 
 # ---------------------------------------------------------------------------

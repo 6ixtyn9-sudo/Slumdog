@@ -55,6 +55,69 @@ PROJECTED_FIELDS = (
 
 R2_FEATURES = tuple(feature for feature, _op, _value in R2_ELIGIBILITY_SPEC)
 
+# ``considered_status`` is one of the six fields ``pool_for_digest`` projects,
+# so its vocabulary is frozen: refining an existing label — or splitting
+# ``FEATURE_INCOMPLETE_OR_R2_INELIGIBLE`` into one label per cause, which is
+# exactly the temptation this change creates — would perturb ``decision_digest``
+# for every run and break reproducibility of committed evidence.
+FROZEN_CONSIDERED_STATUSES = frozenset({
+    "PRIMARY_SHADOW_SELECTION", "TOP3_EVALUATION_COHORT",
+    "ELIGIBLE_RANKED_BEYOND_TOP3", "FEATURE_INCOMPLETE_OR_R2_INELIGIBLE",
+    "DECISION_CONFLICT_EXCLUDED", "EXACT_DECISION_DUPLICATE_OBSERVATION",
+    "MALFORMED_OR_UNKEYABLE", "TIMING_REJECTED",
+})
+
+# ``validate_event_identity`` emits a composite ``IDENTITY_INELIGIBLE:<reason>``
+# label, not a bare one. It is producible by the same identity gate that
+# predates this freeze — it simply had ZERO occurrences in the evidence the set
+# above was pinned against (see
+# docs/ADVERSARIAL_REVIEW_RANK4_SETTLEMENT_FINDINGS.md §4, which records it as
+# "producible ... [with] zero occurrences in committed evidence"). The first
+# real one landed on 2026-09-16: football:2548491, AB Gladsaxe vs Sonderjyske
+# at 0.34/0.34 — an exact equal-probability row, which AGENTS.md requires to be
+# excluded explicitly rather than silently assigned.
+#
+# The REASON vocabulary is pinned here for the same reason the label set is: an
+# identity-ineligibility reason nobody has seen before must fail loudly and be
+# added deliberately, not widen the digest's projection by accident.
+IDENTITY_INELIGIBLE_REASONS = frozenset({
+    "EQUAL_PROBABILITY", "MISSING_PROBABILITY", "NON_FINITE_PROBABILITY",
+    "OUT_OF_RANGE_PROBABILITY", "INVALID_PROBABILITY",
+})
+
+
+def _unfrozen_statuses(statuses: set[str]) -> set[str]:
+    """Statuses outside the frozen vocabulary, identity gate included."""
+    out = set()
+    for status in statuses:
+        if status in FROZEN_CONSIDERED_STATUSES:
+            continue
+        reason = status.split(":", 1)[1] if status.startswith("IDENTITY_INELIGIBLE:") else None
+        if reason is None or reason not in IDENTITY_INELIGIBLE_REASONS:
+            out.add(status)
+    return out
+
+
+def test_unfrozen_status_check_is_sensitive():
+    """Negative control: the vocabulary check must reject, not just accept.
+
+    The two rejections below are the exact regressions the freeze exists to
+    catch — refining the conflated label into per-cause labels, and widening
+    the identity gate's reason vocabulary.
+    """
+    assert _unfrozen_statuses(set(FROZEN_CONSIDERED_STATUSES)) == set()
+    assert _unfrozen_statuses({"IDENTITY_INELIGIBLE:EQUAL_PROBABILITY"}) == set()
+    # A refinement of the conflated label: r2_exclusion's job, not the label's.
+    assert _unfrozen_statuses({"R2_INELIGIBLE:THRESHOLD_NOT_MET"}) == {
+        "R2_INELIGIBLE:THRESHOLD_NOT_MET"
+    }
+    # An identity-ineligibility reason nobody has pinned.
+    assert _unfrozen_statuses({"IDENTITY_INELIGIBLE:MADE_UP_REASON"}) == {
+        "IDENTITY_INELIGIBLE:MADE_UP_REASON"
+    }
+    # The bare label without a reason is not part of the vocabulary either.
+    assert _unfrozen_statuses({"IDENTITY_INELIGIBLE"}) == {"IDENTITY_INELIGIBLE"}
+
 # Dates whose settlement artifacts are committed, i.e. real evidence.
 SETTLED_MANIFESTS = sorted(
     glob.glob(str(REPO_ROOT / "data/reports/shadow/2026-*/[0-9a-f]*/manifest.json"))
@@ -343,16 +406,66 @@ class TestDigestSafety:
         assert _canonical_sha256(payload) != manifest["decision_digest"]
 
     def test_status_label_was_not_refined(self, manifest_path):
-        """``considered_status`` is a projected field, so it must stay frozen."""
+        """``considered_status`` is a projected field, so it must stay frozen.
+
+        The conflated label is still there, unchanged, on historical evidence:
+        splitting ``FEATURE_INCOMPLETE_OR_R2_INELIGIBLE`` per cause is the
+        whole point of ``r2_exclusion``, and doing it on the label instead
+        would perturb every committed ``decision_digest``.
+        """
         manifest = json.loads(Path(manifest_path).read_text())
         statuses = {row["considered_status"] for row in manifest["considered_pool"]}
-        # The conflated label is still there, unchanged, on historical evidence.
-        assert statuses <= {
-            "PRIMARY_SHADOW_SELECTION", "TOP3_EVALUATION_COHORT",
-            "ELIGIBLE_RANKED_BEYOND_TOP3", "FEATURE_INCOMPLETE_OR_R2_INELIGIBLE",
-            "DECISION_CONFLICT_EXCLUDED", "EXACT_DECISION_DUPLICATE_OBSERVATION",
-            "MALFORMED_OR_UNKEYABLE", "TIMING_REJECTED",
-        }
+        unexpected = _unfrozen_statuses(statuses)
+        assert not unexpected, (
+            f"{manifest_path}: considered_status vocabulary widened with "
+            f"{sorted(unexpected)} — the identity gate's reason vocabulary and "
+            "the frozen label set are pinned at the top of this module; add a "
+            "new one deliberately, never by relaxing the check"
+        )
+
+    def test_identity_ineligible_label_is_true_to_the_evidence(self, manifest_path):
+        """A composite label must be checkable against the captured input.
+
+        ``IDENTITY_INELIGIBLE:EQUAL_PROBABILITY`` is a claim about a row's
+        pre-event probabilities. Believing it because the evaluator said so
+        would make the freeze above unfalsifiable, so re-derive it from
+        ``input_provenance.capture_record_tuples`` — the same source the
+        rank-4+ identity fix reads — and from ``decision_accounting``.
+        """
+        manifest = json.loads(Path(manifest_path).read_text())
+        labelled = [
+            row for row in manifest["considered_pool"]
+            if row["considered_status"].startswith("IDENTITY_INELIGIBLE:")
+        ]
+        assert manifest["decision_accounting"]["identity_ineligible"] == len(labelled)
+        if not labelled:
+            return
+
+        tuples = manifest["input_provenance"]["capture_record_tuples"]
+        by_event = {tup[1]: tup for tup in tuples if len(tup) >= 8}
+        for row in labelled:
+            reason = row["considered_status"].split(":", 1)[1]
+            assert row["eligible"] is False
+            assert row["r2_exclusion"] is None, (
+                "identity is decided before R2 runs; a row that never reached "
+                "R2 must not carry an R2 exclusion"
+            )
+            tup = by_event.get(row["event_id"])
+            assert tup is not None, (
+                f"{row['event_id']}: identity-ineligible row is not in "
+                "input_provenance.capture_record_tuples"
+            )
+            probability_1, probability_2 = float(tup[5]), float(tup[6])
+            if reason == "EQUAL_PROBABILITY":
+                assert probability_1 == probability_2, (
+                    f"{row['event_id']}: labelled EQUAL_PROBABILITY but the "
+                    f"capture says {probability_1} vs {probability_2}"
+                )
+            else:
+                assert probability_1 != probability_2, (
+                    f"{row['event_id']}: labelled {reason} but the capture "
+                    f"shows equal probabilities {probability_1}"
+                )
 
 
 # ---------------------------------------------------------------------------
