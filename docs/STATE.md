@@ -337,11 +337,15 @@ This mirrors the existing raw-capture policy: raw bytes are large and
 immutable; receipts and summaries are small and valuable for
 reproducibility.
 
-## Rank-4+ Settlement Erratum (2026-09-07, extended 2026-09-08)
+## Rank-4+ Settlement Erratum (2026-09-07; extended 2026-09-08; scope narrowed 2026-09-14)
 
-**Every rank-4+ grade in the committed `settlement.json` files is wrong** — four
-dates now: 2026-09-02, 09-05, 09-06 (original audit) and 2026-09-07 (added
-2026-09-08, produced by `main`'s still-unfixed code via the D+1 automation).
+**Every rank-4+ grade in the committed `settlement.json` files of the four
+defect-affected dates is wrong** — 2026-09-02, 09-05, 09-06 (original audit) and
+2026-09-07 (added 2026-09-08, produced by the D+1 automation while `main` still
+ran the unfixed code). 2026-09-07 was the **last** defective artifact: PR #18
+merged 2026-09-07T15:43Z, and every settlement published since (2026-09-08 …
+2026-09-13, as of 2026-09-14) carries a real underdog identity and rank-4+
+SUCCESSes, so those dates are **not** defect-affected and get no erratum.
 Full findings: `docs/ADVERSARIAL_REVIEW_RANK4_SETTLEMENT_FINDINGS.md`.
 
 Mechanism: `manifest.json`'s `considered_pool[]` entries never carried
@@ -377,16 +381,35 @@ Wilson 95% for the corrected rate: **[0.300, 0.363]** (was [0.298, 0.362] over
 three dates). Primary/cohort tiers (ranks 1–3) verified **unaffected** — all 9
 rows re-grade identically.
 
-**2026-09-07 was added on 2026-09-08, and it is evidence that the defect is
-still live on `main`.** That artifact was written by the D+1 automation
+**2026-09-07 was added on 2026-09-08, as the last date the defect could still
+reach.** That artifact was written by the D+1 automation
 (`github-actions[bot]`, run 34185420153, `settled_at` 2026-09-08T04:00:49Z,
 committed to `main` as `1ee80d4`) — i.e. by the **unfixed** grading code, because
-PR #18 is still open. It carries the identical signature: all 37
-`considered_pool` rows have `underdog_index == 0`, 35 grade FAILURE, and the
-rows have no `underdog_index_provenance` field. Until PR #18 merges, every D+1
-dispatch publishes another defective artifact and another erratum is required to
-correct it. The three original per-date rows above are unchanged; adding a date
-widens the denominator and does not restate any earlier figure.
+PR #18 was still open at 04:00Z that day. It carries the identical signature:
+all 37 `considered_pool` rows have `underdog_index == 0`, 35 grade FAILURE, and
+the rows have no `underdog_index_provenance` field. **PR #18 merged at
+2026-09-07T15:43Z**, i.e. before that dispatch's next cycle, so 2026-09-07 is
+the end of the defective series rather than the start of a backlog: the six
+settlements published since (2026-09-08 … 2026-09-13) all carry
+`underdog_index ∈ {1, 2}` with rank-4+ SUCCESSes on the record. The three
+original per-date rows above are unchanged; adding a date widens the denominator
+and does not restate any earlier figure.
+
+**Erratum scope — NARROWED 2026-09-14.** The generator used to demand an
+erratum for *every* settled date (`test_every_settled_date_is_covered`), which
+was correct only while every settlement was defective. With `main` fixed, that
+rule would have forced six no-op errata asserting "a rank-4+ SUCCESS was
+unreachable" about evidence where a SUCCESS is recorded — and would have broken
+the per-erratum invariant that committed rank-4+ successes are `0`. Scope is now
+decided from the evidence itself: `scripts/rank4_settlement_erratum.py`
+publishes an erratum only for runs where at least one rank-4+ row is still
+graded against `underdog_index == 0` (the draw sentinel). Out-of-scope runs are
+**not** skipped silently — each is visited, hash-verified against its `.sha256`
+marker and printed as `not defect-affected` — and
+`test_dates_without_errata_are_not_defect_affected` re-derives that verdict from
+the artifact so coverage cannot shrink by reclassifying evidence as clean.
+Corrected totals are unchanged at **283 / 855 = 33.1%** and no longer move as
+new dates settle.
 
 Note the earlier "ranks_4_plus n=798 across 3 dates" figure was itself wrong
 twice over: 798 = 480 + 318, i.e. **2026-09-02 was never read** (two
@@ -399,6 +422,8 @@ Remediation (append-only; no committed evidence was modified):
   `data/reports/shadow/errata/<date>/<run_id>.rank4_erratum.json` + `.sha256`.
   It verifies each original against its marker and **fails closed** rather than
   overwriting. Originals confirmed byte-identical before and after.
+  Since 2026-09-14 it writes only for defect-affected runs (any rank-4+ row
+  still on the draw sentinel); see "Erratum scope" above.
   `--skip-existing` (added 2026-09-08) gives an append-only incremental mode:
   without it the generator was one-shot and refused to run at all once any
   erratum existed, so a newly discovered defective date could only be corrected
@@ -581,6 +606,21 @@ unchanged, `config/research_baselines.json` unmodified. `R2_ELIGIBILITY_SPEC` is
 asserted equal to the declared config rule, and `load_frozen_baseline_config`'s
 exact-shape guard still passes, so code and config cannot drift silently.
 
+**Status vocabulary (updated 2026-09-14).** The frozen label set is pinned in
+`tests/test_r2_exclusion_reason.py` and every committed manifest is checked
+against it. On 2026-09-16 the first row outside the set that was pinned on
+2026-09-08 appeared: `IDENTITY_INELIGIBLE:EQUAL_PROBABILITY`, one row
+(`football:2548491`, AB Gladsaxe vs Sonderjyske at 0.34/0.34). This is **not** a
+refinement — the composite `IDENTITY_INELIGIBLE:<reason>` label is emitted by the
+same pre-existing identity gate, and the review doc records it as producible with
+zero occurrences in the evidence available when the set was pinned. An
+equal-probability row has no underdog and must be excluded explicitly rather
+than assigned silently, so the label is correct; the pin was incomplete. The
+*reason* vocabulary is pinned alongside the label, a new test re-derives every
+composite label from `input_provenance.capture_record_tuples` (so the label is
+falsifiable rather than trusted), and a negative control proves the check still
+rejects an unpinned reason or a refined `R2_INELIGIBLE:*` label.
+
 **Governance.** Recording only. The breakdown carries a `policy` block —
 `purpose: recording_only`, `decides_nothing`, `not_justification_for_tuning` —
 stating the data is **not** a justification for changing `gap <= 0.2` or any
@@ -589,15 +629,16 @@ threshold change requires a separate, explicit, **owner-approved tuning
 decision**. Recording why a frozen rule rejected a record and weakening that rule
 are different acts.
 
-Regression coverage: `tests/test_r2_exclusion_reason.py` (95 tests), including
-rule/record agreement swept over a 480-point boundary grid across all four
-features.
+Regression coverage: `tests/test_r2_exclusion_reason.py` (143 tests as of
+2026-09-14 — the digest-safety class is parametrized over every committed
+manifest, so the count grows with each new date), including rule/record
+agreement swept over a 480-point boundary grid across all four features.
 
 ## Verification
 
-- pytest → **887 passed, 0 deselected, 0 skipped, 0 errors** under BOTH invocations (verified 2026-09-08: `pytest` bare, exactly as `.github/workflows/pipeline.yml` runs it, and `python -m pytest`; 718 baseline + 14 rank-4+/pin-drift + 12 erratum integrity + 47 discarded-metadata + 95 R2-exclusion-reason + the intervening 09-07 erratum/`--skip-existing` and blocker-reconciliation tests)
+- pytest → **936 passed, 0 deselected, 0 skipped, 0 errors** under BOTH invocations (verified 2026-09-14: `pytest` bare, exactly as `.github/workflows/pipeline.yml` runs it, and `python -m pytest`). Baseline before this session's CI repair was 917 (913 passed + 4 failed on `main` @ `33a4baf`, run 34818816638); +19 tests: 17 manifest-parametrized identity-label truth checks, 1 negative control for the status-vocabulary pin, 1 "clean dates really are clean" erratum-coverage test.
 - **Invocation matters and was previously unstated here.** `python -m pytest` prepends the CWD to `sys.path`; bare `pytest` does not. With `pythonpath = ["src"]` and no `scripts/__init__.py`, all 39 tests in `tests/test_forward_shadow_batch.py` that do `from scripts.forward_shadow_batch import ...` failed under CI's bare `pytest` while passing locally. Fixed by `pythonpath = ["src", "."]`. Before: 39 failed / 848 passed. After: 887 passed. Repo root on the path was checked for shadowing — none of `config`, `data`, `docs`, `examples`, `scripts`, `tests`, `src` collides with an installed distribution.
-- pyflakes src/slumdog scripts tests → clean on all new/changed files (14 pre-existing warnings remain in untouched `tests/test_dataset_*`, `test_forward_shadow_batch`, `test_research_incremental_builder`)
+- pyflakes src/slumdog scripts tests → clean on all new/changed files (13 pre-existing warnings remain in untouched `tests/test_dataset_*` and `test_research_incremental_builder`; verified 2026-09-14 — `tests/test_forward_shadow_batch.py`'s unused `f` binding was cleaned while fixing its stale date pin)
 - py_compile scripts/*.py src/slumdog/*.py tests/*.py → ok
 - git diff --check → ok
 - Frozen baseline config SHA-256 → `666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1` MATCH (unchanged — this is the hash `anti_tuning` protects)

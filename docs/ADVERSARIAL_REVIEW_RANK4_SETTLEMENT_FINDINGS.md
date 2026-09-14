@@ -474,3 +474,43 @@ erratum artifact for the three committed `settlement.json` files; (2) authorise 
 code + fixture fixes (identity serialised into pool dicts; loud failure instead of
 `.get(..., 0)`; fixture rebuilt from production schema with a divergence guard, housed in
 `tests/test_adversarial_review.py`).
+
+---
+
+## 8. Addendum (2026-09-14) — what changed after the verdict
+
+Both owner decisions in §7 were taken (erratum authorised; forward + fixture
+fixes authorised and merged as PR #18, 2026-09-07T15:43Z). Two consequences
+became measurable only once more dates settled, and both are recorded here
+rather than edited into the verdict above, which stands as written.
+
+**8.1 The defective series ended at 2026-09-07.** Six further artifacts were
+published by the D+1 automation after PR #18 merged (2026-09-08 … 2026-09-13).
+Each carries `underdog_index ∈ {1, 2}` on every rank-4+ row and records
+rank-4+ SUCCESSes (3/9, 1/2, 6/17, 19/52, 44/106, 63/169 decided) with the
+committed grade equal to the corrected grade in every row. The forward fix
+works in production; the sentinel-0 defect is no longer being manufactured.
+
+**8.2 Erratum scope narrowed to defect-affected runs.** While every settlement
+was defective, "one erratum per settled date" and "one erratum per defective
+settlement" were the same rule — which is why the coverage pin was written the
+way it was. They are no longer the same rule, and the all-dates form had become
+actively wrong: an erratum asserts *"a rank-4+ SUCCESS was structurally
+unreachable here"*, which is false for post-fix evidence, and the per-erratum
+invariant `committed["successes"] == 0` fails on it. The generator now decides
+scope from the evidence (any rank-4+ row still graded against
+`underdog_index == 0`); out-of-scope runs are still visited and hash-verified,
+and are reported rather than skipped. Corrected totals are unchanged:
+**283 / 855 = 33.1%**, Wilson 95% [0.300, 0.363]. The widening that §5 worried
+about — a denominator that shrinks or swells with bookkeeping errors — is now
+pinned from both sides: coverage over defect-affected dates, plus a test that
+re-derives "clean" from every uncovered artifact.
+
+**8.3 §4's status table has aged.** The four "producible but zero occurrences"
+statuses were sampled when 10 dates existed. `IDENTITY_INELIGIBLE` now has one
+occurrence: 2026-09-16, `football:2548491` (AB Gladsaxe vs Sonderjyske,
+0.34/0.34), labelled `IDENTITY_INELIGIBLE:EQUAL_PROBABILITY`. It is a genuine
+equal-probability row — re-derived from the manifest's own
+`input_provenance.capture_record_tuples`, not taken on the evaluator's word —
+so the label is correct and the earlier zero was a sampling artefact, not a
+change in behaviour. See `docs/STATE.md` → "Status vocabulary".

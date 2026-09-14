@@ -34,7 +34,36 @@ ERRATA_ROOT = SHADOW_ROOT / "errata"
 SCRIPT = REPO_ROOT / "scripts" / "rank4_settlement_erratum.py"
 
 sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(REPO_ROOT))
 from slumdog.shadow_settle import grade_underdog_win  # noqa: E402
+# The generator's own classifier, so "which runs are defect-affected" cannot
+# drift between the instrument and the tests that audit it.
+from scripts.rank4_settlement_erratum import draw_sentinel_rows  # noqa: E402
+
+
+def _settled_dates() -> set[str]:
+    """Every date under ``data/reports/shadow/`` with a committed settlement."""
+    return {
+        d.name
+        for d in SHADOW_ROOT.iterdir()
+        if d.is_dir() and any(d.glob("*/settlement.json"))
+    }
+
+
+def _defect_affected_dates() -> set[str]:
+    """Settled dates whose committed evidence still carries the defect.
+
+    A date is defect-affected when any rank-4+ row of its settlement was
+    graded against ``underdog_index == 0``, the draw sentinel. Runs settled by
+    the FIXED grading code carry real identities and rank-4+ SUCCESSes, so
+    they are out of the erratum's scope by construction.
+    """
+    affected = set()
+    for date in _settled_dates():
+        for artifact in (SHADOW_ROOT / date).glob("*/settlement.json"):
+            if draw_sentinel_rows(artifact):
+                affected.add(date)
+    return affected
 
 
 def _errata() -> list[tuple[Path, dict]]:
@@ -165,9 +194,15 @@ def test_aggregates_are_internally_consistent(errata):
         total_decided += corrected["decided"]
         total_success += corrected["successes"]
 
-    # Pinned totals, restated as evidence grows. These are CORRECTED numbers
-    # that restate the record; per AGENTS.md they must never be used to justify
-    # a threshold, rule or config amendment.
+    # Pinned totals over the defect-affected scope: every settled date whose
+    # rank-4+ rows still carry the draw sentinel (see
+    # ``test_every_defect_affected_settled_date_is_covered``). Dates settled
+    # after the identity fix merged are out of scope and contribute nothing,
+    # so a new row in the table below means a newly discovered DEFECTIVE date
+    # — not merely a new settlement.
+    #
+    # These are CORRECTED numbers that restate the record; per AGENTS.md they
+    # must never be used to justify a threshold, rule or config amendment.
     #
     #   2026-09-02   22 decided    6 success
     #   2026-09-05  480 decided  168 success
@@ -186,24 +221,55 @@ def test_aggregates_are_internally_consistent(errata):
     assert total_success / total_decided == pytest.approx(0.3310, abs=1e-4)
 
 
-def test_every_settled_date_is_covered(errata):
+def test_every_defect_affected_settled_date_is_covered(errata):
     """The original report read only two of the three settled dates.
 
     Its headline ``n=798`` was 480 (2026-09-05) + 318 (2026-09-06): 2026-09-02
     was silently skipped because two settlement artifacts exist for that
     run_id and the glob resolved to the wrong one. Coverage is pinned here so
     a missing date fails loudly instead of shrinking the denominator.
+
+    **Scope (2026-09-14).** Coverage is over the DEFECT-AFFECTED settled dates,
+    not over every settled date. ``main`` settled 2026-09-08 … 2026-09-13 with
+    the fixed grading code, so those artifacts carry real underdog identities
+    (``1``/``2``) and rank-4+ SUCCESSes on the record. Demanding an erratum for
+    them would assert "a rank-4+ SUCCESS was unreachable" about evidence where
+    one is recorded, and would dilute the corrected totals with rows nothing
+    ever got wrong. The complementary half of the invariant — that a date with
+    no erratum really is defect-free — is pinned by
+    ``test_dates_without_errata_are_not_defect_affected``, so coverage cannot
+    quietly shrink by reclassifying evidence as clean.
     """
     covered = {payload["target_date"] for _p, payload in errata}
-    settled = {
-        d.name
-        for d in SHADOW_ROOT.iterdir()
-        if d.is_dir() and any(d.glob("*/settlement.json"))
-    }
-    assert covered == settled, (
-        f"erratum coverage {sorted(covered)} != settled dates {sorted(settled)}"
+    affected = _defect_affected_dates()
+    assert covered == affected, (
+        f"erratum coverage {sorted(covered)} != defect-affected settled dates "
+        f"{sorted(affected)}"
     )
     assert "2026-09-02" in covered
+
+
+def test_dates_without_errata_are_not_defect_affected(errata):
+    """No settled date may be left uncovered on the word "clean" alone.
+
+    Every settled date without an erratum must have committed evidence in which
+    no rank-4+ row was graded against the draw sentinel. The verdict is
+    re-derived here from the artifact rather than trusted from the generator:
+    without this, a regression that put ``underdog_index: 0`` back into fresh
+    settlements would shrink the corrected denominator invisibly instead of
+    failing.
+    """
+    covered = {payload["target_date"] for _p, payload in errata}
+    for date in sorted(_settled_dates() - covered):
+        artifacts = sorted((SHADOW_ROOT / date).glob("*/settlement.json"))
+        assert artifacts, f"{date}: no settlement artifact found under {SHADOW_ROOT}"
+        for artifact in artifacts:
+            sentinels = draw_sentinel_rows(artifact)
+            assert sentinels == [], (
+                f"{artifact}: {len(sentinels)} rank-4+ row(s) still graded "
+                "against the draw sentinel, but no erratum was published for "
+                "this date — the grading defect is live again"
+            )
 
 
 def test_regenerating_refuses_to_overwrite(errata):
@@ -256,6 +322,10 @@ def test_check_mode_writes_nothing(errata):
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "nothing written" in proc.stdout
+    # Out-of-scope runs are reported, not silently ignored: a run that stops
+    # being visited would no longer be hash-verified either.
+    clean = _settled_dates() - {payload["target_date"] for _p, payload in errata}
+    assert proc.stdout.count("not defect-affected") == len(clean), proc.stdout
     for path, digest in before.items():
         assert _sha256(path) == digest
 
