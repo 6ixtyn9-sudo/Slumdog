@@ -42,7 +42,7 @@ jobs:
           else
             echo "::warning::no successful pipeline.yml run found"
           fi
-      - name: Settle overdue predictions (D+1) then run forward batch (D+2..D+6, frozen 24h timing contract)
+      - name: Settle overdue predictions (D+1), complete open settlement rows (append-only supplements), then run forward batch (D+2..D+6, frozen 24h timing contract)
         env:
           PYTHONPATH: src
         run: python scripts/forward_shadow_batch.py --root .
@@ -51,8 +51,10 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          find data/reports/shadow -type f \( -name 'shadow_selections.json' -o -name 'manifest.json' -o -name 'settlement.json' -o -name 'settlement.json.sha256' -o -name '*.settlement.json' -o -name '*.settlement.json.sha256' -o -name '*.bundle.json' -o -name '*.tar.gz.sha256' -o -name 'status.tsv' \) | xargs -r git add -f
-          find data/settlement_evidence -type f -name 'settlement_capture_receipt.json' 2>/dev/null | xargs -r git add -f
+          # settlement_supplement_* = append-only completion-pass records (owner directive 2026-09-14); never overwrite settlement.json
+          find data/reports/shadow -type f \( -name 'shadow_selections.json' -o -name 'manifest.json' -o -name 'settlement.json' -o -name 'settlement.json.sha256' -o -name 'settlement_supplement_*.json' -o -name 'settlement_supplement_*.sha256' -o -name '*.settlement.json' -o -name '*.settlement.json.sha256' -o -name '*.bundle.json' -o -name '*.tar.gz.sha256' -o -name 'status.tsv' \) | xargs -r git add -f
+          # *_completion_* receipts are the completion pass's purpose-tagged re-captures; the D+1 settlement_capture_receipt.json stays as-is
+          find data/settlement_evidence -type f \( -name 'settlement_capture_receipt.json' -o -name 'settlement_capture_receipt_completion_*.json' \) 2>/dev/null | xargs -r git add -f
           git add -f data/reports/capture_*.json 2>/dev/null || true
           if git diff --cached --quiet; then echo "no new evidence"; exit 0; fi
           git commit -m "chore: shadow evidence (run ${{ github.run_id }})"
