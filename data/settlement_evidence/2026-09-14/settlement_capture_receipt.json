@@ -1,0 +1,50 @@
+{
+  "capture_purpose": "settlement",
+  "capture_type": "settlement_evidence",
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-14/football/20260915T040039.595789+0000_98db61118ba1.txt",
+      "bytes": 234243,
+      "captured_at": "2026-09-15T04:00:39.595789+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-14/football/20260915T040039.595789+0000_98db61118ba1.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-14&ord=0&tz=0&tzs=&tze=",
+      "route": "relay_markdown",
+      "sha256": "98db61118ba1607c8903f0453b63ea98452bec0b128526ded5eb2acbeaf23c5f",
+      "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-14&ord=0&tz=0&tzs=&tze=",
+      "sport": "football",
+      "target_date": "2026-09-14"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-14/baseball/20260915T040245.932212+0000_4b570e874a33.txt",
+      "bytes": 99158,
+      "captured_at": "2026-09-15T04:02:45.932212+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-14/baseball/20260915T040245.932212+0000_4b570e874a33.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/baseball/predictions/2026-09-14",
+      "route": "relay",
+      "sha256": "4b570e874a3387cdc612405c7f1f22a9cfcf26b2704c9e805e92ccf2fa9cff09",
+      "source_url": "https://www.forebet.com/en/baseball/predictions/2026-09-14",
+      "sport": "baseball",
+      "target_date": "2026-09-14"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-14/handball/20260915T040350.080937+0000_28e66d9108d6.txt",
+      "bytes": 112880,
+      "captured_at": "2026-09-15T04:03:50.080937+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-14/handball/20260915T040350.080937+0000_28e66d9108d6.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/handball/predictions/2026-09-14",
+      "route": "relay",
+      "sha256": "28e66d9108d6717dee423a72157739ddbd03ca919b1c6acfb87c5054ac8f09ed",
+      "source_url": "https://www.forebet.com/en/handball/predictions/2026-09-14",
+      "sport": "handball",
+      "target_date": "2026-09-14"
+    }
+  ],
+  "failures": [
+    "basketball:ValueError:target date missing from HTML: 2026-09-14"
+  ],
+  "generated_at": "2026-09-15T04:03:50.081490+00:00",
+  "target_date": "2026-09-14"
+}

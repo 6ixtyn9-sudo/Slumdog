@@ -1,0 +1,50 @@
+{
+  "capture_purpose": "settlement_completion",
+  "capture_type": "settlement_evidence",
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-10/football/20260915T041001.011730+0000_a6fcf716061f.txt",
+      "bytes": 225766,
+      "captured_at": "2026-09-15T04:10:01.011730+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-10/football/20260915T041001.011730+0000_a6fcf716061f.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-10&ord=0&tz=0&tzs=&tze=",
+      "route": "relay_markdown",
+      "sha256": "a6fcf716061f20b4049b58be53d2f8a629f5c6b8da8c781fb42d54fb5877c034",
+      "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-10&ord=0&tz=0&tzs=&tze=",
+      "sport": "football",
+      "target_date": "2026-09-10"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-10/basketball/20260915T041105.131467+0000_1adaa8d6857d.txt",
+      "bytes": 199229,
+      "captured_at": "2026-09-15T04:11:05.131467+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-10/basketball/20260915T041105.131467+0000_1adaa8d6857d.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/basketball/predictions/2026-09-10",
+      "route": "relay",
+      "sha256": "1adaa8d6857db523abb21b613f8fbab17a640d8052b90ed2de90eb0cad2d5484",
+      "source_url": "https://www.forebet.com/en/basketball/predictions/2026-09-10",
+      "sport": "basketball",
+      "target_date": "2026-09-10"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-10/rugby/20260915T041311.667175+0000_b968ead87110.txt",
+      "bytes": 96412,
+      "captured_at": "2026-09-15T04:13:11.667175+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-10/rugby/20260915T041311.667175+0000_b968ead87110.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/rugby/predictions/2026-09-10",
+      "route": "relay",
+      "sha256": "b968ead87110b9e822a5c5178430549b6b885302b3ec507d4c1a92e87a6f52be",
+      "source_url": "https://www.forebet.com/en/rugby/predictions/2026-09-10",
+      "sport": "rugby",
+      "target_date": "2026-09-10"
+    }
+  ],
+  "failures": [
+    "hockey:ValueError:target date missing from HTML: 2026-09-10"
+  ],
+  "generated_at": "2026-09-15T04:13:11.667765+00:00",
+  "target_date": "2026-09-10"
+}

@@ -1,0 +1,25 @@
+{
+  "capture_purpose": "settlement_completion",
+  "capture_type": "settlement_evidence",
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-11/basketball/20260915T041416.124151+0000_75cb725d995c.txt",
+      "bytes": 186105,
+      "captured_at": "2026-09-15T04:14:16.124151+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-11/basketball/20260915T041416.124151+0000_75cb725d995c.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/basketball/predictions/2026-09-11",
+      "route": "relay",
+      "sha256": "75cb725d995c2a72befa446f7a515c6bc03074755fcbd3c6432cd950881aeb51",
+      "source_url": "https://www.forebet.com/en/basketball/predictions/2026-09-11",
+      "sport": "basketball",
+      "target_date": "2026-09-11"
+    }
+  ],
+  "failures": [
+    "hockey:ValueError:target date missing from HTML: 2026-09-11",
+    "baseball:ValueError:target date missing from HTML: 2026-09-11"
+  ],
+  "generated_at": "2026-09-15T04:16:20.555199+00:00",
+  "target_date": "2026-09-11"
+}
