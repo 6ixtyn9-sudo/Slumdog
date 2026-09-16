@@ -1,0 +1,72 @@
+{
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/raw/football/2026-09-22/20260916T042640.253153+0000_709d4852ac9f.txt",
+      "bytes": 109291,
+      "captured_at": "2026-09-16T04:26:40.253153+00:00",
+      "metadata_path": "data/raw/football/2026-09-22/20260916T042640.253153+0000_709d4852ac9f.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-22&ord=0&tz=0&tzs=&tze=",
+      "route": "relay_markdown",
+      "sha256": "709d4852ac9f610f72d240c70576c6e976405ca539f9096923dfce8cb9227c40",
+      "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-22&ord=0&tz=0&tzs=&tze=",
+      "sport": "football",
+      "target_date": "2026-09-22"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/raw/rugby/2026-09-22/20260916T042643.270153+0000_04d86eef89f6.txt",
+      "bytes": 95172,
+      "captured_at": "2026-09-16T04:26:43.270153+00:00",
+      "metadata_path": "data/raw/rugby/2026-09-22/20260916T042643.270153+0000_04d86eef89f6.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/rugby/predictions/2026-09-22",
+      "route": "relay",
+      "sha256": "04d86eef89f662821e9edc1cbbe78c24c41a5c0cc25f305560028b825c42dfe8",
+      "source_url": "https://www.forebet.com/en/rugby/predictions/2026-09-22",
+      "sport": "rugby",
+      "target_date": "2026-09-22"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/raw/esoccer/2026-09-22/20260916T042648.767605+0000_3bdc18e8a5df.txt",
+      "bytes": 278497,
+      "captured_at": "2026-09-16T04:26:48.767605+00:00",
+      "metadata_path": "data/raw/esoccer/2026-09-22/20260916T042648.767605+0000_3bdc18e8a5df.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/esoccer",
+      "route": "relay",
+      "sha256": "3bdc18e8a5dff84fd462ef76017978a169414d22e86d2c6dd24fe7764a984fca",
+      "source_url": "https://www.forebet.com/en/esoccer",
+      "sport": "esoccer",
+      "target_date": "2026-09-22"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/raw/afl/2026-09-22/20260916T042648.959872+0000_9b129117509b.txt",
+      "bytes": 5798,
+      "captured_at": "2026-09-16T04:26:48.959872+00:00",
+      "metadata_path": "data/raw/afl/2026-09-22/20260916T042648.959872+0000_9b129117509b.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/afl",
+      "route": "relay",
+      "sha256": "9b129117509b30255d0dce91a8becb0328c76efce580e42275692411ccab8a9f",
+      "source_url": "https://www.forebet.com/en/afl",
+      "sport": "afl",
+      "target_date": "2026-09-22"
+    }
+  ],
+  "failures": [
+    "basketball:ValueError:target date missing from HTML: 2026-09-22",
+    "tennis:ValueError:target date missing from HTML: 2026-09-22",
+    "hockey:ValueError:target date missing from HTML: 2026-09-22",
+    "baseball:ValueError:target date missing from HTML: 2026-09-22",
+    "american_football:ValueError:sport label missing from HTML: american_football",
+    "handball:ValueError:target date missing from HTML: 2026-09-22",
+    "volleyball:ValueError:target date missing from HTML: 2026-09-22",
+    "cricket:ValueError:target date missing from HTML: 2026-09-22",
+    "mma:ValueError:target date missing from HTML: 2026-09-22",
+    "esports:ValueError:Forebet returned a 404 content page"
+  ],
+  "football_markets": "data/raw/football/2026-09-22/markets.json",
+  "generated_at": "2026-09-16T04:27:07.287095+00:00",
+  "reused": -10,
+  "target_date": "2026-09-22"
+}

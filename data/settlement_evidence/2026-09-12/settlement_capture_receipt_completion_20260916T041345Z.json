@@ -1,0 +1,53 @@
+{
+  "capture_purpose": "settlement_completion",
+  "capture_type": "settlement_evidence",
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-12/football/20260916T041353.293178+0000_d3fd71d61aa5.txt",
+      "bytes": 2281562,
+      "captured_at": "2026-09-16T04:13:53.293178+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-12/football/20260916T041353.293178+0000_d3fd71d61aa5.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-12&ord=0&tz=0&tzs=&tze=",
+      "route": "relay_markdown",
+      "sha256": "d3fd71d61aa5ce6668f78dea248fac195df7cdb15cb7b35320419f92a3bd819a",
+      "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-12&ord=0&tz=0&tzs=&tze=",
+      "sport": "football",
+      "target_date": "2026-09-12"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-12/hockey/20260916T041457.988546+0000_df05941cf7a2.txt",
+      "bytes": 339550,
+      "captured_at": "2026-09-16T04:14:57.988546+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-12/hockey/20260916T041457.988546+0000_df05941cf7a2.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/hockey/predictions/2026-09-12",
+      "route": "relay",
+      "sha256": "df05941cf7a2c2e1d897698a8605d65a8644286c65fb6f632f54fd430d3fdd37",
+      "source_url": "https://www.forebet.com/en/hockey/predictions/2026-09-12",
+      "sport": "hockey",
+      "target_date": "2026-09-12"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-12/volleyball/20260916T042011.116149+0000_ddee1987ac6a.txt",
+      "bytes": 184829,
+      "captured_at": "2026-09-16T04:20:11.116149+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-12/volleyball/20260916T042011.116149+0000_ddee1987ac6a.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/volleyball/predictions/2026-09-12",
+      "route": "relay",
+      "sha256": "ddee1987ac6a624b53af2316c99eadb3cb5291fa02d93b0f538c499a76428f48",
+      "source_url": "https://www.forebet.com/en/volleyball/predictions/2026-09-12",
+      "sport": "volleyball",
+      "target_date": "2026-09-12"
+    }
+  ],
+  "failures": [
+    "baseball:ValueError:target date missing from HTML: 2026-09-12",
+    "american_football:ValueError:sport label missing from HTML: american_football",
+    "rugby:ValueError:target date missing from HTML: 2026-09-12",
+    "handball:ValueError:target date missing from HTML: 2026-09-12"
+  ],
+  "generated_at": "2026-09-16T04:20:11.116834+00:00",
+  "target_date": "2026-09-12"
+}

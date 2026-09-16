@@ -1,0 +1,27 @@
+{
+  "capture_purpose": "settlement",
+  "capture_type": "settlement_evidence",
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-15/handball/20260916T040345.648277+0000_fb59cd38ae31.txt",
+      "bytes": 127777,
+      "captured_at": "2026-09-16T04:03:45.648277+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-15/handball/20260916T040345.648277+0000_fb59cd38ae31.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/handball/predictions/2026-09-15",
+      "route": "relay",
+      "sha256": "fb59cd38ae31ca6defcabe4af5f769fe7ba1fe61c1e24d8ac010188724b2ab93",
+      "source_url": "https://www.forebet.com/en/handball/predictions/2026-09-15",
+      "sport": "handball",
+      "target_date": "2026-09-15"
+    }
+  ],
+  "failures": [
+    "football:ValueError:football JSON body missing: Expecting value: line 1 column 1 (char 0)",
+    "basketball:ValueError:target date missing from HTML: 2026-09-15",
+    "baseball:ValueError:target date missing from HTML: 2026-09-15",
+    "cricket:ValueError:target date missing from HTML: 2026-09-15"
+  ],
+  "generated_at": "2026-09-16T04:04:47.821120+00:00",
+  "target_date": "2026-09-15"
+}
