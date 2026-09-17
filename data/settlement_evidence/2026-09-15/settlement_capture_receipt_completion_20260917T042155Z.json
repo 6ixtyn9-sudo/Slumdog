@@ -1,0 +1,48 @@
+{
+  "capture_purpose": "settlement_completion",
+  "capture_type": "settlement_evidence",
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-15/football/20260917T042208.370652+0000_1fe19f534375.txt",
+      "bytes": 364850,
+      "captured_at": "2026-09-17T04:22:08.370652+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-15/football/20260917T042208.370652+0000_1fe19f534375.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-15&ord=0&tz=0&tzs=&tze=",
+      "route": "relay_markdown",
+      "sha256": "1fe19f53437596f30d934711119bb30b6a3d9cd7a98c99f5df1e32b5ec9dcae4",
+      "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-15&ord=0&tz=0&tzs=&tze=",
+      "sport": "football",
+      "target_date": "2026-09-15"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-15/baseball/20260917T042312.632045+0000_6a0db87990e0.txt",
+      "bytes": 167322,
+      "captured_at": "2026-09-17T04:23:12.632045+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-15/baseball/20260917T042312.632045+0000_6a0db87990e0.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/baseball/predictions/2026-09-15",
+      "route": "relay",
+      "sha256": "6a0db87990e0df2acd456eed9e1af13d84400151ff1b5372319f8db54ff0bbde",
+      "source_url": "https://www.forebet.com/en/baseball/predictions/2026-09-15",
+      "sport": "baseball",
+      "target_date": "2026-09-15"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-15/cricket/20260917T042416.860948+0000_e87512262efa.txt",
+      "bytes": 171773,
+      "captured_at": "2026-09-17T04:24:16.860948+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-15/cricket/20260917T042416.860948+0000_e87512262efa.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/cricket/predictions/2026-09-15",
+      "route": "relay",
+      "sha256": "e87512262efa6536be4285d6c29d8722254ae8f52d9471a4bd184da405f8aeba",
+      "source_url": "https://www.forebet.com/en/cricket/predictions/2026-09-15",
+      "sport": "cricket",
+      "target_date": "2026-09-15"
+    }
+  ],
+  "failures": [],
+  "generated_at": "2026-09-17T04:24:16.861625+00:00",
+  "target_date": "2026-09-15"
+}

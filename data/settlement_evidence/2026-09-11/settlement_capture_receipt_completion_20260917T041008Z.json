@@ -1,0 +1,35 @@
+{
+  "capture_purpose": "settlement_completion",
+  "capture_type": "settlement_evidence",
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-11/hockey/20260917T041010.781880+0000_04bbe4b88b37.txt",
+      "bytes": 326910,
+      "captured_at": "2026-09-17T04:10:10.781880+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-11/hockey/20260917T041010.781880+0000_04bbe4b88b37.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/hockey/predictions/2026-09-11",
+      "route": "relay",
+      "sha256": "04bbe4b88b37d2fb48a3b0617c30c846a06f434767d2c5e96cd83a27f358987c",
+      "source_url": "https://www.forebet.com/en/hockey/predictions/2026-09-11",
+      "sport": "hockey",
+      "target_date": "2026-09-11"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-11/baseball/20260917T041115.127302+0000_629e7dcfeb76.txt",
+      "bytes": 181759,
+      "captured_at": "2026-09-17T04:11:15.127302+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-11/baseball/20260917T041115.127302+0000_629e7dcfeb76.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/baseball/predictions/2026-09-11",
+      "route": "relay",
+      "sha256": "629e7dcfeb768b249cff3fcccc09cec0fa1e16a1ecb8c28ea3b214c2a7987591",
+      "source_url": "https://www.forebet.com/en/baseball/predictions/2026-09-11",
+      "sport": "baseball",
+      "target_date": "2026-09-11"
+    }
+  ],
+  "failures": [],
+  "generated_at": "2026-09-17T04:11:15.127913+00:00",
+  "target_date": "2026-09-11"
+}

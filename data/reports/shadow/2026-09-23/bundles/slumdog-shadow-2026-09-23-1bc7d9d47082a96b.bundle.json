@@ -1,0 +1,33 @@
+{
+  "archive_bytes": 57247350,
+  "archive_filename": "slumdog-shadow-2026-09-23-1bc7d9d47082a96b.tar.gz",
+  "archive_format": "tar.gz (deterministic: ustar, mtime=0, uid/gid=0, gzip mtime=0)",
+  "archive_sha256": "113129143a8762b83bc53379e405651d3fcad8cc42f47935a1087f91a11fd263",
+  "authorizations": {
+    "production_authorized": false,
+    "shortlist_policy_authorized": false,
+    "threshold_optimization_authorized": false,
+    "training_authorized": false
+  },
+  "bundle_created_at": "2026-09-17T04:29:31Z",
+  "bundle_schema_version": "slumdog_shadow_bundle",
+  "content_member_count": 29,
+  "decision_committed_at": "2026-09-17T04:29:28Z",
+  "decision_digest": "b6b9717b1b6a05431cc3a3fe52bbb5abc01b204ad3e232eb4dd17fb84ae2dddc",
+  "durability_status": "LOCAL_EXPORT_READY_FOR_INDEPENDENT_COPY",
+  "frozen_baseline_config_canonical_sha256": "666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1",
+  "input_digest": "ca4bbac8d4c1e189e0f547ebcb21bfa08f1557e1bda172ec400c84d77a0ae18d",
+  "inventory_bytes": 8383,
+  "inventory_sha256": "2be77ff3aafca2b19408366f9192618f1c146bceba4ccb0d4665ecc6e1bbd7c2",
+  "member_count": 30,
+  "payload_file_sha256": "598d98bb7c62715db8d764d353df2693c2aaaabcb8f4dd92489946d8c5af18c2",
+  "run_id": "1bc7d9d47082a96b",
+  "run_schema_version": "shadow_evaluator",
+  "run_status": "SHADOW_SELECTIONS_EMITTED",
+  "safe_cutoff_utc": "2026-09-22T00:00:00Z",
+  "shadow_declaration_canonical_sha256": "20f9a3a3fc519ae1c08e4d226ed75bc5d6a34246bc74a8e79f6b4f9b8bba25b2",
+  "source_manifest_sha256": "c9aea4b35a723e46174b9764d5b7cb4613dd797dca79251cc02f448138820808",
+  "source_payload_sha256": "598d98bb7c62715db8d764d353df2693c2aaaabcb8f4dd92489946d8c5af18c2",
+  "target_date": "2026-09-23",
+  "total_uncompressed_bytes": 57969753
+}

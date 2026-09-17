@@ -1,0 +1,35 @@
+{
+  "capture_purpose": "settlement_completion",
+  "capture_type": "settlement_evidence",
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-10/football/20260917T040801.684016+0000_66dcc34a093e.txt",
+      "bytes": 224011,
+      "captured_at": "2026-09-17T04:08:01.684016+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-10/football/20260917T040801.684016+0000_66dcc34a093e.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-10&ord=0&tz=0&tzs=&tze=",
+      "route": "relay_markdown",
+      "sha256": "66dcc34a093e7aacd6ef221f5e62f9407dfd0ada0bca4cbfda035f42c6923b56",
+      "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-10&ord=0&tz=0&tzs=&tze=",
+      "sport": "football",
+      "target_date": "2026-09-10"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-10/hockey/20260917T040905.884772+0000_50dd11e966db.txt",
+      "bytes": 239394,
+      "captured_at": "2026-09-17T04:09:05.884772+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-10/hockey/20260917T040905.884772+0000_50dd11e966db.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/hockey/predictions/2026-09-10",
+      "route": "relay",
+      "sha256": "50dd11e966db76854f0d2ca6fa93d773bfe3f1fd3e79082c602ed26430890d6a",
+      "source_url": "https://www.forebet.com/en/hockey/predictions/2026-09-10",
+      "sport": "hockey",
+      "target_date": "2026-09-10"
+    }
+  ],
+  "failures": [],
+  "generated_at": "2026-09-17T04:09:05.885465+00:00",
+  "target_date": "2026-09-10"
+}
