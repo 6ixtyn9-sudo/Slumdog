@@ -1,0 +1,41 @@
+{
+  "capture_purpose": "settlement_completion",
+  "capture_type": "settlement_evidence",
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-12/football/20260918T041312.504717+0000_2d80b0202ae3.txt",
+      "bytes": 2279993,
+      "captured_at": "2026-09-18T04:13:12.504717+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-12/football/20260918T041312.504717+0000_2d80b0202ae3.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-12&ord=0&tz=0&tzs=&tze=",
+      "route": "relay_markdown",
+      "sha256": "2d80b0202ae3a9338c5ffc373718df7f23ba76bdc55646dd1ee52d73b3ff633c",
+      "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-12&ord=0&tz=0&tzs=&tze=",
+      "sport": "football",
+      "target_date": "2026-09-12"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-12/hockey/20260918T041416.946774+0000_5d0e6016862a.txt",
+      "bytes": 339507,
+      "captured_at": "2026-09-18T04:14:16.946774+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-12/hockey/20260918T041416.946774+0000_5d0e6016862a.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/hockey/predictions/2026-09-12",
+      "route": "relay",
+      "sha256": "5d0e6016862aae8c0d189357f7cf4d14d888f7f8debfe83fec57a505bd06ec40",
+      "source_url": "https://www.forebet.com/en/hockey/predictions/2026-09-12",
+      "sport": "hockey",
+      "target_date": "2026-09-12"
+    }
+  ],
+  "failures": [
+    "baseball:ValueError:target date missing from HTML: 2026-09-12",
+    "american_football:ValueError:sport label missing from HTML: american_football",
+    "rugby:ValueError:target date missing from HTML: 2026-09-12",
+    "handball:ValueError:target date missing from HTML: 2026-09-12",
+    "volleyball:ValueError:target date missing from HTML: 2026-09-12"
+  ],
+  "generated_at": "2026-09-18T04:19:28.217085+00:00",
+  "target_date": "2026-09-12"
+}

@@ -1,0 +1,26 @@
+{
+  "capture_purpose": "settlement",
+  "capture_type": "settlement_evidence",
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-17/football/20260918T040052.808378+0000_3061ec9950e1.txt",
+      "bytes": 226813,
+      "captured_at": "2026-09-18T04:00:52.808378+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-17/football/20260918T040052.808378+0000_3061ec9950e1.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-17&ord=0&tz=0&tzs=&tze=",
+      "route": "relay_markdown",
+      "sha256": "3061ec9950e1d9ef77377368517d80124cd1500a0031caaf25226467025544da",
+      "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-17&ord=0&tz=0&tzs=&tze=",
+      "sport": "football",
+      "target_date": "2026-09-17"
+    }
+  ],
+  "failures": [
+    "hockey:ValueError:target date missing from HTML: 2026-09-17",
+    "handball:ValueError:target date missing from HTML: 2026-09-17",
+    "cricket:ValueError:target date missing from HTML: 2026-09-17"
+  ],
+  "generated_at": "2026-09-18T04:03:59.782106+00:00",
+  "target_date": "2026-09-17"
+}
