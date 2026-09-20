@@ -1,0 +1,10 @@
+{
+  "capture_purpose": "settlement_completion",
+  "capture_type": "settlement_evidence",
+  "captured": [],
+  "failures": [
+    "handball:ValueError:target date missing from HTML: 2026-09-16"
+  ],
+  "generated_at": "2026-09-20T04:25:23.763840+00:00",
+  "target_date": "2026-09-16"
+}

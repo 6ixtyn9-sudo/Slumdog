@@ -1,0 +1,11 @@
+{
+  "capture_purpose": "settlement_completion",
+  "capture_type": "settlement_evidence",
+  "captured": [],
+  "failures": [
+    "football:ValueError:football JSON body missing: Expecting value: line 1 column 1 (char 0)",
+    "hockey:ValueError:target date missing from HTML: 2026-09-10"
+  ],
+  "generated_at": "2026-09-20T04:11:25.058117+00:00",
+  "target_date": "2026-09-10"
+}
