@@ -6,6 +6,7 @@ directory and verifies the settlement pipeline end-to-end.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import subprocess
 import sys
@@ -1176,7 +1177,8 @@ def _se(
 
 
 def _settled_fixture(tmp_path, settled_events, *, target_date=TARGET, run_id=RUN,
-                     selections=None, considered_pool=None):
+                     selections=None, considered_pool=None,
+                     settled_at="2026-09-06T08:00:00Z"):
     """Create a run + a real D+1 settlement.json graded against ``settled_events``."""
     sel, man = _make_prediction_run(
         tmp_path, target_date=target_date, run_id=run_id,
@@ -1189,7 +1191,7 @@ def _settled_fixture(tmp_path, settled_events, *, target_date=TARGET, run_id=RUN
         settlement_receipt={
             "target_date": target_date, "captured": [], "failures": [],
         },
-        repo_root=tmp_path, settled_at="2026-09-06T08:00:00Z",
+        repo_root=tmp_path, settled_at=settled_at,
     )
     run_dir = Path(result.settlement_artifact_path).parent
     return sel, man, run_dir
@@ -1595,12 +1597,35 @@ class TestSettlementCompletion:
 
 class TestCompletionCLI:
     def test_complete_offline_without_newer_receipt_is_failure_exit(self, tmp_path):
-        _settled_fixture(tmp_path, [])
+        # The 14-day retry window is anchored to the real clock, so the
+        # fixture date must be built relative to today: a pinned historical
+        # date eventually ages out and this path becomes RETRY_WINDOW_EXPIRED
+        # (exit 0) instead of the fail-closed COMPLETION_FAILED (exit 2).
+        today = _dt.datetime.now(_dt.timezone.utc).date()
+        target = (today - _dt.timedelta(days=2)).isoformat()
+        settled_at = (today - _dt.timedelta(days=1)).isoformat() + "T08:00:00Z"
+        _settled_fixture(tmp_path, [], target_date=target, settled_at=settled_at)
         result = subprocess.run(
             [sys.executable, "-m", "slumdog.shadow_settle",
-             "--date", TARGET, "--run-id", RUN, "--root", str(tmp_path),
+             "--date", target, "--run-id", RUN, "--root", str(tmp_path),
              "--complete", "--offline"],
             capture_output=True, text=True, timeout=30,
         )
         assert result.returncode == 2
         assert "COMPLETION_FAILED" in result.stdout
+
+    def test_complete_offline_window_expired_is_clean_exit(self, tmp_path):
+        # Companion pin for the boundary the failure-exit test steps around:
+        # 2026-08-01 is permanently outside the 14-day window, so once a
+        # fixture date ages out the CLI must short-circuit cleanly (exit 0)
+        # with RETRY_WINDOW_EXPIRED rather than attempt the failing fetch.
+        _settled_fixture(tmp_path, [], target_date="2026-08-01",
+                         settled_at="2026-08-02T08:00:00Z")
+        result = subprocess.run(
+            [sys.executable, "-m", "slumdog.shadow_settle",
+             "--date", "2026-08-01", "--run-id", RUN, "--root", str(tmp_path),
+             "--complete", "--offline"],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0
+        assert "RETRY_WINDOW_EXPIRED" in result.stdout
