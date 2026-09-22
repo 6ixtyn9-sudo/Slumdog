@@ -1,0 +1,24 @@
+{
+  "capture_purpose": "settlement_completion",
+  "capture_type": "settlement_evidence",
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-11/hockey/20260922T040542.800722+0000_c259a9660188.txt",
+      "bytes": 327138,
+      "captured_at": "2026-09-22T04:05:42.800722+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-11/hockey/20260922T040542.800722+0000_c259a9660188.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/hockey/predictions/2026-09-11",
+      "route": "relay",
+      "sha256": "c259a96601880b39bc2504dcfce19dc2de03a64371b3bbef227cbfebce9db2e8",
+      "source_url": "https://www.forebet.com/en/hockey/predictions/2026-09-11",
+      "sport": "hockey",
+      "target_date": "2026-09-11"
+    }
+  ],
+  "failures": [
+    "baseball:ValueError:target date missing from HTML: 2026-09-11"
+  ],
+  "generated_at": "2026-09-22T04:06:44.989726+00:00",
+  "target_date": "2026-09-11"
+}
