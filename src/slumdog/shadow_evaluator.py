@@ -38,6 +38,7 @@ import argparse
 import datetime as _dt
 import hashlib
 import json
+from dataclasses import replace as _dc_replace
 import math
 import os
 import sys
@@ -870,6 +871,7 @@ def _emit_run(
     declaration: dict[str, Any],
     repo_root: Path,
     decision_clock: _dt.datetime | None = None,
+    exclude_event_ids: frozenset[str] | None = None,
 ) -> ShadowRunResult:
     decision_dt = decision_clock or _now_utc()
     decision_committed_at = _now_utc_iso(decision_dt)
@@ -882,6 +884,23 @@ def _emit_run(
             block_reason="DECISION_COMMITTED_AT_AFTER_SAFE_CUTOFF",
             repo_root=repo_root,
         )
+
+    # Refresh-mode pre-filter: drop events already selected by an earlier
+    # run for this date (their decisions are frozen artifacts; the refresh
+    # must only admit genuinely new fixtures). The load-level accounting
+    # (capture/snapshot accounting, raw input hashes) deliberately stays
+    # intact — this exclusion is a decision-layer action and is made
+    # visible in the considered pool + refresh_exclusion_count below.
+    refreshed_excluded: dict[tuple[str, str, str], PreEventRecord] = {}
+    if exclude_event_ids is not None:
+        kept_records: list[PreEventRecord] = []
+        for rec in capture_result.records:
+            if rec.event_id in exclude_event_ids:
+                refreshed_excluded.setdefault(
+                    (rec.sport, rec.event_id, rec.event_date), rec)
+            else:
+                kept_records.append(rec)
+        capture_result = _dc_replace(capture_result, records=kept_records)
 
     # The verified records come from the capture loader's parser;
     # they have already passed the per-record parser sanity checks
@@ -929,6 +948,21 @@ def _emit_run(
                     # Excluded before R2 ran; uniform shape, no reason to give.
                     "r2_exclusion": None,
                 })
+    # 1b) Refresh-mode exclusions: one entry per distinct event removed
+    #     by exclude_event_ids, so the decision_digest commits to what the
+    #     refresh deliberately did not re-consider (frozen prior decisions).
+    for (sport, event_id, event_date), _rec in sorted(refreshed_excluded.items()):
+        considered_pool_dicts.append({
+            "sport": sport,
+            "event_id": event_id,
+            "event_date": event_date,
+            "considered_status": "REFRESH_EXCLUDED_PREVIOUSLY_SELECTED",
+            "eligible": False,
+            "rank_within_sport_day": None,
+            # Excluded before R2 ran; the refresh exclusion reason is the
+            # status itself.
+            "r2_exclusion": None,
+        })
     # 2) Single-fingerprint duplicate extras (collapsed under the
     #    canonical record). One entry per extra observation.
     #    This is needed so the decision_digest commits to
@@ -1242,6 +1276,13 @@ def _emit_run(
         "capture_record_tuples": capture_record_tuples,
         "conflict_fingerprint_trail": conflict_fingerprint_trail,
     }
+    if exclude_event_ids is not None:
+        # Refresh-mode only: the exclusion declaration is an input to the
+        # decision, so a refresh run gets its own run_id (and artifact
+        # directory) even with an injected identical decision clock.
+        # Normal runs omit the key entirely → byte-stable input digests.
+        input_digest_payload["refresh_exclude_event_ids"] = sorted(
+            exclude_event_ids)
     input_digest = _canonical_sha256(input_digest_payload)
 
     # ``decision_digest`` commits to the conflict-resolved pool,
@@ -1315,6 +1356,10 @@ def _emit_run(
         "sport_day_summary": sport_day_summary,
         "decision_accounting": decision_accounting,
     }
+    if exclude_event_ids is not None:
+        # Present only in refresh mode so normal (non-refresh) runs keep the
+        # exact historical payload schema and digest composition.
+        payload["refresh_exclusion_count"] = len(refreshed_excluded)
     payload_bytes = canonical_json_bytes(payload)
     fd_p, tmp_p = tempfile.mkstemp(prefix="shadow_selections.", suffix=".json.tmp", dir=str(artifact_dir))
     try:
@@ -1352,6 +1397,14 @@ def _emit_run(
         # not, so recording it cannot perturb decision_digest or run_id.
         "r2_exclusion_breakdown": _summarise_r2_exclusions(considered_pool_dicts),
         "decision_conflicts": conflict_fingerprints,
+    }
+    if exclude_event_ids is not None:
+        # Refresh-mode-only manifest fields (see payload note above): the
+        # exclusion request itself is provenance for the refreshed run.
+        manifest["refresh_mode"] = True
+        manifest["refresh_exclusion_count"] = len(refreshed_excluded)
+        manifest["refresh_exclude_event_ids"] = sorted(exclude_event_ids)
+    manifest.update({
         "capture_provenance": {
             "receipt_path": capture_result.receipt_path,
             "receipt_sha256": capture_result.receipt_sha256,
@@ -1365,7 +1418,7 @@ def _emit_run(
         "durability_policy": declaration.get("durability", {}),
         "anti_tuning": declaration.get("anti_tuning", {}),
         "version": "shadow_evaluator",
-    }
+    })
     fd_m, tmp_m = tempfile.mkstemp(prefix="manifest.", suffix=".json.tmp", dir=str(artifact_dir))
     try:
         with os.fdopen(fd_m, "wb") as f:
@@ -1454,8 +1507,18 @@ def evaluate_from_disk(
     history_paths: list[str | Path] | None = None,
     decision_clock: _dt.datetime | None = None,
     history_max_interim_bytes: int | None = None,
+    exclude_event_ids: frozenset[str] | None = None,
 ) -> ShadowRunResult:
-    """Top-level disk-to-artifact orchestration."""
+    """Top-level disk-to-artifact orchestration.
+
+    ``exclude_event_ids`` enables the daily-refresh mode: events already
+    selected by an earlier run for the same target date (whose decisions
+    are frozen) are removed from admission *after* capture loading, so
+    the refreshed run emits only genuinely new fixtures. Excluded events
+    are still committed into the decision digest via the considered pool
+    (status ``REFRESH_EXCLUDED_PREVIOUSLY_SELECTED``) — nothing is hidden
+    from the run's accounting.
+    """
     repo_root = Path(repo_root).resolve()
     declaration = load_shadow_declaration(declaration_path)
     load_frozen_baseline_config(repo_root)
@@ -1501,6 +1564,7 @@ def evaluate_from_disk(
         declaration=declaration,
         repo_root=repo_root,
         decision_clock=decision_clock,
+        exclude_event_ids=exclude_event_ids,
     )
 
 
@@ -1528,11 +1592,31 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                         "ledgers (bytes). Default: 256 MiB. Use a smaller "
                         "value in tests; the loader never silently disables "
                         "the cap.")
+    p.add_argument("--exclude-events", type=Path, default=None, metavar="PATH",
+                   help="Refresh mode: path to a JSON array of event_id "
+                        "strings previously selected for this target date. "
+                        "Those events are removed from admission (their "
+                        "original decisions stay frozen); the run emits only "
+                        "genuinely new fixtures.")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
+    exclude_event_ids: frozenset[str] | None = None
+    if args.exclude_events is not None:
+        try:
+            raw = json.loads(args.exclude_events.read_text())
+        except Exception as e:
+            print(f"SHADOW_RUN_BLOCKED: exclude-events file unreadable: "
+                  f"{type(e).__name__}: {e}", file=sys.stderr)
+            return 2
+        if (not isinstance(raw, list)
+                or not all(isinstance(x, str) and x for x in raw)):
+            print("SHADOW_RUN_BLOCKED: exclude-events file must be a JSON "
+                  "array of non-empty event_id strings", file=sys.stderr)
+            return 2
+        exclude_event_ids = frozenset(raw)
     try:
         result = evaluate_from_disk(
             target_date=args.date,
@@ -1541,6 +1625,7 @@ def main(argv: list[str] | None = None) -> int:
             repo_root=args.root,
             history_paths=args.history or None,
             history_max_interim_bytes=args.history_max_interim_bytes,
+            exclude_event_ids=exclude_event_ids,
         )
     except ShadowEvaluatorError as e:
         print(f"SHADOW_RUN_BLOCKED: {e}", file=sys.stderr)
@@ -1555,6 +1640,7 @@ def main(argv: list[str] | None = None) -> int:
         "decision_digest": result.manifest.get("decision_digest"),
         "payload_file_sha256": result.manifest.get("payload_file_sha256"),
         "durability_status": result.manifest.get("durability_policy", {}).get("status"),
+        "refresh_exclusion_count": result.manifest.get("refresh_exclusion_count", 0),
     }, indent=2, sort_keys=True))
     if result.run_status == "SHADOW_RUN_BLOCKED":
         print("SHADOW_RUN_BLOCKED: see artifact_dir for failure receipt", file=sys.stderr)

@@ -471,15 +471,27 @@ class ForebetCollector:
         meta_path.write_text(json.dumps(asdict(capture), indent=2, sort_keys=True))
         return capture
 
-    def capture_selected(self, target_date: str, sports: list[str] | None = None) -> list[RawCapture]:
+    def capture_selected(self, target_date: str, sports: list[str] | None = None,
+                         *, force: bool = False,
+                         receipt_name: str | None = None) -> list[RawCapture]:
         date.fromisoformat(target_date)
         selected = list(SPORTS) if not sports else sports
         unknown = [sport for sport in selected if sport not in SPORTS]
         if unknown:
             raise ValueError(f"unsupported sports: {unknown}")
+        # receipt_name lets the daily-refresh stage write its own receipt
+        # (capture_refresh_<date>_<stamp>.json); the original one-shot
+        # capture_<date>.json is never overwritten (append-only evidence).
+        receipt_filename = receipt_name or f"capture_{target_date}.json"
+        if not receipt_filename.endswith(".json") or "/" in receipt_filename:
+            raise ValueError(f"bad receipt_name: {receipt_name!r}")
         # Reuse captures already frozen for this date (same-day re-dispatch or
         # census-then-history): skip a sport if its raw dir for the date exists.
-        existing = {cap.sport for cap in self._existing_captures(target_date)}
+        # ``force`` skips this reuse rule entirely; the daily-refresh stage
+        # needs a genuinely fresh snapshot even when a prior capture for the
+        # date is present.
+        existing = set() if force else {
+            cap.sport for cap in self._existing_captures(target_date)}
         to_fetch = [sport for sport in selected if sport not in existing]
         captures: list[RawCapture] = [cap for cap in self._existing_captures(target_date) if cap.sport in selected]
         failures: list[str] = []
@@ -516,7 +528,7 @@ class ForebetCollector:
                 if markets_path is not None else None
             ),
         }
-        (report_dir / f"capture_{target_date}.json").write_text(
+        (report_dir / receipt_filename).write_text(
             json.dumps(receipt, indent=2, sort_keys=True)
         )
         return captures

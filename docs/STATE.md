@@ -475,6 +475,69 @@ failure isolation in the driver, and the OPEN_GRADES vocabulary pin.
 `py_compile` ok; pyflakes **0** warnings under `src/` and `scripts/`;
 `git diff --check` ok.
 
+## Daily refresh — near-term re-capture (owner directive 2026-09-22; measurement-first)
+
+**The one-shot forward capture snapshots each target date exactly once,
+roughly five days before it enters the shadow window.** Leagues that publish
+fixtures late (baseball, basketball, tennis, mma, esports — visible as
+"target date missing from HTML" failures in the capture receipts) never enter
+any shadow run, so near-term boards are football-heavy and non-football
+sports accumulate little grading evidence. The owner ruling (2026-09-22):
+this fix is **measurability / evidence-generation** — measure first, reweight
+later. No sport weighting, threshold, or rule change is authorized, and the
+frozen baselines are untouched.
+
+Instrument:
+
+- `slumdog.shadow_evaluator` learns a refresh mode: `evaluate_from_disk(...,
+  exclude_event_ids=...)` + CLI `--exclude-events PATH` (JSON array of
+  non-empty event ids; unreadable/invalid → exit 2). Excluded events are
+  removed post-load, pre-decision (capture/snapshot accounting untouched,
+  so the omission is visible, never hidden) and get
+  `considered_status: REFRESH_EXCLUDED_PREVIOUSLY_SELECTED` pool entries so
+  the decision_digest commits to what the refresh deliberately did not
+  re-consider. Refresh runs declare `refresh_mode`, `refresh_exclusion_count`
+  and `refresh_exclude_event_ids` in the manifest and `refresh_mode: true`
+  payloads; the exclusion declaration enters the input digest (refresh runs
+  get their own run_id/artifact dir). **Normal (non-refresh) runs are
+  byte-stable — no refresh keys, digests unchanged.**
+- `slumdog.forebet.ForebetCollector.capture_selected(..., force=False,
+  receipt_name=None)`: `force` skips the same-date raw-dir reuse so the
+  refresh genuinely re-snapshots; `receipt_name` (validated, no path
+  traversal) lets the refresh write its own `capture_refresh_<date>_<stamp>.json`
+  receipt — the original one-shot `capture_<date>.json` is never overwritten.
+- `scripts/forward_shadow_batch.py` gains a **daily-refresh stage**
+  (`run_refresh_for_date` / `run_refresh_backlog`, flags `--skip-refresh`,
+  `--refresh-days {1,2,3}` default 2) running after settlement/completion and
+  before forward capture: for trailing dates T+1..T+N with an existing
+  completed run, not yet refreshed today (guard = the committed refresh
+  receipt), it re-captures all sports, evaluates with `--exclude-events` =
+  the original run's frozen considered ids (selections ∪ considered_pool,
+  fail-closed on incomplete originals), and **relocates** the refresh run's
+  payload + manifest into the original run dir as
+  `selections_delta_<stamp>.json` + `.manifest.json` (+ `.sha256` markers),
+  then deletes the refresh run dir (one-run-per-date intact). Original
+  artifacts stay byte-frozen. Failures isolate per date (`REFRESH_FAILED`),
+  never aborting the batch.
+- `slumdog.shadow_settle` gains **settlement deltas** (`--settle-deltas` /
+  `settle_selection_deltas(...)`): at D+1, every ungraded
+  `selections_delta_*` in the run dir gets one append-only
+  `settlement_delta_<stamp>.json` (+ marker) — the same one-shot posture as
+  the primary settlement, grading via the shared `grade_all_entries`
+  row shape using the delta's own verified manifest copy (so rank-4+ delta
+  pool rows grade identically). Idempotent per stamp; NOT_DUE before D+1;
+  markers verified fail-closed; per-delta failures isolate. The batch
+  settles deltas immediately after the first settlement for freshly SETTLED
+  runs. Evidence sources in order: explicit receipt → offline override →
+  live `fetch_settlement_capture` per delta (receipt
+  `settlement_capture_receipt_delta_*.json`).
+
+Evidence commitments (surfaced in the batch receipt): `refresh[]` (status
+DELTA_WRITTEN / NO_NEW_EVENTS / ALREADY_REFRESHED_TODAY / NO_RUN /
+REFRESH_FAILED, `new_events`, frozen-exclusion count), `delta_settlement[]`,
+and summary keys `refresh_runs`, `refresh_deltas_written`,
+`refresh_new_events`, `refresh_failed`, `delta_settlement_graded`.
+
 ## Rank-4+ Settlement Erratum (2026-09-07; extended 2026-09-08; scope narrowed 2026-09-14)
 
 **Every rank-4+ grade in the committed `settlement.json` files of the four

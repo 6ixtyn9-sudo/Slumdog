@@ -93,6 +93,27 @@ This is NOT a value-betting, odds-first, EV, de-vigging, Kelly, or bookmaker-cov
   Raw completion capture bodies (HTML/JSON) remain outside git (30-day
   Actions artifacts); all other exclusions in the waiver above are
   unchanged.
+- **Waiver extension (2026-09-22, owner directive "near-term re-capture
+  coverage fix"):** `selections_delta_<stamp>.json` (+ `.sha256`) and their
+  `selections_delta_<stamp>.manifest.json` (+ `.sha256`) copies under
+  `data/reports/shadow/<date>/<run>/`, `settlement_delta_<stamp>.json` +
+  `.sha256` markers in the same run dirs, `capture_refresh_<date>_<stamp>.json`
+  receipts under `data/reports/`, and `settlement_capture_receipt_delta_*.json`
+  receipts under `data/settlement_evidence/<date>/` are added to the scoped
+  waiver. These are the daily-refresh (near-term re-capture) pass's
+  append-only records: the T+1/T+2 dates are re-captured so late-publishing
+  leagues (baseball, basketball, tennis, mma, esports — previously "target
+  date missing from HTML" at D+5) still enter the shadow pipeline; the
+  refresh evaluates only events the original run never admitted
+  (--exclude-events over the frozen considered set) and appends its picks as
+  `selections_delta_*` INSIDE the original run dir. The original
+  `shadow_selections.json`, `manifest.json`, `settlement.json` and bundle
+  stay byte-frozen (one-run-per-date intact — the refresh evaluator's own
+  run dir is deleted after relocation), and every delta artifact carries its
+  own SHA-256 marker, re-verified fail-closed before delta settlement.
+  Same small-JSON size class as the files already covered. Raw refresh
+  capture bodies (HTML/JSON) remain outside git; all other exclusions in
+  the waiver above are unchanged.
 
 ## Change Control
 

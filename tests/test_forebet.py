@@ -96,3 +96,53 @@ def test_football_fetch_retries_truncated_then_succeeds(tmp_path, monkeypatch):
     cap = forebet_mod.ForebetCollector(tmp_path)._fetch("football", "2025-09-21")
     assert cap.bytes == len(good)
     assert (tmp_path / cap.body_path).read_bytes() == good
+
+
+class TestCaptureSelectedRefreshParams:
+    def test_receipt_name_validation(self, tmp_path):
+        from slumdog.forebet import ForebetCollector
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        with pytest.raises(ValueError, match="bad receipt_name"):
+            collector.capture_selected(
+                "2026-09-23", sports=["hockey"],
+                receipt_name="capture_refresh_2026-09-23/evil.json")
+        with pytest.raises(ValueError, match="bad receipt_name"):
+            collector.capture_selected(
+                "2026-09-23", sports=["hockey"],
+                receipt_name="capture_refresh_2026-09-23.txt")
+
+    def test_force_skips_raw_dir_reuse(self, tmp_path, monkeypatch):
+        """force=True must re-fetch even when a same-date raw capture dir
+        exists (the refresh needs a genuinely fresh snapshot)."""
+        from slumdog.forebet import ForebetCollector
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        raw = tmp_path / "data" / "raw" / "hockey" / "2026-09-23"
+        raw.mkdir(parents=True, exist_ok=True)
+        # A valid prior capture pair (sidecar metadata is what reuses).
+        (raw / "prior.json").write_text(json.dumps({
+            "sport": "hockey", "target_date": "2026-09-23",
+            "captured_at": "2026-09-20T04:00:00Z",
+            "source_url": "https://example.invalid/x",
+            "relay_url": "https://relay.invalid/x",
+            "body_format": "html", "sha256": "0" * 64, "bytes": 3,
+            "body_path": "data/raw/hockey/2026-09-23/prior.txt",
+            "metadata_path": "data/raw/hockey/2026-09-23/prior.json",
+            "route": "direct",
+        }))
+
+        calls = []
+
+        def _fake_fetch(self, sport, target_date):
+            calls.append((sport, target_date))
+            raise RuntimeError("offline test: no network")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", _fake_fetch)
+
+        # Without force: reuse — the fetch seam stays untouched.
+        captures = collector.capture_selected("2026-09-23", sports=["hockey"])
+        assert len(captures) == 1 and captures[0].sport == "hockey"
+        assert calls == []
+        # With force: the raw dir no longer shields the sport from a fetch.
+        collector.capture_selected("2026-09-23", sports=["hockey"], force=True)
+        assert calls == [("hockey", "2026-09-23")]

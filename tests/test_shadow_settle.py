@@ -1629,3 +1629,198 @@ class TestCompletionCLI:
         )
         assert result.returncode == 0
         assert "RETRY_WINDOW_EXPIRED" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Settlement deltas — grading of daily-refresh selections_delta_* payloads
+# ---------------------------------------------------------------------------
+
+from slumdog.contracts import SettledEvent
+from slumdog.shadow_settle import (
+    SETTLEMENT_DELTA_SCHEMA_VERSION,
+    load_verified_delta_selections,
+    settle_selection_deltas,
+    write_settlement_delta,
+)
+
+
+def _settled_row(event_id: str, winner_index: int, *,
+                 sport: str = "football", target_date: str = "2026-09-05",
+                 p1: str = "Home FC", p2: str = "Away United") -> SettledEvent:
+    return SettledEvent(
+        event_id=event_id, sport=sport, event_date=target_date,
+        participant_1=p1, participant_2=p2, winner_index=winner_index,
+        score_1=1.0, score_2=2.0 if winner_index == 2 else 0.0,
+        probability_1=0.60, probability_2=0.20, draw_probability=0.20,
+        forebet_pick=None, disposition="SETTLED",
+    )
+
+
+def _write_delta(run_dir: Path, stamp: str, payload: dict,
+                 manifest: dict | None = None) -> None:
+    """Write a selections_delta_<stamp>.json (+ .sha256 marker) and its
+    manifest copy (+ marker), mirroring the batch refresh writer."""
+    import hashlib as _hl
+    dest = run_dir / f"selections_delta_{stamp}.json"
+    data = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+    dest.write_bytes(data)
+    Path(str(dest) + ".sha256").write_text(
+        f"{_hl.sha256(data).hexdigest()}  {dest.name}\n")
+    man = manifest if manifest is not None else {
+        "run_id": payload.get("run_id"),
+        "target_date": payload.get("target_date"),
+        "considered_pool": [],
+        "input_provenance": {},
+    }
+    man_dest = run_dir / f"selections_delta_{stamp}.manifest.json"
+    man_data = json.dumps(man, indent=2, sort_keys=True).encode("utf-8")
+    man_dest.write_bytes(man_data)
+    Path(str(man_dest) + ".sha256").write_text(
+        f"{_hl.sha256(man_data).hexdigest()}  {man_dest.name}\n")
+
+
+class TestSettleSelectionDeltas:
+    def _setup(self, tmp_path) -> Path:
+        payload, manifest = _make_prediction_run(tmp_path)
+        run_dir = (tmp_path / "data" / "reports" / "shadow"
+                   / "2026-09-05" / "abcd1234efgh5678")
+        _write_delta(run_dir, "20260905T040000Z", payload, manifest)
+        return run_dir
+
+    def test_offline_override_settles_and_is_idempotent(self, tmp_path):
+        run_dir = self._setup(tmp_path)
+        original_sel = (run_dir / "shadow_selections.json").read_bytes()
+        original_man = (run_dir / "manifest.json").read_bytes()
+
+        override = [
+            _settled_row("football:12345", 2),       # underdog win → SUCCESS
+            _settled_row("football:12346", 1),       # favorite win → FAILURE
+            _settled_row("basketball:99001", 2,
+                         sport="basketball",
+                         p1="Team Alpha", p2="Team Beta"),
+        ]
+        statuses = settle_selection_deltas(
+            target_date="2026-09-05", run_id="abcd1234efgh5678",
+            repo_root=tmp_path, as_of=_dt.date(2026, 9, 6),
+            settled_rows_override=override,
+            generated_at="2026-09-06T04:00:00Z",
+        )
+        assert len(statuses) == 1
+        st = statuses[0]
+        assert st["status"] == "DELTA_SETTLED"
+        assert st["delta_stamp"] == "20260905T040000Z"
+        # 3 selections + the considered_pool rank-4 row (football:12347),
+        # graded via the delta's own manifest copy — no evidence for it
+        # here, so it lands UNSETTLED like the primary settlement would.
+        assert st["total_rows"] == 4
+        assert st["grades"] == {"SUCCESS": 2, "FAILURE": 1, "UNSETTLED": 1}
+
+        artifact = run_dir / "settlement_delta_20260905T040000Z.json"
+        marker = Path(str(artifact) + ".sha256")
+        assert artifact.is_file() and marker.is_file()
+        doc = json.loads(artifact.read_text())
+        assert doc["settlement_delta_schema_version"] == \
+            SETTLEMENT_DELTA_SCHEMA_VERSION
+        assert doc["target_date"] == "2026-09-05"
+        assert doc["run_id"] == "abcd1234efgh5678"
+        assert doc["settles"]["artifact"] == \
+            "selections_delta_20260905T040000Z.json"
+        # Marker verifies its artifact
+        import hashlib
+        assert marker.read_text().split()[0] == \
+            hashlib.sha256(artifact.read_bytes()).hexdigest()
+
+        # Frozen originals byte-untouched
+        assert (run_dir / "shadow_selections.json").read_bytes() == original_sel
+        assert (run_dir / "manifest.json").read_bytes() == original_man
+
+        # Idempotent: second pass finds nothing ungraded
+        statuses2 = settle_selection_deltas(
+            target_date="2026-09-05", run_id="abcd1234efgh5678",
+            repo_root=tmp_path, as_of=_dt.date(2026, 9, 6),
+            settled_rows_override=override,
+            generated_at="2026-09-07T04:00:00Z",
+        )
+        assert statuses2 == []
+        assert len(list(run_dir.glob("settlement_delta_*.json"))) == 1
+
+    def test_not_due_guard_blocks_same_day(self, tmp_path):
+        self._setup(tmp_path)
+        statuses = settle_selection_deltas(
+            target_date="2026-09-05", run_id="abcd1234efgh5678",
+            repo_root=tmp_path, as_of=_dt.date(2026, 9, 5),
+            settled_rows_override=[],
+        )
+        assert statuses == [{"delta_stamp": "20260905T040000Z",
+                             "status": "NOT_DUE"}]
+        run_dir = (tmp_path / "data" / "reports" / "shadow"
+                   / "2026-09-05" / "abcd1234efgh5678")
+        assert not list(run_dir.glob("settlement_delta_*.json"))
+
+    def test_missing_delta_marker_fails_closed(self, tmp_path):
+        run_dir = self._setup(tmp_path)
+        dest = run_dir / "selections_delta_20260905T040000Z.json"
+        Path(str(dest) + ".sha256").unlink()
+        with pytest.raises(SettlementError, match="marker missing"):
+            load_verified_delta_selections(run_dir)
+
+    def test_tampered_delta_marker_fails_closed(self, tmp_path):
+        run_dir = self._setup(tmp_path)
+        dest = run_dir / "selections_delta_20260905T040000Z.json"
+        dest.write_bytes(dest.read_bytes() + b"\n")
+        with pytest.raises(SettlementError, match="marker mismatch"):
+            load_verified_delta_selections(run_dir)
+
+    def test_corrumped_delta_yields_failed_status_not_raise(self, tmp_path):
+        run_dir = self._setup(tmp_path)
+        # Break the delta manifest marker: per-delta isolation must surface
+        # DELTA_SETTLEMENT_FAILED while the caller keeps running.
+        man = run_dir / "selections_delta_20260905T040000Z.manifest.json"
+        man.write_bytes(man.read_bytes() + b"\n")
+        statuses = settle_selection_deltas(
+            target_date="2026-09-05", run_id="abcd1234efgh5678",
+            repo_root=tmp_path, as_of=_dt.date(2026, 9, 6),
+            settled_rows_override=[],
+        )
+        assert len(statuses) == 1
+        assert statuses[0]["status"] == "DELTA_SETTLEMENT_FAILED"
+        assert "marker mismatch" in statuses[0]["error"]
+
+    def test_no_deltas_is_noop(self, tmp_path):
+        _make_prediction_run(tmp_path)
+        statuses = settle_selection_deltas(
+            target_date="2026-09-05", run_id="abcd1234efgh5678",
+            repo_root=tmp_path, as_of=_dt.date(2026, 9, 6),
+            settled_rows_override=[],
+        )
+        assert statuses == []
+
+    def test_missing_run_dir_is_noop(self, tmp_path):
+        statuses = settle_selection_deltas(
+            target_date="2026-09-05", run_id="doesnotexist0000",
+            repo_root=tmp_path, as_of=_dt.date(2026, 9, 6),
+            settled_rows_override=[],
+        )
+        assert statuses == []
+
+    def test_offline_without_evidence_reports_failed(self, tmp_path):
+        self._setup(tmp_path)
+        statuses = settle_selection_deltas(
+            target_date="2026-09-05", run_id="abcd1234efgh5678",
+            repo_root=tmp_path, as_of=_dt.date(2026, 9, 6), offline=True,
+        )
+        assert statuses[0]["status"] == "DELTA_SETTLEMENT_FAILED"
+        assert "requires a receipt or override" in statuses[0]["error"]
+
+    def test_write_settlement_delta_refuses_overwrite(self, tmp_path):
+        run_dir = self._setup(tmp_path)
+        kwargs = dict(
+            target_date="2026-09-05", run_id="abcd1234efgh5678",
+            delta_payload={}, delta_stamp="20260905T040000Z",
+            rows=[], summary={}, fresh_receipt={},
+            grading_contract={}, run_dir=run_dir,
+            generated_at="2026-09-06T04:00:00Z",
+        )
+        write_settlement_delta(**kwargs)
+        with pytest.raises(SettlementError, match="refusing to overwrite"):
+            write_settlement_delta(**kwargs)

@@ -4057,3 +4057,155 @@ def test_fingerprint_rejects_boolean_and_string_probabilities():
     r = PreEventRecord(participant_1="Arsenal",
                        participant_2="Chelsea", **base)
     assert _extract_decision_fingerprint(r) is not None
+
+
+# ===========================================================================
+# Refresh-mode exclusion (near-term re-capture) tests
+# ===========================================================================
+
+def _run_normal_and_refresh(tmp_root, exclude_factory):
+    """Helper: run the evaluator normally, collect admitted event ids, run
+    again with those ids excluded, returning (normal, refresh) results plus
+    the id set."""
+    gz_path = tmp_root / "data" / "reports" / "history_football.jsonl.gz"
+    _make_history_gz(gz_path, [_dict_row(eid=f"h{i}", p1=f"T{i}A",
+                                         p2=f"T{i}B", dt=f"2024-05-{i:02d}")
+                               for i in range(1, 25)])
+    receipt_path, _ = _build_football_capture(tmp_root, "2026-08-28")
+    decision_clock = datetime(2026, 8, 27, 0, 0, 0, tzinfo=timezone.utc)
+    normal = evaluate_from_disk(
+        target_date="2026-08-28",
+        capture_receipt_path=receipt_path,
+        declaration_path=tmp_root / "config" / "shadow_evaluator.json",
+        repo_root=tmp_root,
+        history_paths=[gz_path],
+        decision_clock=decision_clock,
+    )
+    admitted = {r["event_id"]
+                for r in json.loads((Path(normal.artifact_dir)
+                                     / "manifest.json")
+                                    .read_text()).get("considered_pool", [])}
+    admitted |= {r["event_id"]
+                 for r in json.loads((Path(normal.artifact_dir)
+                                      / "shadow_selections.json")
+                                     .read_text()).get("selections", [])}
+    refresh = evaluate_from_disk(
+        target_date="2026-08-28",
+        capture_receipt_path=receipt_path,
+        declaration_path=tmp_root / "config" / "shadow_evaluator.json",
+        repo_root=tmp_root,
+        history_paths=[gz_path],
+        decision_clock=decision_clock,
+        exclude_event_ids=exclude_factory(admitted),
+    )
+    return normal, refresh, admitted
+
+
+def test_refresh_exclusion_freezes_previously_admitted(tmp_root):
+    normal, refresh, admitted = _run_normal_and_refresh(
+        tmp_root, lambda ids: ids)
+    assert admitted, "fixture must admit at least one event to be meaningful"
+    refresh_manifest = json.loads(
+        (Path(refresh.artifact_dir) / "manifest.json").read_text())
+    refresh_payload = json.loads(
+        (Path(refresh.artifact_dir) / "shadow_selections.json").read_text())
+    # Refresh mode schema: manifest carries the exclusion declaration
+    assert refresh_manifest["refresh_mode"] is True
+    assert set(refresh_manifest["refresh_exclude_event_ids"]) == admitted
+    assert refresh_manifest["refresh_exclusion_count"] >= 1
+    assert refresh_payload["refresh_exclusion_count"] == \
+        refresh_manifest["refresh_exclusion_count"]
+    # Every previously admitted event is excluded from re-decision
+    refresh_pool = refresh_manifest.get("considered_pool", [])
+    assert not any(r["event_id"] in admitted for r in refresh_pool
+                   if r.get("considered_status")
+                   != "REFRESH_EXCLUDED_PREVIOUSLY_SELECTED")
+    excluded_rows = [r for r in refresh_pool
+                     if r.get("considered_status")
+                     == "REFRESH_EXCLUDED_PREVIOUSLY_SELECTED"]
+    assert {r["event_id"] for r in excluded_rows} == admitted
+    assert all(r["eligible"] is False and r["rank_within_sport_day"] is None
+               for r in excluded_rows)
+    # With the only capture event excluded, nothing new can be selected
+    assert refresh.run_status == "SHADOW_NO_SELECTION"
+
+
+def test_refresh_exclusion_preserves_normal_run_schema(tmp_root):
+    """The normal (non-refresh) path must stay byte-stable: no refresh keys
+    anywhere — payloads, manifests and digests unchanged."""
+    normal, refresh, _ = _run_normal_and_refresh(tmp_root, lambda ids: set())
+    normal_manifest_text = (Path(normal.artifact_dir)
+                            / "manifest.json").read_text()
+    normal_payload_text = (Path(normal.artifact_dir)
+                           / "shadow_selections.json").read_text()
+    assert "refresh_" not in normal_manifest_text
+    assert "refresh_" not in normal_payload_text
+    # An empty exclusion list still declares refresh mode (count 0)
+    refresh_manifest = json.loads(
+        (Path(refresh.artifact_dir) / "manifest.json").read_text())
+    assert refresh_manifest["refresh_mode"] is True
+    assert refresh_manifest["refresh_exclusion_count"] == 0
+    assert refresh_manifest["refresh_exclude_event_ids"] == []
+
+
+def test_refresh_exclusion_unmatched_ids_change_nothing(tmp_root):
+    normal, refresh, _ = _run_normal_and_refresh(
+        tmp_root, lambda ids: {"baseball:nonexistent", "tennis:nope"})
+    normal_payload = json.loads(
+        (Path(normal.artifact_dir) / "shadow_selections.json").read_text())
+    refresh_payload = json.loads(
+        (Path(refresh.artifact_dir) / "shadow_selections.json").read_text())
+    assert refresh_payload["run_status"] == normal_payload["run_status"]
+    assert refresh_payload["selections"] == normal_payload["selections"]
+    assert refresh_payload["refresh_exclusion_count"] == 0
+
+
+def test_cli_exclude_events_invalid_file_exit_2(tmp_root, capsys):
+    gz_path = tmp_root / "data" / "reports" / "history_football.jsonl.gz"
+    _make_history_gz(gz_path, [_dict_row(eid=f"h{i}") for i in range(1, 25)])
+    receipt_path, _ = _build_football_capture(tmp_root, "2026-08-28")
+    bad = tmp_root / "data" / "reports" / "not_a_list.json"
+    bad.write_text(json.dumps({"not": "a list"}))
+    rc = main([
+        "--date", "2026-08-28",
+        "--capture-receipt", str(receipt_path),
+        "--history", str(gz_path),
+        "--config", str(tmp_root / "config" / "shadow_evaluator.json"),
+        "--root", str(tmp_root),
+        "--exclude-events", str(bad),
+    ])
+    assert rc == 2
+    rc = main([
+        "--date", "2026-08-28",
+        "--capture-receipt", str(receipt_path),
+        "--history", str(gz_path),
+        "--config", str(tmp_root / "config" / "shadow_evaluator.json"),
+        "--root", str(tmp_root),
+        "--exclude-events", str(tmp_root / "missing.json"),
+    ])
+    assert rc == 2
+
+
+def test_cli_normal_run_reports_zero_exclusions(tmp_root, capsys):
+    """The stdout summary always carries refresh_exclusion_count (default 0)
+    — even for a blocked run, so downstream batch parsing never branches on
+    key presence."""
+    gz_path = tmp_root / "data" / "reports" / "history_football.jsonl.gz"
+    _make_history_gz(gz_path, [_dict_row(eid=f"h{i}", p1=f"T{i}A",
+                                         p2=f"T{i}B", dt=f"2024-05-{i:02d}")
+                               for i in range(1, 25)])
+    receipt_path, _ = _build_football_capture(tmp_root, "2026-08-28")
+    rc = main([
+        "--date", "2026-08-28",
+        "--capture-receipt", str(receipt_path),
+        "--history", str(gz_path),
+        "--config", str(tmp_root / "config" / "shadow_evaluator.json"),
+        "--root", str(tmp_root),
+    ])
+    # The injected real clock (today) is after this fixture date's safe
+    # cutoff, so the run is BLOCKED — exactly what we need to pin the
+    # refresh key's presence on the blocked path too.
+    assert rc == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["run_status"] == "SHADOW_RUN_BLOCKED"
+    assert out["refresh_exclusion_count"] == 0

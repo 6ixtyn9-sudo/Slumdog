@@ -35,15 +35,26 @@ CLI::
 
     python scripts/forward_shadow_batch.py [--dates N] [--root ROOT]
         [--pause-seconds 62] [--capture-timeout 45] [--dry-run]
-        [--skip-settlement]
+        [--skip-settlement] [--skip-refresh] [--refresh-days {1,2,3}]
+
+A daily-refresh stage (near-term re-capture) re-snapshots the trailing
+T+1..T+N dates when a completed run already exists: events the original
+run never admitted (late-publishing leagues) are ranked and appended as
+``selections_delta_<stamp>.json`` (+ ``.sha256`` and a manifest copy)
+inside the original run dir, with the original decisions byte-frozen.
+Those delta rows get their own one-shot ``settlement_delta_*.json`` grade
+on their D+1 alongside the first-settlement backlog.
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -515,6 +526,189 @@ def run_completion_backlog(
     return results
 
 
+# ---------------------------------------------------------------------------
+# Daily refresh (near-term re-capture) — owner directive 2026-09-22
+#
+# The one-shot forward capture snapshots each target date exactly once,
+# several days before it enters the rolling window. Leagues that publish
+# fixtures late (baseball, basketball, tennis, mma, esports — visible as
+# "target date missing from HTML" failures in the capture receipts)
+# therefore never enter any shadow run, and near-term boards end up
+# football-heavy. The refresh re-snapshots a date that already has a
+# completed run, evaluates ONLY events the original run never admitted
+# (evaluator --exclude-events over the original considered ids), and
+# appends the outcome as append-only delta artifacts INSIDE the original
+# run dir: selections_delta_<stamp>.json (+ .sha256) plus a manifest copy.
+# The original shadow_selections.json / manifest.json / bundle stay
+# byte-frozen; delta rows get their own one-shot settlement delta on D+1
+# via slumdog.shadow_settle --settle-deltas.
+# ---------------------------------------------------------------------------
+
+
+def find_refreshable_run(target_date: str, repo_root: Path) -> str | None:
+    """Return the completed run id for a date, or None.
+
+    Mirrors :func:`find_settleable_run`'s scan but only needs a completed
+    run (settlement state is irrelevant to refreshing).
+    """
+    shadow_dir = repo_root / "data" / "reports" / "shadow" / target_date
+    if not shadow_dir.is_dir():
+        return None
+    for child in sorted(shadow_dir.iterdir()):
+        if child.is_dir() and child.name != "BLOCKED" \
+                and (child / "shadow_selections.json").exists():
+            return child.name
+    return None
+
+
+def _frozen_event_ids(run_dir: Path) -> frozenset[str]:
+    """Event ids the original run admitted (selections + considered pool).
+
+    Fail-closed: missing artifacts raise rather than silently excluding
+    nothing (which would let the refresh re-decide frozen selections).
+    """
+    sel_path = run_dir / "shadow_selections.json"
+    man_path = run_dir / "manifest.json"
+    if not sel_path.is_file() or not man_path.is_file():
+        raise RuntimeError(f"incomplete run artifacts in {run_dir}")
+    ids: set[str] = set()
+    for row in json.loads(sel_path.read_text()).get("selections", []):
+        if row.get("event_id"):
+            ids.add(row["event_id"])
+    for row in json.loads(man_path.read_text()).get("considered_pool", []):
+        if row.get("event_id"):
+            ids.add(row["event_id"])
+    return frozenset(ids)
+
+
+def run_refresh_for_date(
+    target_date: str,
+    repo_root: Path,
+    *,
+    pause_seconds: int = 62,
+    timeout: int = 45,
+    dry_run: bool = False,
+    base_date: dt.date | None = None,
+) -> dict:
+    """Refresh one target date. Isolated like the settlement stages: every
+    failure lands in the returned dict, never raises to the batch driver."""
+    from slumdog.forebet import ForebetCollector
+
+    entry: dict = {"target_date": target_date, "status": "PENDING",
+                   "run_id": None, "delta_stamp": None, "new_events": 0,
+                   "excluded_frozen": 0, "error": None}
+    base_date = base_date or dt.datetime.now(dt.timezone.utc).date()
+
+    run_id = find_refreshable_run(target_date, repo_root)
+    if run_id is None:
+        entry["status"] = "NO_RUN"
+        return entry
+    entry["run_id"] = run_id
+
+    # One refresh per (date, day): the refresh receipt is committed
+    # evidence, so the guard persists across dispatches.
+    reports_dir = repo_root / "data" / "reports"
+    compact = base_date.strftime("%Y%m%d")
+    if list(reports_dir.glob(f"capture_refresh_{target_date}_{compact}T*.json")):
+        entry["status"] = "ALREADY_REFRESHED_TODAY"
+        return entry
+
+    if dry_run:
+        entry["status"] = "DRY_RUN"
+        return entry
+
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    receipt_name = f"capture_refresh_{target_date}_{stamp}.json"
+    try:
+        exclude_ids = _frozen_event_ids(
+            repo_root / "data" / "reports" / "shadow" / target_date / run_id)
+        entry["excluded_frozen"] = len(exclude_ids)
+
+        collector = ForebetCollector(root=repo_root, timeout=timeout, workers=1)
+        collector.capture_selected(
+            target_date, force=True, receipt_name=receipt_name)
+
+        exclude_path = Path(tempfile.mkstemp(
+            prefix="refresh_exclude_", suffix=".json",
+            dir=str(reports_dir))[1])
+        try:
+            exclude_path.write_text(json.dumps(sorted(exclude_ids)))
+            result = run_evaluator(
+                target_date, repo_root,
+                receipt_name=receipt_name,
+                exclude_events_path=exclude_path,
+            )
+        finally:
+            exclude_path.unlink(missing_ok=True)
+
+        entry["delta_stamp"] = stamp
+        entry["refresh_exclusion_count"] = result.get("refresh_exclusion_count", 0)
+        run_status = result.get("run_status")
+        new_dir = Path(result.get("artifact_dir") or "")
+        orig_dir = (repo_root / "data" / "reports" / "shadow"
+                    / target_date / run_id)
+
+        if run_status == "SHADOW_SELECTIONS_EMITTED":
+            payload_bytes = (new_dir / "shadow_selections.json").read_bytes()
+            manifest_bytes = (new_dir / "manifest.json").read_bytes()
+            new_events = len(json.loads(payload_bytes).get("selections", []))
+            delta_path = orig_dir / f"selections_delta_{stamp}.json"
+            delta_man = orig_dir / f"selections_delta_{stamp}.manifest.json"
+            for dest, data in ((delta_path, payload_bytes),
+                               (delta_man, manifest_bytes)):
+                fd, tmp = tempfile.mkstemp(
+                    prefix=dest.name + ".", suffix=".tmp", dir=str(orig_dir))
+                try:
+                    with open(fd, "wb") as handle:
+                        handle.write(data)
+                    Path(tmp).replace(dest)
+                except Exception:
+                    Path(tmp).unlink(missing_ok=True)
+                    raise
+                digest = hashlib.sha256(dest.read_bytes()).hexdigest()
+                Path(str(dest) + ".sha256").write_text(
+                    f"{digest}  {dest.name}\n")
+            shutil.rmtree(new_dir)
+            entry["new_events"] = new_events
+            entry["status"] = "DELTA_WRITTEN"
+        elif run_status == "SHADOW_NO_SELECTION":
+            shutil.rmtree(new_dir, ignore_errors=True)
+            entry["status"] = "NO_NEW_EVENTS"
+        else:
+            if new_dir.is_dir():
+                shutil.rmtree(new_dir, ignore_errors=True)
+            entry["status"] = "REFRESH_FAILED"
+            entry["error"] = f"evaluator run_status={run_status}"
+    except Exception as exc:
+        entry["status"] = "REFRESH_FAILED"
+        entry["error"] = f"{type(exc).__name__}: {exc}"
+    return entry
+
+
+def run_refresh_backlog(
+    repo_root: Path,
+    *,
+    refresh_days: int = 2,
+    pause_seconds: int = 62,
+    timeout: int = 45,
+    dry_run: bool = False,
+    base_date: dt.date | None = None,
+) -> list:
+    """Refresh the near-term dates T+1 .. T+refresh_days; per-date isolation."""
+    base_date = base_date or dt.datetime.now(dt.timezone.utc).date()
+    results = []
+    for i in range(1, refresh_days + 1):
+        target = base_date + dt.timedelta(days=i)
+        if i > 1 and not dry_run:
+            time.sleep(pause_seconds)
+        results.append(run_refresh_for_date(
+            target.isoformat(), repo_root,
+            pause_seconds=pause_seconds, timeout=timeout,
+            dry_run=dry_run, base_date=base_date,
+        ))
+    return results
+
+
 def run_capture(target_date: str, repo_root: Path, *, pause_seconds: int = 62, timeout: int = 45) -> dict:
     """Capture Forebet listings for a target date.
 
@@ -538,12 +732,20 @@ def run_capture(target_date: str, repo_root: Path, *, pause_seconds: int = 62, t
 def run_evaluator(
     target_date: str,
     repo_root: Path,
+    *,
+    receipt_name: str | None = None,
+    exclude_events_path: Path | None = None,
 ) -> dict:
     """Run the shadow evaluator for a target date.
 
+    ``receipt_name`` / ``exclude_events_path`` are used by the daily-refresh
+    stage: the refresh evaluator consumes the refreshed capture receipt and
+    drops previously-admitted events from admission.
+
     Returns the evaluator output dict.
     """
-    receipt_path = repo_root / "data" / "reports" / f"capture_{target_date}.json"
+    receipt_path = repo_root / "data" / "reports" / (
+        receipt_name or f"capture_{target_date}.json")
     config_path = repo_root / "config" / "shadow_evaluator.json"
     if not receipt_path.is_file():
         raise RuntimeError(f"capture receipt not found: {receipt_path}")
@@ -581,6 +783,8 @@ def run_evaluator(
         "--config", str(config_path),
         "--root", str(repo_root),
     ] + history_args
+    if exclude_events_path is not None:
+        cmd += ["--exclude-events", str(exclude_events_path)]
 
     result = subprocess.run(
         cmd, capture_output=True, text=True, timeout=300, cwd=str(repo_root),
@@ -728,6 +932,16 @@ def main(argv: list[str] | None = None) -> int:
                              "settlement backlog and the completion pass "
                              "that closes UNSETTLED/UNRESOLVED rows via "
                              "append-only supplements (forward capture only)")
+    parser.add_argument("--skip-refresh", action="store_true",
+                        help="Skip the daily-refresh stage (near-term "
+                             "re-capture into append-only selections_delta_* "
+                             "artifacts) — forward capture only")
+    parser.add_argument("--refresh-days", type=int, default=2,
+                        choices=[1, 2, 3],
+                        help="Trailing T+1..T+N dates the daily-refresh stage "
+                             "re-snapshots when a completed run exists "
+                             "(default 2; deeper windows are progressively "
+                             "little refresh — fixtures are largely fixed)")
     parser.add_argument("--completion-window-days", type=int,
                         default=DEFAULT_COMPLETION_WINDOW_DAYS,
                         help=f"Maximum age (days) of a settled run the "
@@ -742,6 +956,7 @@ def main(argv: list[str] | None = None) -> int:
     # idempotent — safe on every invocation, including this one.
     settlement_results: list[dict] = []
     completion_results: list[dict] = []
+    delta_settlement_results: list[dict] = []
     if not args.skip_settlement:
         settlement_results = run_settlement_backlog(
             repo_root,
@@ -793,6 +1008,63 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print("Settlement completion: nothing due", file=sys.stderr)
 
+        # Delta settlement third: one-shot grade of the selections_delta_*
+        # payloads the daily refresh appended to the runs settled above.
+        # Idempotent per delta stamp; unmatched fresh deltas stay NOT_DUE
+        # under their own guard and are picked up tomorrow.
+        from slumdog.shadow_settle import settle_selection_deltas
+        for sr in settlement_results:
+            if sr.get("status") != "SETTLED":
+                continue
+            run_dir = (repo_root / "data" / "reports" / "shadow"
+                       / sr["target_date"] / sr["run_id"])
+            has_deltas = any(run_dir.glob("selections_delta_*.json"))
+            if not has_deltas:
+                continue
+            if args.dry_run:
+                delta_settlement_results.append({
+                    "target_date": sr["target_date"], "run_id": sr["run_id"],
+                    "status": "DRY_RUN"})
+                continue
+            statuses = settle_selection_deltas(
+                target_date=sr["target_date"], run_id=sr["run_id"],
+                repo_root=repo_root, pause_seconds=args.pause_seconds,
+                timeout=args.capture_timeout)
+            graded = sum(1 for s in statuses if s["status"] == "DELTA_SETTLED")
+            delta_settlement_results.append({
+                "target_date": sr["target_date"], "run_id": sr["run_id"],
+                "status": "DELTAS_GRADED", "deltas_graded": graded,
+                "statuses": statuses})
+        for dr in delta_settlement_results:
+            print(f"  delta settle {dr['target_date']}: {dr['status']}"
+                  + (f" ({dr.get('deltas_graded', 0)} graded)"
+                     if dr.get("deltas_graded") is not None and
+                     dr["status"] == "DELTAS_GRADED" else ""),
+                  file=sys.stderr)
+
+    # Daily refresh (near-term re-capture, owner directive 2026-09-22):
+    # re-snapshot the T+1..T+N dates that already hold a completed run so
+    # late-publishing leagues still enter the shadow pipeline. New picks
+    # land as append-only selections_delta_* artifacts inside the original
+    # run dir; the original decisions stay byte-frozen.
+    refresh_results: list[dict] = []
+    if not args.skip_refresh:
+        refresh_results = run_refresh_backlog(
+            repo_root,
+            refresh_days=args.refresh_days,
+            pause_seconds=args.pause_seconds,
+            timeout=args.capture_timeout,
+            dry_run=args.dry_run,
+        )
+        for rr in refresh_results:
+            print(
+                f"  refresh {rr['target_date']}: {rr['status']}"
+                + (f" (+{rr['new_events']} new events)"
+                   if rr.get("new_events") else "")
+                + (f" [{rr['error']}]" if rr.get("error") else ""),
+                file=sys.stderr,
+            )
+
     targets = compute_target_dates(args.dates)
     print(f"Forward shadow batch: {len(targets)} dates starting from {targets[0]}", file=sys.stderr)
     print(f"Repository root: {repo_root}", file=sys.stderr)
@@ -826,6 +1098,8 @@ def main(argv: list[str] | None = None) -> int:
         "results": results,
         "settlement_backlog": settlement_results,
         "settlement_completion": completion_results,
+        "delta_settlement": delta_settlement_results,
+        "refresh": refresh_results,
         "summary": {
             "total": len(results),
             "completed": sum(1 for r in results if r["status"] == "COMPLETED"),
@@ -854,6 +1128,19 @@ def main(argv: list[str] | None = None) -> int:
             ),
             "settlement_completion_failed": sum(
                 1 for r in completion_results if r["status"] == "COMPLETION_FAILED"
+            ),
+            "delta_settlement_graded": sum(
+                r.get("deltas_graded", 0) for r in delta_settlement_results
+            ),
+            "refresh_runs": len(refresh_results),
+            "refresh_deltas_written": sum(
+                1 for r in refresh_results if r["status"] == "DELTA_WRITTEN"
+            ),
+            "refresh_new_events": sum(
+                r.get("new_events", 0) for r in refresh_results
+            ),
+            "refresh_failed": sum(
+                1 for r in refresh_results if r["status"] == "REFRESH_FAILED"
             ),
         },
     }

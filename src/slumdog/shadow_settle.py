@@ -1442,6 +1442,273 @@ def write_settlement_supplement(
     return candidate, digest
 
 
+# ---------------------------------------------------------------------------
+# Delta selections (daily refresh) — one-shot grading
+#
+# The daily-refresh stage appends ``selections_delta_<stamp>.json`` (+ marker)
+# files to an existing run dir for fixtures that did not exist when the
+# original one-shot capture ran (late-publishing leagues whose pages appear
+# only 1–2 days out). Deltas follow the same append-only contract as
+# settlement supplements: the original ``shadow_selections.json``/
+# ``manifest.json``/bundle stay byte-frozen, and each delta receives its own
+# one-shot ``settlement_delta_<stamp>.json`` (+ marker). Delta rows are graded
+# with the same grading contract as primary rows; open delta rows are
+# recorded as-is in v1 (completion-pass coverage of deltas is a separately
+# scoped change, not silently folded into supplements).
+# ---------------------------------------------------------------------------
+
+SETTLEMENT_DELTA_SCHEMA_VERSION = "shadow_settlement_delta"
+DELTA_SELECTIONS_PREFIX = "selections_delta_"
+
+
+def _delta_stamp_of(path: Path) -> str:
+    """Extract the stamp between ``selections_delta_`` and ``.json``."""
+    name = path.name
+    return name[len(DELTA_SELECTIONS_PREFIX):-len(".json")]
+
+
+def load_verified_delta_selections(run_dir: Path) -> list[tuple[str, dict[str, Any]]]:
+    """Load every ``selections_delta_*`` in a run dir, markers verified.
+
+    Fails closed: a missing/mismatched marker raises ``SettlementError``
+    rather than grading unverified selections. Mirrors
+    :func:`load_verified_settlement`'s posture exactly.
+    """
+    found: list[tuple[str, dict[str, Any]]] = []
+    for path in sorted(run_dir.glob(f"{DELTA_SELECTIONS_PREFIX}*.json")):
+        if path.name.endswith(".manifest.json"):
+            continue  # companion manifest copy, not a selections payload
+        marker = Path(str(path) + ".sha256")
+        if not marker.is_file():
+            raise SettlementError(
+                f"delta selections marker missing: {marker}")
+        want = marker.read_text().split()[0]
+        got = hashlib.sha256(path.read_bytes()).hexdigest()
+        if want != got:
+            raise SettlementError(
+                f"delta selections marker mismatch: {path.name}")
+        found.append((_delta_stamp_of(path), json.loads(path.read_text())))
+    return found
+
+
+def _load_verified_delta_manifest(run_dir: Path, stamp: str) -> dict[str, Any]:
+    """Load one delta's manifest copy, marker verified (fail-closed).
+
+    The refresh stage writes ``selections_delta_<stamp>.manifest.json``
+    beside the delta selections; it carries ``input_provenance``
+    (capture record tuples) exactly like the original run's manifest, so
+    rank-4+ delta pool entries and participant identity resolve the same
+    way they do for primary settlement.
+    """
+    path = run_dir / f"{DELTA_SELECTIONS_PREFIX}{stamp}.manifest.json"
+    marker = Path(str(path) + ".sha256")
+    if not path.is_file() or not marker.is_file():
+        raise SettlementError(
+            f"delta manifest or marker missing: {path.name}")
+    want = marker.read_text().split()[0]
+    got = hashlib.sha256(path.read_bytes()).hexdigest()
+    if want != got:
+        raise SettlementError(f"delta manifest marker mismatch: {path.name}")
+    return json.loads(path.read_text())
+
+
+def write_settlement_delta(
+    *,
+    target_date: str,
+    run_id: str,
+    delta_payload: dict[str, Any],
+    delta_stamp: str,
+    rows: list[dict[str, Any]],
+    summary: dict[str, Any],
+    fresh_receipt: dict[str, Any],
+    grading_contract: dict[str, Any],
+    run_dir: Path,
+    generated_at: str,
+) -> tuple[Path, str]:
+    """Write one append-only ``settlement_delta_<stamp>.json`` + marker.
+
+    Atomic write, never overwrites (same ``_2``/``_3`` collision suffix
+    convention as supplements). The marker is what makes a delta's
+    settlement idempotent across dispatches.
+    """
+    artifact_name = f"settlement_delta_{delta_stamp}.json"
+    candidate = run_dir / artifact_name
+    if candidate.exists():
+        raise SettlementError(
+            f"refusing to overwrite existing settlement delta: {candidate}")
+    payload = {
+        "settlement_delta_schema_version": SETTLEMENT_DELTA_SCHEMA_VERSION,
+        "target_date": target_date,
+        "run_id": run_id,
+        "settles": {
+            "artifact": f"{DELTA_SELECTIONS_PREFIX}{delta_stamp}.json",
+            "artifact_sha256": hashlib.sha256(
+                (run_dir / f"{DELTA_SELECTIONS_PREFIX}{delta_stamp}.json")
+                .read_bytes()).hexdigest(),
+        },
+        "grading_contract": grading_contract,
+        "metadata_policy": {
+            "append_only": True,
+            "original_artifacts_untouched": True,
+            "note": (
+                "Grades rows of the daily-refresh delta selections only. "
+                "The original settlement.json and companion deltas are "
+                "byte-frozen; settled_context stays display-only metadata."
+            ),
+        },
+        "generated_at": generated_at,
+        "rows": sorted(
+            rows,
+            key=lambda d: (d["sport"], d["event_date"], d["event_id"],
+                           d.get("rank_within_sport_day") or 999),
+        ),
+        "summary": summary,
+        "settlement_capture_receipt": fresh_receipt,
+    }
+    payload_bytes = canonical_json_bytes(payload)
+    fd, tmp = tempfile.mkstemp(prefix="settlement_delta.",
+                               suffix=".json.tmp", dir=str(run_dir))
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload_bytes)
+        os.replace(tmp, candidate)
+    except Exception:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+    digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+    Path(str(candidate) + ".sha256").write_text(
+        f"{digest}  {candidate.name}\n"
+    )
+    return candidate, digest
+
+
+def settle_selection_deltas(
+    *,
+    target_date: str,
+    run_id: str,
+    repo_root: str | Path,
+    offline: bool = False,
+    settlement_receipt_path: str | Path | None = None,
+    settled_rows_override: list[SettledEvent] | None = None,
+    as_of: _dt.date | None = None,
+    pause_seconds: int = 62,
+    timeout: int = 45,
+    generated_at: str | None = None,
+) -> list[dict[str, Any]]:
+    """One-shot grade of every ungraded selections_delta_* in a run dir.
+
+    Never raises for per-delta failures — returns a status dict per delta
+    (mirrors the batch driver's isolation contract). Idempotent via the
+    presence of ``settlement_delta_<stamp>.json``.
+    """
+    repo_root = Path(repo_root).resolve()
+    run_dir = (
+        repo_root / "data" / "reports" / "shadow" / target_date / run_id
+    )
+    generated_at = generated_at or _dt.datetime.now(
+        _dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    as_of = as_of or _dt.datetime.now(_dt.timezone.utc).date()
+    statuses: list[dict[str, Any]] = []
+    if not run_dir.is_dir():
+        return statuses
+
+    deltas = load_verified_delta_selections(run_dir)
+    needs = [(stamp, payload) for stamp, payload in deltas
+             if not (run_dir / f"settlement_delta_{stamp}.json").exists()]
+    if not needs:
+        return statuses
+
+    # Same conservative D+1 posture as the primary settlement: never settle
+    # a delta before the day after its target date.
+    try:
+        target = _dt.date.fromisoformat(target_date)
+    except ValueError:
+        target = as_of  # fall through to grading only for valid dates
+    if (as_of - target).days < 1:
+        for stamp, _p in needs:
+            statuses.append({"delta_stamp": stamp, "status": "NOT_DUE"})
+        return statuses
+
+    # Fresh settled evidence (one capture reused across deltas, same date).
+    if settled_rows_override is not None:
+        settled_rows = list(settled_rows_override)
+        fresh_receipt: dict[str, Any] = {
+            "target_date": target_date,
+            "capture_type": "settlement_evidence",
+            "capture_purpose": "settlement_delta",
+            "settled_rows_override": True,
+        }
+    elif settlement_receipt_path is not None:
+        fresh_receipt = load_settlement_receipt(
+            target_date, repo_root, Path(settlement_receipt_path))
+        settled_rows = parse_settled_from_receipt(fresh_receipt, repo_root)
+    elif offline:
+        for stamp, _p in needs:
+            statuses.append({
+                "delta_stamp": stamp,
+                "status": "DELTA_SETTLEMENT_FAILED",
+                "error": "offline settlement requires a receipt or override",
+            })
+        return statuses
+    else:
+        sports_needed = sorted({
+            s["sport"]
+            for _s, payload in needs
+            for s in payload.get("selections", [])
+        })
+        fresh_receipt = fetch_settlement_capture(
+            target_date, repo_root,
+            pause_seconds=pause_seconds, timeout=timeout,
+            sports=sports_needed or None,
+            receipt_name=(
+                f"settlement_capture_receipt_delta_"
+                f"{generated_at.replace('-', '').replace(':', '')}.json"
+            ),
+        )
+        settled_rows = parse_settled_from_receipt(fresh_receipt, repo_root)
+
+    for stamp, payload in needs:
+        try:
+            delta_manifest = _load_verified_delta_manifest(run_dir, stamp)
+            event_index = _build_event_index(payload, delta_manifest)
+            grades = grade_all_entries(
+                event_index, settled_rows, payload, delta_manifest)
+            rows = [grade_to_dict(g) for g in grades]
+            counter: dict[str, int] = {}
+            for r in rows:
+                counter[r["grade"]] = counter.get(r["grade"], 0) + 1
+            summary = {
+                "total_rows": len(rows),
+                "grades": counter,
+                "delta_stamp": stamp,
+                "graded_at": generated_at,
+            }
+            artifact, digest = write_settlement_delta(
+                target_date=target_date, run_id=run_id,
+                delta_payload=payload, delta_stamp=stamp,
+                rows=rows, summary=summary,
+                fresh_receipt=fresh_receipt,
+                grading_contract=payload.get("grading_contract", {}),
+                run_dir=run_dir, generated_at=generated_at,
+            )
+            statuses.append({
+                "delta_stamp": stamp,
+                "status": "DELTA_SETTLED",
+                "artifact": str(artifact),
+                "artifact_sha256": digest,
+                "total_rows": len(rows),
+                "grades": counter,
+            })
+        except Exception as exc:  # isolation: one delta's failure skips it, batch continues
+            statuses.append({
+                "delta_stamp": stamp,
+                "status": "DELTA_SETTLEMENT_FAILED",
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+    return statuses
+
+
 def complete_settlement(
     *,
     target_date: str,
@@ -1672,6 +1939,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                         "UNRESOLVED by the one-shot D+1 settlement and write "
                         "an append-only settlement_supplement_*.json. Never "
                         "modifies the original settlement.json.")
+    p.add_argument("--settle-deltas", action="store_true",
+                   help="Delta settle: one-shot grade of every ungraded "
+                        "selections_delta_*.json (daily-refresh picks) in the "
+                        "run dir, writing append-only settlement_delta_*.json "
+                        "+ markers. Never touches settlement.json, supplements "
+                        "or original selections.")
     p.add_argument("--completion-window-days", type=int,
                    default=COMPLETION_RETRY_WINDOW_DAYS,
                    help=f"Maximum age (days) of a run the completion pass "
@@ -1710,6 +1983,28 @@ def main(argv: list[str] | None = None) -> int:
                 "error": completion.error,
             }, indent=2, sort_keys=True))
             return 0 if completion.status != "COMPLETION_FAILED" else 2
+        if args.settle_deltas:
+            statuses = settle_selection_deltas(
+                target_date=args.date,
+                run_id=args.run_id,
+                repo_root=args.root,
+                offline=args.offline,
+                settlement_receipt_path=args.settlement_receipt,
+                pause_seconds=args.pause_seconds,
+                timeout=args.timeout,
+            )
+            print(json.dumps({
+                "target_date": args.date,
+                "run_id": args.run_id,
+                "deltas_graded": sum(
+                    1 for s in statuses if s["status"] == "DELTA_SETTLED"),
+                "deltas_failed": sum(
+                    1 for s in statuses
+                    if s["status"] == "DELTA_SETTLEMENT_FAILED"),
+                "statuses": statuses,
+            }, indent=2, sort_keys=True))
+            return 0 if not any(
+                s["status"] == "DELTA_SETTLEMENT_FAILED" for s in statuses) else 2
         result = settle_run(
             target_date=args.date,
             run_id=args.run_id,

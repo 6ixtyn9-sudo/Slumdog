@@ -1009,3 +1009,259 @@ class TestCompletionInDriverMain:
         assert receipt["summary"]["settlement_completion_runs"] == 1
         assert receipt["settlement_completion"][0]["status"] == "DRY_RUN"
         assert receipt["settlement_completion"][0]["pending_at_start"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Daily-refresh (near-term re-capture) stage tests
+# ---------------------------------------------------------------------------
+
+class TestFindRefreshableRun:
+    def test_returns_run_when_completed(self, tmp_path):
+        from scripts.forward_shadow_batch import find_refreshable_run
+        _make_completed_run(tmp_path, "2026-09-23", "run0001aaaaaaaaaa")
+        assert find_refreshable_run("2026-09-23", tmp_path) == "run0001aaaaaaaaaa"
+
+    def test_none_when_date_missing(self, tmp_path):
+        from scripts.forward_shadow_batch import find_refreshable_run
+        assert find_refreshable_run("2026-09-23", tmp_path) is None
+
+    def test_none_when_shadow_dir_only_blocked(self, tmp_path):
+        from scripts.forward_shadow_batch import find_refreshable_run
+        blocked = (tmp_path / "data" / "reports" / "shadow"
+                   / "2026-09-23" / "BLOCKED")
+        blocked.mkdir(parents=True)
+        (blocked / "manifest.json").write_text("{}")
+        assert find_refreshable_run("2026-09-23", tmp_path) is None
+
+
+class TestRunRefreshForDate:
+    def test_no_run_status_when_no_completed_run(self, tmp_path):
+        from scripts.forward_shadow_batch import run_refresh_for_date
+        entry = run_refresh_for_date(
+            "2026-09-23", tmp_path, base_date=dt.date(2026, 9, 22))
+        assert entry["status"] == "NO_RUN"
+        assert entry["run_id"] is None
+
+    def test_already_refreshed_today_guard(self, tmp_path):
+        from scripts.forward_shadow_batch import run_refresh_for_date
+        _make_completed_run(tmp_path, "2026-09-23", "run0001aaaaaaaaaa")
+        reports = tmp_path / "data" / "reports"
+        (reports / "capture_refresh_2026-09-23_20260922T040000Z.json"
+         ).write_text("{}")
+        entry = run_refresh_for_date(
+            "2026-09-23", tmp_path, base_date=dt.date(2026, 9, 22))
+        assert entry["status"] == "ALREADY_REFRESHED_TODAY"
+
+    def test_yesterdays_refresh_receipt_does_not_block_today(self, tmp_path):
+        from scripts.forward_shadow_batch import run_refresh_for_date
+        _make_completed_run(tmp_path, "2026-09-23", "run0001aaaaaaaaaa")
+        reports = tmp_path / "data" / "reports"
+        (reports / "capture_refresh_2026-09-23_20260921T040000Z.json"
+         ).write_text("{}")
+        entry = run_refresh_for_date(
+            "2026-09-23", tmp_path, base_date=dt.date(2026, 9, 22),
+            dry_run=True)
+        assert entry["status"] == "DRY_RUN"  # guard ignored, and rewindable
+
+    def test_dry_run_does_not_write(self, tmp_path):
+        from scripts.forward_shadow_batch import run_refresh_for_date
+        run_dir = _make_completed_run(tmp_path, "2026-09-23", "run0001aaaaaaaaaa")
+        entry = run_refresh_for_date(
+            "2026-09-23", tmp_path, base_date=dt.date(2026, 9, 22),
+            dry_run=True)
+        assert entry["status"] == "DRY_RUN"
+        assert not list(run_dir.glob("selections_delta_*"))
+
+    def test_delta_written_appends_to_original_run(self, tmp_path, monkeypatch):
+        from scripts.forward_shadow_batch import run_refresh_for_date
+        import scripts.forward_shadow_batch as fsb
+        run_dir = _make_completed_run(tmp_path, "2026-09-23", "run0001aaaaaaaaaa")
+        original_sel = (run_dir / "shadow_selections.json").read_bytes()
+        original_man = (run_dir / "manifest.json").read_bytes()
+
+        new_run = (tmp_path / "data" / "reports" / "shadow" / "2026-09-23"
+                   / "run_20990123t040000z_refreshnew")
+        new_run.mkdir(parents=True)
+        delta_payload = {"run_id": new_run.name, "target_date": "2026-09-23",
+                         "selections": [{"sport": "baseball",
+                                         "event_id": "baseball:201",
+                                         "event_date": "2026-09-23"}],
+                         "sport_day_summary": []}
+        (new_run / "shadow_selections.json").write_text(json.dumps(delta_payload))
+        (new_run / "manifest.json").write_text(json.dumps(
+            {"run_id": new_run.name, "considered_pool": []}))
+
+        class _FakeCollector:
+            def __init__(self, root=None, timeout=None, workers=None):
+                pass
+
+            def capture_selected(self, target, force=False, receipt_name=None):
+                assert force is True
+                assert receipt_name.startswith("capture_refresh_2026-09-23_")
+                # Emulate the receipt being committed evidence on disk.
+                (tmp_path / "data" / "reports" / receipt_name).write_text("{}")
+
+        excluded_seen = {}
+
+        def _fake_evaluator(target_date, repo_root, *, receipt_name=None,
+                            exclude_events_path=None):
+            excluded_seen["ids"] = json.loads(exclude_events_path.read_text())
+            assert receipt_name.startswith("capture_refresh_2026-09-23_")
+            return {"run_status": "SHADOW_SELECTIONS_EMITTED",
+                    "artifact_dir": str(new_run),
+                    "refresh_exclusion_count": 2}
+
+        monkeypatch.setattr("slumdog.forebet.ForebetCollector", _FakeCollector)
+        monkeypatch.setattr(fsb, "run_evaluator", _fake_evaluator)
+
+        entry = run_refresh_for_date(
+            "2026-09-23", tmp_path, base_date=dt.date(2026, 9, 22))
+
+        assert entry["status"] == "DELTA_WRITTEN"
+        assert entry["new_events"] == 1
+        assert entry["run_id"] == "run0001aaaaaaaaaa"
+        deltas = list(run_dir.glob("selections_delta_*.json"))
+        assert deltas
+        payload_path = [d for d in deltas if not d.name.endswith(
+            (".manifest.json", ".sha256"))][0]
+        assert json.loads(payload_path.read_text()) == delta_payload
+        # Markers verify the files they claim to
+        import hashlib
+        marker = Path(str(payload_path) + ".sha256").read_text()
+        assert hashlib.sha256(payload_path.read_bytes()).hexdigest() in marker
+        man_copy = [d for d in deltas if d.name.endswith(".manifest.json")][0]
+        assert Path(str(man_copy) + ".sha256").is_file()
+        # The exclusion list covers selections + considered pool ids
+        assert set(excluded_seen["ids"]) == {"football:1"}
+        # Original decisions byte-frozen
+        assert (run_dir / "shadow_selections.json").read_bytes() == original_sel
+        assert (run_dir / "manifest.json").read_bytes() == original_man
+        # The refresh evaluator's own run dir is gone (one run per date)
+        assert not new_run.exists()
+
+    def test_no_new_events_cleans_up(self, tmp_path, monkeypatch):
+        from scripts.forward_shadow_batch import run_refresh_for_date
+        import scripts.forward_shadow_batch as fsb
+        run_dir = _make_completed_run(tmp_path, "2026-09-23", "run0001aaaaaaaaaa")
+
+        new_run = (tmp_path / "data" / "reports" / "shadow" / "2026-09-23"
+                   / "run_20990123t040000z_refreshnew")
+        new_run.mkdir(parents=True)
+        (new_run / "shadow_selections.json").write_text("{}")
+
+        class _FakeCollector:
+            def __init__(self, root=None, timeout=None, workers=None):
+                pass
+
+            def capture_selected(self, target, force=False, receipt_name=None):
+                (tmp_path / "data" / "reports" / receipt_name).write_text("{}")
+
+        def _fake_evaluator(target_date, repo_root, *, receipt_name=None,
+                            exclude_events_path=None):
+            return {"run_status": "SHADOW_NO_SELECTION",
+                    "artifact_dir": str(new_run),
+                    "refresh_exclusion_count": 1}
+
+        monkeypatch.setattr("slumdog.forebet.ForebetCollector", _FakeCollector)
+        monkeypatch.setattr(fsb, "run_evaluator", _fake_evaluator)
+
+        entry = run_refresh_for_date(
+            "2026-09-23", tmp_path, base_date=dt.date(2026, 9, 22))
+        assert entry["status"] == "NO_NEW_EVENTS"
+        assert not list(run_dir.glob("selections_delta_*"))
+        assert not new_run.exists()
+
+    def test_failure_isolated_never_raises(self, tmp_path, monkeypatch):
+        from scripts.forward_shadow_batch import run_refresh_for_date
+        _make_completed_run(tmp_path, "2026-09-23", "run0001aaaaaaaaaa")
+
+        def _boom(self, target, force=False, receipt_name=None):
+            raise RuntimeError("fetch exploded")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector.capture_selected", _boom)
+        entry = run_refresh_for_date(
+            "2026-09-23", tmp_path, base_date=dt.date(2026, 9, 22))
+        assert entry["status"] == "REFRESH_FAILED"
+        assert "fetch exploded" in entry["error"]
+
+    def test_fail_closed_when_run_artifacts_incomplete(self, tmp_path):
+        from scripts.forward_shadow_batch import run_refresh_for_date
+        run_dir = _make_completed_run(tmp_path, "2026-09-23", "run0001aaaaaaaaaa")
+        (run_dir / "manifest.json").unlink()
+        entry = run_refresh_for_date(
+            "2026-09-23", tmp_path, base_date=dt.date(2026, 9, 22),
+            dry_run=False)
+        assert entry["status"] == "REFRESH_FAILED"
+        assert "incomplete run artifacts" in entry["error"]
+
+
+class TestRunRefreshBacklog:
+    def test_targets_t_plus_1_through_n(self, tmp_path, monkeypatch):
+        from scripts.forward_shadow_batch import run_refresh_backlog
+        called = []
+
+        def _fake_refresh(target_date, repo_root, **kwargs):
+            called.append(target_date)
+            return {"target_date": target_date, "status": "NO_RUN",
+                    "run_id": None, "delta_stamp": None, "new_events": 0,
+                    "excluded_frozen": 0, "error": None}
+
+        monkeypatch.setattr(
+            "scripts.forward_shadow_batch.run_refresh_for_date", _fake_refresh)
+        results = run_refresh_backlog(
+            tmp_path, refresh_days=2, pause_seconds=0,
+            base_date=dt.date(2026, 9, 22))
+        assert called == ["2026-09-23", "2026-09-24"]
+        assert [r["status"] for r in results] == ["NO_RUN", "NO_RUN"]
+
+
+class TestRefreshInDriverMain:
+    def test_batch_receipt_records_refresh_and_delta_keys(
+            self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "1",
+            "--skip-settlement", "--dry-run",
+        ])
+        assert rc == 0
+        receipt = json.loads(
+            (tmp_path / "data/reports/shadow/forward_batch_receipt.json")
+            .read_text())
+        assert "refresh" in receipt
+        assert "delta_settlement" in receipt
+        assert receipt["summary"]["refresh_runs"] == 2
+        assert receipt["summary"]["refresh_deltas_written"] == 0
+        statuses = [r["status"] for r in receipt["refresh"]]
+        assert statuses == ["NO_RUN", "NO_RUN"]
+
+    def test_skip_refresh_flag_emits_empty_stage(self, tmp_path):
+        import scripts.forward_shadow_batch as fsb
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "1",
+            "--skip-settlement", "--skip-refresh", "--dry-run",
+        ])
+        assert rc == 0
+        receipt = json.loads(
+            (tmp_path / "data/reports/shadow/forward_batch_receipt.json")
+            .read_text())
+        assert receipt["refresh"] == []
+        assert receipt["summary"]["refresh_runs"] == 0
+
+    def test_refresh_days_controls_targets(self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+        seen = []
+
+        def _fake_refresh(target_date, repo_root, **kwargs):
+            seen.append(target_date)
+            return {"target_date": target_date, "status": "NO_RUN",
+                    "run_id": None, "delta_stamp": None, "new_events": 0,
+                    "excluded_frozen": 0, "error": None}
+
+        monkeypatch.setattr(fsb, "run_refresh_for_date", _fake_refresh)
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "1",
+            "--skip-settlement", "--refresh-days", "3", "--dry-run",
+        ])
+        assert rc == 0
+        assert len(seen) == 3
