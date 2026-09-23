@@ -1,0 +1,41 @@
+{
+  "capture_purpose": "settlement_completion",
+  "capture_type": "settlement_evidence",
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-19/football/20260923T042224.360383+0000_c87793cc6b7a.txt",
+      "bytes": 2140338,
+      "captured_at": "2026-09-23T04:22:24.360383+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-19/football/20260923T042224.360383+0000_c87793cc6b7a.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-19&ord=0&tz=0&tzs=&tze=",
+      "route": "relay_markdown",
+      "sha256": "c87793cc6b7a4571ccdcb0959dd7ce7758f5a78ac4b2eba50656ec3c8e44889d",
+      "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-19&ord=0&tz=0&tzs=&tze=",
+      "sport": "football",
+      "target_date": "2026-09-19"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-19/volleyball/20260923T042738.278305+0000_2a0cd298f343.txt",
+      "bytes": 266130,
+      "captured_at": "2026-09-23T04:27:38.278305+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-19/volleyball/20260923T042738.278305+0000_2a0cd298f343.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/volleyball/predictions/2026-09-19",
+      "route": "relay",
+      "sha256": "2a0cd298f3430cece53ff73d7d9ea174c7c0b48666cc10e6a1035565c067501b",
+      "source_url": "https://www.forebet.com/en/volleyball/predictions/2026-09-19",
+      "sport": "volleyball",
+      "target_date": "2026-09-19"
+    }
+  ],
+  "failures": [
+    "basketball:ValueError:target date missing from HTML: 2026-09-19",
+    "baseball:ValueError:target date missing from HTML: 2026-09-19",
+    "rugby:ValueError:target date missing from HTML: 2026-09-19",
+    "handball:ValueError:target date missing from HTML: 2026-09-19",
+    "cricket:ValueError:target date missing from HTML: 2026-09-19"
+  ],
+  "generated_at": "2026-09-23T04:28:40.727947+00:00",
+  "target_date": "2026-09-19"
+}

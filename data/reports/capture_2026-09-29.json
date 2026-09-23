@@ -1,0 +1,48 @@
+{
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/raw/esoccer/2026-09-29/20260923T044210.479342+0000_2d66ab29ab8d.txt",
+      "bytes": 5832,
+      "captured_at": "2026-09-23T04:42:10.479342+00:00",
+      "metadata_path": "data/raw/esoccer/2026-09-29/20260923T044210.479342+0000_2d66ab29ab8d.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/esoccer",
+      "route": "relay",
+      "sha256": "2d66ab29ab8d79188c55731dc0e2600e88f133b359f7f6ed8631e95625098270",
+      "source_url": "https://www.forebet.com/en/esoccer",
+      "sport": "esoccer",
+      "target_date": "2026-09-29"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/raw/afl/2026-09-29/20260923T044210.766497+0000_bb9769cdcc51.txt",
+      "bytes": 5798,
+      "captured_at": "2026-09-23T04:42:10.766497+00:00",
+      "metadata_path": "data/raw/afl/2026-09-29/20260923T044210.766497+0000_bb9769cdcc51.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/afl",
+      "route": "relay",
+      "sha256": "bb9769cdcc51e6b8f0220d940d44370bc41d259658a5c57f367965070a8dff1c",
+      "source_url": "https://www.forebet.com/en/afl",
+      "sport": "afl",
+      "target_date": "2026-09-29"
+    }
+  ],
+  "failures": [
+    "football:ValueError:football JSON body missing: Expecting value: line 1 column 1 (char 0)",
+    "basketball:ValueError:target date missing from HTML: 2026-09-29",
+    "tennis:ValueError:target date missing from HTML: 2026-09-29",
+    "hockey:ValueError:target date missing from HTML: 2026-09-29",
+    "baseball:ValueError:target date missing from HTML: 2026-09-29",
+    "american_football:ValueError:sport label missing from HTML: american_football",
+    "rugby:ValueError:target date missing from HTML: 2026-09-29",
+    "handball:ValueError:target date missing from HTML: 2026-09-29",
+    "volleyball:ValueError:target date missing from HTML: 2026-09-29",
+    "cricket:ValueError:target date missing from HTML: 2026-09-29",
+    "mma:ValueError:target date missing from HTML: 2026-09-29",
+    "esports:ValueError:target date missing from HTML: 2026-09-29"
+  ],
+  "football_markets": "data/raw/football/2026-09-29/markets.json",
+  "generated_at": "2026-09-23T04:42:22.573719+00:00",
+  "reused": -12,
+  "target_date": "2026-09-29"
+}
