@@ -1,0 +1,11 @@
+{
+  "capture_purpose": "settlement_completion",
+  "capture_type": "settlement_evidence",
+  "captured": [],
+  "failures": [
+    "hockey:ValueError:target date missing from HTML: 2026-09-11",
+    "baseball:ValueError:target date missing from HTML: 2026-09-11"
+  ],
+  "generated_at": "2026-09-24T04:06:17.658492+00:00",
+  "target_date": "2026-09-11"
+}

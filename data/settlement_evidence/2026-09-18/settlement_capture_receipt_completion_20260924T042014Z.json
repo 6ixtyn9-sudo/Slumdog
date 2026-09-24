@@ -1,0 +1,38 @@
+{
+  "capture_purpose": "settlement_completion",
+  "capture_type": "settlement_evidence",
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-18/football/20260924T042022.553212+0000_f518b65e371f.txt",
+      "bytes": 647074,
+      "captured_at": "2026-09-24T04:20:22.553212+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-18/football/20260924T042022.553212+0000_f518b65e371f.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-18&ord=0&tz=0&tzs=&tze=",
+      "route": "relay_markdown",
+      "sha256": "f518b65e371fb54030a09a4e79668f36cb6c242007292f274537e149978f82f1",
+      "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-18&ord=0&tz=0&tzs=&tze=",
+      "sport": "football",
+      "target_date": "2026-09-18"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-18/baseball/20260924T042229.013490+0000_65704d554fe8.txt",
+      "bytes": 171994,
+      "captured_at": "2026-09-24T04:22:29.013490+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-18/baseball/20260924T042229.013490+0000_65704d554fe8.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/baseball/predictions/2026-09-18",
+      "route": "relay",
+      "sha256": "65704d554fe834245586bba262eee51d997a18b38559deca06f33f9551df041b",
+      "source_url": "https://www.forebet.com/en/baseball/predictions/2026-09-18",
+      "sport": "baseball",
+      "target_date": "2026-09-18"
+    }
+  ],
+  "failures": [
+    "basketball:ValueError:target date missing from HTML: 2026-09-18",
+    "handball:ValueError:target date missing from HTML: 2026-09-18"
+  ],
+  "generated_at": "2026-09-24T04:23:31.269559+00:00",
+  "target_date": "2026-09-18"
+}
