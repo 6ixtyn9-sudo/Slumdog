@@ -1,0 +1,29 @@
+{
+  "capture_purpose": "settlement_completion",
+  "capture_type": "settlement_evidence",
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-12/football/20260925T040250.272165+0000_19816e8306a3.txt",
+      "bytes": 2281304,
+      "captured_at": "2026-09-25T04:02:50.272165+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-12/football/20260925T040250.272165+0000_19816e8306a3.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-12&ord=0&tz=0&tzs=&tze=",
+      "route": "relay_markdown",
+      "sha256": "19816e8306a3ae600f63536105392e370b08a5475f80d2ca620cb9f2ea7096d2",
+      "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-12&ord=0&tz=0&tzs=&tze=",
+      "sport": "football",
+      "target_date": "2026-09-12"
+    }
+  ],
+  "failures": [
+    "hockey:ValueError:target date missing from HTML: 2026-09-12",
+    "baseball:ValueError:target date missing from HTML: 2026-09-12",
+    "american_football:ValueError:sport label missing from HTML: american_football",
+    "rugby:ValueError:target date missing from HTML: 2026-09-12",
+    "handball:ValueError:target date missing from HTML: 2026-09-12",
+    "volleyball:ValueError:target date missing from HTML: 2026-09-12"
+  ],
+  "generated_at": "2026-09-25T04:09:03.604297+00:00",
+  "target_date": "2026-09-12"
+}
