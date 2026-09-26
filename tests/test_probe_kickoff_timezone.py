@@ -1567,3 +1567,74 @@ class TestCurrentBundle:
         monkeypatch.setattr(probe, "relay_request", _boom("502"))
         out = probe.current_bundle_scan(timeout=1, pause=0)
         assert "php_refs" not in out and len(out["errors"]) == 4
+
+
+class TestArchiveRecency:
+    """The CDX index returns rows chronologically, so a positive limit hands
+    back the OLDEST N. Every archive conclusion so far was drawn from a 2020
+    bundle and a 2024 board while reasoning about a rebuilt site."""
+
+    def test_the_index_is_asked_for_the_newest_rows(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        seen: list[str] = []
+        monkeypatch.setattr(
+            probe, "direct_fetch",
+            lambda url, *, timeout, attempts=3: seen.append(url) or b"[]")
+        probe.cdx_snapshots("www.forebet.com/en/basketball", limit=12,
+                            timeout=1)
+        assert "limit=-12" in seen[0]
+
+    def test_the_newest_snapshot_is_the_one_read(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        snaps = [("20240402000000", "https://x/old"),
+                 ("20260925000000", "https://x/new")]
+        read: list[str] = []
+        monkeypatch.setattr(probe, "cdx_snapshots",
+                            lambda p, *, limit, timeout: snaps)
+        monkeypatch.setattr(
+            probe, "archived_bytes",
+            lambda ts, u, *, timeout, kind="id_": read.append(ts) or
+            b'<div class="rcnt"><span itemprop="name">Lakers</span></div>')
+        out = probe.recent_markup_check("basketball", timeout=1, pause=0)
+        assert read[0] == "20260925000000"
+        assert out["has_itemprop_name"] is True
+        assert "Lakers" in out["name_markup"]
+        assert out["newest_timestamps"][-1] == "20260925000000"
+
+    def test_an_archived_interstitial_is_not_read_as_a_board(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "cdx_snapshots",
+                            lambda p, *, limit, timeout: [("2026", "https://x")])
+        monkeypatch.setattr(probe, "archived_bytes",
+                            lambda ts, u, *, timeout, kind="id_":
+                                b"<title>Just a moment...</title>")
+        out = probe.recent_markup_check("basketball", timeout=1, pause=0)
+        assert out["challenge"] is True and out["rows"] == 0
+        assert out["has_itemprop_name"] is False
+
+    def test_todays_scripts_are_followed_and_mined(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        page = (b'<script src="/includes/js/new.js?v=9"></script>'
+                b'<div class="rcnt"></div>')
+
+        def _bytes(ts, url, *, timeout, kind="id_"):
+            return page if kind == "id_" else b'u="/scripts/getbsk.php?d="+d'
+
+        monkeypatch.setattr(probe, "cdx_snapshots",
+                            lambda p, *, limit, timeout: [("2026", "https://x")])
+        monkeypatch.setattr(probe, "archived_bytes", _bytes)
+        out = probe.recent_markup_check("basketball", timeout=1, pause=0)
+        assert any("getbsk.php" in ref for ref in out["endpoints_today"])
+        assert out["js_bytes"]["new.js"] > 0
+
+    def test_a_missing_snapshot_is_reported_not_raised(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "cdx_snapshots",
+                            lambda p, *, limit, timeout: [])
+        out = probe.recent_markup_check("basketball", timeout=1, pause=0)
+        assert out["error"] == "no snapshots"

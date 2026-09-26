@@ -317,14 +317,19 @@ CDX_SEARCH = (
 
 
 def cdx_snapshots(pattern: str, *, limit: int, timeout: int) -> list[tuple[str, str]]:
-    """(timestamp, original_url) pairs from the Wayback index.
+    """(timestamp, original_url) pairs from the Wayback index, newest last.
 
     The availability API only answers for an exact URL; the CDX index does
     prefix search, which is what finds a sport board whose exact path was
     never archived but whose dated siblings were.
+
+    The index returns rows in chronological order, so a positive limit hands
+    back the OLDEST N. That is why this kept reading a bundle from 2020 and
+    a board from 2024 while reasoning about a site that has since been
+    rebuilt. A negative limit asks for the most recent N instead.
     """
     raw = direct_fetch(
-        CDX_SEARCH.format(pattern=pattern, limit=limit), timeout=timeout)
+        CDX_SEARCH.format(pattern=pattern, limit=-abs(limit)), timeout=timeout)
     rows = json.loads(raw or b"[]")
     return [(r[1], r[2]) for r in rows[1:]] if len(rows) > 1 else []
 
@@ -991,6 +996,71 @@ def _clock_context(body: bytes) -> str:
 NAME_TOKEN = re.compile(rb"[A-Z][a-z]{3,}(?:\s+[A-Z][a-z]{2,})?")
 
 
+def recent_markup_check(sport_path: str, *, timeout: int,
+                        pause: float) -> dict[str, Any]:
+    """Read the NEWEST archived copy of the board and of its scripts.
+
+    Everything so far was read from the oldest snapshots the index holds,
+    because of the limit bug above. The newest copy answers the question
+    that matters: does today's markup still carry team names, and which
+    scripts does today's page load?
+    """
+    out: dict[str, Any] = {}
+    page = f"https://www.forebet.com/en/{sport_path}/predictions"
+    try:
+        snaps = cdx_snapshots(page.split("://", 1)[-1], limit=12,
+                              timeout=timeout)
+        out["snapshot_count"] = len(snaps)
+        out["newest_timestamps"] = [s[0] for s in snaps[-4:]]
+        if not snaps:
+            out["error"] = "no snapshots"
+            return out
+        timestamp, original = snaps[-1]
+        out["using"] = f"{timestamp} {original}"
+        body = archived_bytes(timestamp, original, timeout=timeout)
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"[:140]
+        return out
+
+    lowered = body.lower()
+    out["bytes"] = len(body)
+    out["rows"] = lowered.count(b'class="rcnt')
+    out["challenge"] = looks_like_challenge(body)
+    out["has_itemprop_name"] = b'itemprop="name"' in lowered
+    out["has_date_bah"] = b"date_bah" in lowered
+    idx = lowered.find(b'itemprop="name"')
+    if idx != -1:
+        out["name_markup"] = body[max(0, idx - 200): idx + 260].decode(
+            "utf-8", "replace")
+    out["script_srcs"] = [s.decode("utf-8", "replace")
+                          for s in SCRIPT_SRC.findall(body)][:8]
+
+    # Follow today's scripts and mine them for endpoints.
+    from urllib.parse import urljoin
+
+    mined: list[str] = []
+    for src in out["script_srcs"]:
+        if len(mined) >= 8:
+            break
+        absolute = normalise_ref(urljoin(page, src.replace("id_/", "/")))
+        path = absolute.split("?", 1)[0]
+        if "forebet.com" not in absolute or not path.endswith(".js"):
+            continue
+        time.sleep(min(pause, 4))
+        try:
+            js = archived_bytes(timestamp, absolute, timeout=timeout,
+                                kind="js_")
+        except Exception as exc:
+            mined.append(f"! {path.rsplit('/', 1)[-1]}: {type(exc).__name__}")
+            continue
+        out.setdefault("js_bytes", {})[path.rsplit("/", 1)[-1]] = len(js)
+        for ref in endpoint_candidates(js, page):
+            if ref not in mined:
+                mined.append(ref)
+    out["endpoints_today"] = mined[:12]
+    return out
+
+
 def current_bundle_scan(*, timeout: int, pause: float) -> dict[str, Any]:
     """Read TODAY's script bundle, not a 2020 archived copy.
 
@@ -1328,6 +1398,11 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
             f"/predictions/{date}", timeout=timeout)
 
     time.sleep(pause)
+    report["recent_markup"] = recent_markup_check(
+        SPORTS[sport].path if sport in SPORTS else sport,
+        timeout=timeout, pause=pause)
+
+    time.sleep(pause)
     report["current_bundle"] = current_bundle_scan(
         timeout=timeout, pause=pause)
 
@@ -1531,6 +1606,24 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
             lines.append("  control: getrs.php answers DIRECTLY from the "
                          "runner — the APIs are not behind the bot check, so "
                          "an API route would need no relay at all.")
+
+    recent = report.get("recent_markup") or {}
+    if recent:
+        lines.append(
+            f"NEWEST archived board: {recent.get('using')} "
+            f"({recent.get('bytes')}B, rows={recent.get('rows')}, "
+            f"challenge={recent.get('challenge')}) of "
+            f"{recent.get('snapshot_count')} snapshots "
+            f"{recent.get('newest_timestamps')} {recent.get('error', '')}")
+        lines.append(f"  team names in markup: {recent.get('has_itemprop_name')}"
+                     f"  date_bah: {recent.get('has_date_bah')}")
+        if recent.get("name_markup"):
+            lines.append(f"  name markup: {recent['name_markup'][:320]}")
+        if recent.get("endpoints_today"):
+            lines.append("  endpoints in the newest scripts: " +
+                         ", ".join(recent["endpoints_today"]))
+        if recent.get("js_bytes"):
+            lines.append(f"  scripts read: {recent['js_bytes']}")
 
     bundle = report.get("current_bundle") or {}
     if bundle:
@@ -1814,7 +1907,7 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
                              "js_call_sites", "sitemaps",
                              "match_ids", "match_json", "dom_selectors",
                              "harvested_links", "render_waits",
-                             "current_bundle")},
+                             "current_bundle", "recent_markup")},
                            sort_keys=True)[:3000]
     emitted.append(
         f"::notice title=Endpoint hunt::{_annotation_escape(hunt_blob)}")
