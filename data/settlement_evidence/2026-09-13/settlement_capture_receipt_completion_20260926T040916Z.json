@@ -1,0 +1,35 @@
+{
+  "capture_purpose": "settlement_completion",
+  "capture_type": "settlement_evidence",
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-13/football/20260926T040922.942352+0000_f0d5e6aec32f.txt",
+      "bytes": 1578701,
+      "captured_at": "2026-09-26T04:09:22.942352+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-13/football/20260926T040922.942352+0000_f0d5e6aec32f.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-13&ord=0&tz=0&tzs=&tze=",
+      "route": "relay_markdown",
+      "sha256": "f0d5e6aec32f18400e8df4e5bea3f6245f24c44fc1c5b678b141b2e77985877b",
+      "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-13&ord=0&tz=0&tzs=&tze=",
+      "sport": "football",
+      "target_date": "2026-09-13"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/settlement_evidence/2026-09-13/handball/20260926T041027.534542+0000_a8aabc19f0b1.txt",
+      "bytes": 286934,
+      "captured_at": "2026-09-26T04:10:27.534542+00:00",
+      "metadata_path": "data/settlement_evidence/2026-09-13/handball/20260926T041027.534542+0000_a8aabc19f0b1.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/handball/predictions/2026-09-13",
+      "route": "relay",
+      "sha256": "a8aabc19f0b191152c0893f06458a0ffc76719250e05485c5568a9269c3757d1",
+      "source_url": "https://www.forebet.com/en/handball/predictions/2026-09-13",
+      "sport": "handball",
+      "target_date": "2026-09-13"
+    }
+  ],
+  "failures": [],
+  "generated_at": "2026-09-26T04:10:27.535269+00:00",
+  "target_date": "2026-09-13"
+}
