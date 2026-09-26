@@ -289,15 +289,25 @@ PHP_REF = re.compile(rb"""[\"'(=]\s*([^\"'()\s]*?/?[a-z0-9_\-]+\.php[^\"'()\s]*)
 SCRIPT_SRC = re.compile(rb"""<script[^>]+src=[\"']([^\"']+)[\"']""", re.I)
 
 
-def direct_fetch(url: str, *, timeout: int) -> bytes:
+def direct_fetch(url: str, *, timeout: int, attempts: int = 3) -> bytes:
     import urllib.request
 
     request = urllib.request.Request(url, headers={
         "User-Agent": BROWSER_UA,
         "Accept": "text/html,application/xhtml+xml,*/*",
     })
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read()
+    last: Exception | None = None
+    for attempt in range(attempts):
+        if attempt:
+            # archive.org refuses connections under burst load rather than
+            # returning 429, so back off instead of calling it a failure.
+            time.sleep(4 * attempt)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read()
+        except Exception as exc:  # noqa: BLE001 - retried, then re-raised
+            last = exc
+    raise last if last else RuntimeError("unreachable")
 
 
 CDX_SEARCH = (
@@ -388,7 +398,8 @@ def hunt_endpoints(sport_page: str, *, timeout: int, pause: float) -> dict[str, 
         if len(mined) >= 6:
             break
         absolute = urljoin(sport_page, src.replace("id_/", "/"))
-        if "forebet.com" not in absolute or not absolute.endswith(".js"):
+        path = absolute.split("?", 1)[0].split("#", 1)[0]
+        if "forebet.com" not in absolute or not path.endswith(".js"):
             continue
         time.sleep(pause)
         try:
@@ -399,6 +410,10 @@ def hunt_endpoints(sport_page: str, *, timeout: int, pause: float) -> dict[str, 
         for ref in endpoint_candidates(body, sport_page):
             if ref not in mined:
                 mined.append(ref)
+        idx = body.lower().find(b"getrs")
+        if idx != -1 and "js_context" not in out:
+            out["js_context"] = body[max(0, idx - 220): idx + 260].decode(
+                "utf-8", "replace")
     out["js_php_refs"] = mined[:10]
     out["php_refs"] = (out["php_refs"] + [
         m for m in mined if not m.startswith("!")])[:14]
@@ -655,6 +670,8 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
                 f"via {hunt.get('snapshot')}")
             lines.append("  php refs: " + (", ".join(hunt.get("php_refs", []))
                                            or "none found"))
+            if hunt.get("js_context"):
+                lines.append("  js context: " + hunt["js_context"][:420])
             for needle, sample in (hunt.get("markup_samples") or {}).items():
                 lines.append(f"  markup[{needle}]: {sample[:280]}")
     control = report.get("endpoint_hunt_control") or {}

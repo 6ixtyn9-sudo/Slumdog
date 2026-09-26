@@ -555,3 +555,79 @@ class TestArchiveLookup:
             "fetch_errors": [], "offset": summarise_offsets([]),
             "endpoint_hunt_control": {"php_refs": []}})
         assert any("the miner itself found nothing" in l for l in lines)
+
+
+class TestJavascriptMiningDetails:
+    """The first hunt skipped `/includes/js/all.js?v=378` — the very file the
+    board's fetch lives in — because the filter matched on the whole URL."""
+
+    PAGE = (b'<html><script src="/includes/js/all.js?v=378"></script>'
+            b'<script src="https://ads.example.com/a.js"></script></html>')
+
+    def _hunt(self, monkeypatch, js: bytes):
+        import scripts.probe_kickoff_timezone as probe
+
+        fetched: list[str] = []
+
+        def _bytes(ts, url, *, timeout, kind="id_"):
+            fetched.append(url)
+            return js
+
+        monkeypatch.setattr(
+            probe, "archived_html",
+            lambda url, *, timeout: (
+                "https://web.archive.org/web/20240522214706id_/x", self.PAGE))
+        monkeypatch.setattr(probe, "archived_bytes", _bytes)
+        out = probe.hunt_endpoints(
+            "https://www.forebet.com/en/basketball/predictions",
+            timeout=1, pause=0)
+        return out, fetched
+
+    def test_a_versioned_script_is_still_fetched(self, monkeypatch):
+        out, fetched = self._hunt(
+            monkeypatch, b'open("GET","/scripts/getrs.php?ln=en&sp=2")')
+        assert fetched == ["https://www.forebet.com/includes/js/all.js?v=378"]
+        assert any("getrs.php" in ref for ref in out["php_refs"])
+
+    def test_the_surrounding_javascript_is_captured(self, monkeypatch):
+        out, _ = self._hunt(
+            monkeypatch, b'var u="/scripts/getrs.php?ln="+ln+"&sp="+sport;')
+        assert "sp=" in out["js_context"]
+
+    def test_retries_survive_a_refused_connection(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        calls = {"n": 0}
+
+        class _FakeResponse:
+            def read(self):
+                return b"ok"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def _urlopen(request, timeout):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise OSError("[Errno 111] Connection refused")
+            return _FakeResponse()
+
+        monkeypatch.setattr(probe.time, "sleep", lambda s: None)
+        import urllib.request
+
+        monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
+        assert probe.direct_fetch("https://web.archive.org/x", timeout=1) == b"ok"
+        assert calls["n"] == 3
+
+    def test_exhausted_retries_raise_the_last_error(self, monkeypatch):
+        import urllib.request
+
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe.time, "sleep", lambda s: None)
+        monkeypatch.setattr(urllib.request, "urlopen", _boom("refused"))
+        with pytest.raises(RuntimeError, match="refused"):
+            probe.direct_fetch("https://web.archive.org/x", timeout=1)
