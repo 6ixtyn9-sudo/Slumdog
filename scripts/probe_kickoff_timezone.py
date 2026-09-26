@@ -222,6 +222,37 @@ def football_utc_kickoffs(date: str, *, timeout: int) -> dict[str, dt.datetime]:
     return out
 
 
+def body_fingerprint(body: bytes | None, *, sample: int = 320) -> dict[str, Any]:
+    """Cheap description of a fetched body, for when parsing finds nothing.
+
+    A board that parses to zero rows is either a different page (a block or
+    challenge page), a different format (the relay's Markdown instead of
+    HTML), or a genuinely empty board. These three need different fixes, so
+    the probe must say which one it got.
+    """
+    if not body:
+        return {"bytes": 0, "sample": "", "has_rcnt": False, "looks_like": "empty"}
+    text = body.decode("utf-8", "replace")
+    lowered = text.lower()
+    if "rcnt" in lowered:
+        looks_like = "board_html"
+    elif "markdown content" in lowered or text.lstrip().startswith("Title:"):
+        looks_like = "relay_markdown_wrapper"
+    elif any(t in lowered for t in ("just a moment", "cf-browser", "cloudflare",
+                                    "captcha", "attention required")):
+        looks_like = "challenge_page"
+    elif "<html" in lowered:
+        looks_like = "other_html"
+    else:
+        looks_like = "unknown"
+    return {
+        "bytes": len(body),
+        "sample": " ".join(text[:sample].split()),
+        "has_rcnt": "rcnt" in lowered,
+        "looks_like": looks_like,
+    }
+
+
 def html_board_rows(body: bytes) -> list[dict[str, str]]:
     """``[{match_id, displayed}]`` from a rendered listing board."""
     soup = BeautifulSoup(body, "html.parser")
@@ -258,6 +289,7 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float) -> dict[str,
 
     rows = html_board_rows(board) if board else []
     report["football_board_rows"] = len(rows)
+    report["football_board_body"] = body_fingerprint(board)
 
     offsets: list[int] = []
     samples: list[dict[str, Any]] = []
@@ -287,6 +319,7 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float) -> dict[str,
         report["extra_sport_url"] = other_url
         report["extra_sport_bytes"] = len(other or b"")
         report["extra_sport_rows"] = len(html_board_rows(other)) if other else 0
+        report["extra_sport_body"] = body_fingerprint(other)
         report["extra_sport_candidates"] = (
             machine_readable_candidates(other) if other else [])
 
@@ -324,6 +357,17 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
                      "reach part of the source:")
         for err in errors[:6]:
             lines.append(f"  {err.get('route')} {err.get('url')}: {err.get('error')}")
+
+    for key, label in (("football_board_body", "football board"),
+                       ("extra_sport_body", "extra sport board")):
+        fp = report.get(key)
+        if fp and not fp.get("has_rcnt"):
+            lines.append(
+                f"{label.upper()} RETURNED NO LISTING ROWS "
+                f"({fp.get('bytes')} bytes, looks_like={fp.get('looks_like')}) — "
+                "the board was not fetched at all, so this run says nothing "
+                "about timezones.")
+            lines.append(f"  first bytes: {fp.get('sample', '')[:200]}")
 
     off = report.get("offset") or {}
     joined = off.get("joined", 0)

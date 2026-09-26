@@ -244,3 +244,46 @@ class TestAnnotations:
 
         assert _annotation_escape("a::b") == "a%3A%3Ab"
         assert _annotation_escape("50%") == "50%25"
+
+
+class TestBodyFingerprint:
+    """A board that parses to zero rows has three very different causes and
+    the probe must distinguish them, or the next run is another guess."""
+
+    def test_identifies_a_real_board(self):
+        from scripts.probe_kickoff_timezone import body_fingerprint
+
+        fp = body_fingerprint(b'<div class="rcnt">...</div>')
+        assert fp["has_rcnt"] is True
+        assert fp["looks_like"] == "board_html"
+
+    def test_identifies_a_relay_markdown_wrapper(self):
+        from scripts.probe_kickoff_timezone import body_fingerprint
+
+        fp = body_fingerprint(b"Title: Forebet\n\nMarkdown Content:\n| a | b |")
+        assert fp["has_rcnt"] is False
+        assert fp["looks_like"] == "relay_markdown_wrapper"
+
+    def test_identifies_a_challenge_page(self):
+        from scripts.probe_kickoff_timezone import body_fingerprint
+
+        fp = body_fingerprint(b"<html><title>Just a moment...</title></html>")
+        assert fp["looks_like"] == "challenge_page"
+
+    def test_empty_body_is_not_mistaken_for_a_board(self):
+        from scripts.probe_kickoff_timezone import body_fingerprint
+
+        assert body_fingerprint(None)["looks_like"] == "empty"
+
+    def test_verdict_calls_out_a_board_that_never_arrived(self):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        resolved, lines = verdict({
+            "fetch_errors": [],
+            "offset": summarise_offsets([]),
+            "football_board_body": {
+                "bytes": 5994, "has_rcnt": False,
+                "looks_like": "challenge_page", "sample": "Just a moment"},
+        })
+        assert resolved is False
+        assert any("RETURNED NO LISTING ROWS" in line for line in lines)
