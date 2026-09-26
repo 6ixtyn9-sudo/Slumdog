@@ -31,6 +31,36 @@ runner, or accepting football-only coverage.
 — a date-only attribute, no offset. There is no machine-readable start instant,
 so the 24h hold stands on its merits rather than for want of evidence. Note that
 `getrs.php` takes a `tz=` parameter and capture pins `tz=0`.
+### Second pass, after "have we really tried everything?" (same day)
+
+Three things the first pass missed, all now tested:
+
+| Attempt | Result |
+|---|---|
+| `getjson.php?gdt=` | **live and unchallenged** — returns `[]`, not 404, not an interstitial |
+| …its call site in the bundle | `getjson.php?gdt=<slug>&mid=<match id>` — **per-match**, and the id only exists on the board. Circular. |
+| `get_menu.php?ln=en` | 91KB of the league tree, unchallenged — navigation only, no fixtures |
+| `get_live_r.php` | HTTP 404, endpoint retired |
+| `getftr.php?int=` | challenged |
+| `getrs.php` control, relayed | 2.9MB JSON, and it carries `"DATE_BAH":"2026-09-27 02:00:00"` — a real per-match instant |
+| All of the above, fetched direct from the runner | HTTP 403 — even the open APIs refuse this IP directly |
+| Wayback Save Page Now | HTTP 520, no new snapshot |
+| Chromium **headed** under Xvfb, `navigator.webdriver` patched out | interstitial on the homepage (`display: ":99"` confirms it really was headed) |
+
+The headed-browser result is the one that closes the question. Headless
+fingerprinting was the best remaining explanation for why the relay's renderer
+clears this check from a datacenter address while ours did not; running headed
+with the automation tells removed eliminates it. The block follows the address.
+
+Worth recording for later: `getrs.php` returns `DATE_BAH` per match and accepts
+`tz=`, so for football there IS a machine-readable instant in the JSON — the
+"no machine-readable start" finding applies to the HTML boards only.
+
+**Remaining levers, all requiring something outside the runner:** a paid
+unblocker (relay API key, ScraperAPI/ZenRows/Browserless), a residential proxy,
+a self-hosted runner on a home connection, an official data agreement with
+Forebet, or a different data source.
+
 # Slumdog State — Canonical Current Truth
 
 **Last verified:** 2026-09-26 (UTC, later session) — **THE DOCUMENTED ROOT CAUSE OF THE NON-FOOTBALL COVERAGE COLLAPSE IS WRONG. IT IS A BOT-CHECK BLOCK, NOT PUBLISHING LAG.** Measured from a GitHub runner (probe workflow runs 36242850508 / 36243059526 / 36243322782 / 36243519958, read-only): the football JSON endpoint returns 864 matches for 2026-09-27, while EVERY HTML listing board comes back as a ~5.9KB Cloudflare `Just a moment...` interstitial. Committed capture receipts carry the same signature — a real board is 40–350KB, and from **2026-09-22** almost every non-football capture is ~5KB, with only sporadic real successes (basketball 273KB on 09-25, handball 117KB). That date is exactly when R1 coverage collapsed to football-only, so the prior explanation ("Forebet does not publish those boards more than a day ahead") does not hold: the boards are not being published late, they are not being fetched at all. **Worse: `esoccer` and `afl` are `current_only`, so only the lenient sport-label check applied and the interstitial was being stored as a genuine capture** (5832 / 5798 bytes on 09-28). Fixed this session: `forebet.looks_like_challenge_page()` + a hard reject in `validate_html_body`, so a bot-check page can never again be frozen as evidence. Relay route comparison on one board: `X-Return-Format: html` → challenge page; `X-Engine: browser` and `X-Engine: cf-browser-rendering` → **HTTP 401** (those modes need a paid relay key); Markdown reader → 15258 bytes of real board content, but for basketball it carries neither team names nor per-match kickoff times, so it is not a drop-in substitute. **Consequences:** (1) the EVENT_DAY timezone hold is currently moot for non-football sports — they cannot be fetched from CI at all, let alone timed; (2) no calibration work should start until a capture route exists; (3) the open decision is a relay API key (owner-held secret) vs. discovering per-sport JSON endpoints vs. accepting football-only. Gates this session: **1223 passed**, pyflakes clean, `py_compile` ok, `git diff --check` ok. The prior header line follows verbatim for history:
