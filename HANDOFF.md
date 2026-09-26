@@ -1,5 +1,14 @@
 # Slumdog Living Handoff
 
+**Last updated:** 2026-09-26 (UTC, later session) — **BOT-CHECK BLOCK FOUND; IT, NOT PUBLISHING LAG, IS WHY NON-FOOTBALL SPORTS HAVE NO PICKS.**
+
+- **Evidence.** Four read-only probe runs on a GitHub runner. Football JSON: 864 matches for 2026-09-27. Every HTML board: ~5.9KB `Just a moment...` interstitial. Committed receipts agree — real boards are 40–350KB and the ~5KB signature takes over from 2026-09-22, the exact date coverage collapsed.
+- **Evidence integrity bug fixed.** `esoccer` and `afl` are `current_only`, so only the sport-label check ran and interstitials were stored as real captures. `validate_html_body` now rejects them outright via `forebet.looks_like_challenge_page()`.
+- **Route comparison.** `X-Return-Format: html` → challenge; `X-Engine: browser` / `cf-browser-rendering` → 401 (paid relay key required); Markdown reader → real content (15KB) but basketball markdown has no team names and no per-match times, so it cannot feed the parser as-is.
+- **Open decision (owner).** (a) add a relay API key as a repo secret and re-probe the browser engine, (b) keep probing for per-sport JSON endpoints like football's `getrs.php` (no owner action needed, a few automated rounds), or (c) accept football-only.
+- **The EVENT_DAY timezone hold stands and is now moot for those sports** — an unfetchable board cannot be timed. No calibration work should start before a capture route exists.
+- **How results come back.** Actions logs and artifacts are served from blob storage, which the agent sandbox cannot reach; the probe prints its verdict as `::notice` annotations, which api.github.com does serve.
+
 **Last updated:** 2026-09-26 (UTC, later session) — **RENAMED TO `EVENT_DAY` + KICKOFF-TIMEZONE PROBE.**
 
 - **Rename `SHORT_NOTICE` → `EVENT_DAY`** (owner choice). Done as one mechanical pass across code, config, artifact tree, CLI flags, receipt keys, docs and test filenames; no real run existed, so there is nothing to migrate and no compatibility shim. Suite green after the rename.
