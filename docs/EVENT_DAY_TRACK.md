@@ -1,9 +1,9 @@
-# SHORT_NOTICE track — one R1 per sport, per day
+# EVENT_DAY track — one R1 per sport, per day
 
 **Status:** IMPLEMENTED AND TESTED LOCALLY / NOT YET DISPATCHED IN CI / NO REAL
 SHORT-NOTICE RUN EXISTS. Training remains FROZEN, production NOT AUTHORIZED,
 shortlist policy NOT AUTHORIZED.
-**Owner decision:** 2026-09-26 — "separate, clearly-labelled short-notice
+**Owner decision:** 2026-09-26 — "separate, clearly-labelled event-day
 track" (option B of the coverage/lead-time question).
 **Last verified:** 2026-09-26, local suite `1168 passed` (Python 3.11 venv;
 CI is 3.13 — the usual divergence caveat stands).
@@ -55,7 +55,7 @@ An event is admitted only if all five hold:
 
 An event whose start time cannot be parsed is **refused**, never assumed to be
 far away. Every refusal is counted by reason in the manifest
-(`short_notice_timing_rejections`), so "why did basketball produce nothing
+(`event_day_timing_rejections`), so "why did basketball produce nothing
 today" is answerable from the artifact alone:
 
 ```
@@ -78,23 +78,23 @@ No thresholds were added, moved or tuned.
 This is a **weaker-lead-time experiment**, not a relaxation of the frozen
 contract, and the separation is enforced in six places:
 
-| Surface | Standard | Short notice |
+| Surface | Standard | Event day |
 | --- | --- | --- |
-| Declaration | `config/shadow_evaluator.json` | `config/shadow_evaluator_short_notice.json` |
-| `declaration_version` | `shadow_evaluator` | `shadow_evaluator_short_notice` |
-| Artifact tree | `data/reports/shadow/` | `data/reports/shadow_short_notice/` |
-| Payload/manifest label | *(absent — schema unchanged)* | `track: "SHORT_NOTICE"` + `timing_contract` block with `satisfies_frozen_24h_contract: false` |
-| Capture receipt | `capture_<date>.json` | `capture_short_notice_<date>_<stamp>.json` |
-| Settlement | `settle_run(...)` | `settle_run(..., shadow_subdir="shadow_short_notice")` |
+| Declaration | `config/shadow_evaluator.json` | `config/shadow_evaluator_event_day.json` |
+| `declaration_version` | `shadow_evaluator` | `shadow_evaluator_event_day` |
+| Artifact tree | `data/reports/shadow/` | `data/reports/shadow_event_day/` |
+| Payload/manifest label | *(absent — schema unchanged)* | `track: "EVENT_DAY"` + `timing_contract` block with `satisfies_frozen_24h_contract: false` |
+| Capture receipt | `capture_<date>.json` | `capture_event_day_<date>_<stamp>.json` |
+| Settlement | `settle_run(...)` | `settle_run(..., shadow_subdir="shadow_event_day")` |
 
 Fail-closed guards, all covered by tests:
 
-- a short-notice declaration may **not** carry `safe_cutoff_offset_hours_utc`
+- a event-day declaration may **not** carry `safe_cutoff_offset_hours_utc`
   (it must not be able to claim the frozen contract);
-- it must declare `track: "SHORT_NOTICE"`, a lead of 30–1440 minutes, and
+- it must declare `track: "EVENT_DAY"`, a lead of 30–1440 minutes, and
   `require_parsed_kickoff` / `refuse_event_without_parsed_kickoff` /
   `never_pooled_with_standard_track` all `true`;
-- its `artifact_path.root` must be the short-notice tree, and a *standard*
+- its `artifact_path.root` must be the event-day tree, and a *standard*
   declaration is refused if it points at that tree;
 - `shadow_run_dir()` refuses any evidence tree outside the two known ones;
 - the standard track's payload, manifest and input digest are byte-identical
@@ -102,7 +102,7 @@ Fail-closed guards, all covered by tests:
   no `kickoff_utc`, no new digest keys).
 
 **The two hit rates are never summed.** Batch-receipt counters are namespaced
-(`short_notice_*`) precisely so a future reader cannot accidentally pool them.
+(`event_day_*`) precisely so a future reader cannot accidentally pool them.
 
 ## 4. Operational flow
 
@@ -114,12 +114,12 @@ failure is recorded and the frozen pipeline continues:
 D+1 settlement (frozen tree)
   → completion pass → delta settlement
   → daily refresh (T+1..T+2)
-  → SHORT_NOTICE settlement (D+1, short-notice tree)
-  → SHORT_NOTICE capture + evaluate (today)
+  → EVENT_DAY settlement (D+1, event-day tree)
+  → EVENT_DAY capture + evaluate (today)
   → forward capture D+2..D+6 (frozen tree)
 ```
 
-Flags: `--skip-short-notice` disables both short-notice sub-stages;
+Flags: `--skip-event-day` disables both event-day sub-stages;
 `--skip-settlement` also suppresses its settlement pass.
 
 Lead-time reality check at the current 04:00 UTC dispatch: with a 120-minute
@@ -138,7 +138,7 @@ below:
    `settlement_delta_*.json` (the daily refresh, live since 2026-09-22) are
    written on the runner and **never committed** — the persist step's `find`
    list does not name them. Four days of refresh evidence has been discarded.
-2. **New:** the `data/reports/shadow_short_notice/` tree is not covered by
+2. **New:** the `data/reports/shadow_event_day/` tree is not covered by
    the existing `find data/reports/shadow ...` root.
 
 Replace the four commands in the **"Persist small evidence to git"** step
@@ -147,8 +147,8 @@ with exactly:
 
 ```yaml
           find data/reports/shadow -type f \( -name 'shadow_selections.json' -o -name 'manifest.json' -o -name 'settlement.json' -o -name 'settlement.json.sha256' -o -name 'settlement_supplement_*.json' -o -name 'settlement_supplement_*.sha256' -o -name 'selections_delta_*.json' -o -name 'selections_delta_*.sha256' -o -name 'settlement_delta_*.json' -o -name 'settlement_delta_*.sha256' -o -name 'forward_batch_receipt.json' -o -name '*.settlement.json' -o -name '*.settlement.json.sha256' -o -name '*.bundle.json' -o -name '*.tar.gz.sha256' -o -name 'status.tsv' \) | xargs -r git add -f
-          find data/reports/shadow_short_notice -type f \( -name 'shadow_selections.json' -o -name 'manifest.json' -o -name 'settlement.json' -o -name 'settlement.json.sha256' -o -name 'settlement_supplement_*.json' -o -name 'settlement_supplement_*.sha256' -o -name 'selections_delta_*.json' -o -name 'selections_delta_*.sha256' -o -name 'settlement_delta_*.json' -o -name 'settlement_delta_*.sha256' -o -name '*.bundle.json' -o -name '*.tar.gz.sha256' \) 2>/dev/null | xargs -r git add -f
-          find data/settlement_evidence -type f \( -name 'settlement_capture_receipt.json' -o -name 'settlement_capture_receipt_completion_*.json' \) 2>/dev/null | xargs -r git add -f
+          find data/reports/shadow_event_day -type f \( -name 'shadow_selections.json' -o -name 'manifest.json' -o -name 'settlement.json' -o -name 'settlement.json.sha256' -o -name 'settlement_supplement_*.json' -o -name 'settlement_supplement_*.sha256' -o -name 'selections_delta_*.json' -o -name 'selections_delta_*.sha256' -o -name 'settlement_delta_*.json' -o -name 'settlement_delta_*.sha256' -o -name '*.bundle.json' -o -name '*.tar.gz.sha256' \) 2>/dev/null | xargs -r git add -f
+          find data/settlement_evidence -type f -name 'settlement_capture_receipt*.json' 2>/dev/null | xargs -r git add -f
           git add -f data/reports/capture_*.json 2>/dev/null || true
 ```
 
@@ -156,7 +156,7 @@ Unchanged by that paste: the trigger (`workflow_dispatch` only), permissions,
 `timeout-minutes: 350`, pinned action SHAs, the seed step, the upload step,
 and the commit/rebase/push lines. Raw bodies (`*.txt`) and `*.tar.gz`
 archives are still never added — the scoped waiver in `AGENTS.md` covers small
-JSON/text evidence only. `capture_short_notice_*.json` needs no new rule: the
+JSON/text evidence only. `capture_event_day_*.json` needs no new rule: the
 existing `git add -f data/reports/capture_*.json` already matches it.
 
 Verify before and after pasting:
@@ -165,7 +165,7 @@ Verify before and after pasting:
 python scripts/check_workflow_evidence_globs.py     # exit 0 == nothing discarded
 ```
 
-Today it exits 1 and lists 10 uncovered artifact types. After the paste it
+Today it exits 1 and lists 11 uncovered artifact types. After the paste it
 exits 0. The suite asserts only that the gap is a **subset** of
 `KNOWN_UNCOVERED_PENDING_OWNER_PASTE`, so it is green both before and after —
 but it fails loudly if a new artifact type is ever added without coverage.
@@ -214,6 +214,33 @@ are listed in the stage receipt as `timezone_hold_sports`.
 **Consequence, stated plainly:** until the hold is lifted, this track cannot
 deliver the "R1 in every sport, every day" goal. It runs football-only.
 
+**Step 0 — run the probe before building anything.** `scripts/probe_kickoff_timezone.py`
+answers the two open questions from real evidence, using the same relay path
+production uses, without freezing a capture or touching any evidence tree:
+
+```bash
+python scripts/probe_kickoff_timezone.py --date 2026-09-27 --sport basketball --out /tmp/probe.json
+```
+
+1. Does the raw listing HTML carry a **machine-readable** start instant
+   (`<time datetime>`, a `data-*` epoch/ISO value, JSON-LD `startDate`)? If it
+   does, the offset question disappears — parse that field and the hold can be
+   lifted for every sport at once. (This could not be checked from the agent
+   sandbox: only Markdown-converted fetches were available there, and Markdown
+   conversion discards attributes. It needs one run from a machine that can
+   fetch the raw page.)
+2. If not, what offset does **our relay** render at? The probe fetches the
+   football JSON (true UTC) and the football HTML board in the same pass,
+   joins them on the match id in each row's href, and reports the offset
+   distribution.
+
+It exits 0 only when the answer is definite — a machine-readable field exists,
+or the offset is unanimous across at least 20 joined matches. An ambiguous
+probe exits 1 and must not be read as permission to trust the timestamps. A
+measured offset of zero is reported as **one observation, not a guarantee**:
+the value is IP-derived and can change, so it must be recalibrated per capture
+rather than hardcoded.
+
 **How to lift the hold honestly (not yet implemented).** Calibrate the offset
 from evidence instead of assuming it: on the same pass, capture the football
 JSON (true UTC) *and* the football HTML board through the same relay, join the
@@ -228,19 +255,19 @@ offset becomes an auditable artifact rather than an assumption.
 `settle_run` wrote every D+1 settlement capture to
 `data/settlement_evidence/<date>/settlement_capture_receipt.json`. Both tracks
 can hold a run for the same date and the driver settles both on the same
-morning, so the short-notice capture would have **overwritten the committed
+morning, so the event-day capture would have **overwritten the committed
 evidence file that the frozen track's `settlement.json` points at**.
 
 Fixed: `shadow_settle.settlement_receipt_name(shadow_subdir)` gives each
 non-standard tree its own file
-(`settlement_capture_receipt_shadow_short_notice.json`); the standard name is
+(`settlement_capture_receipt_shadow_event_day.json`); the standard name is
 untouched so no existing artifact's pointer goes stale. The per-track capture
 is still labelled `capture_purpose: settlement` (it is a D+1 capture, not a
 completion re-capture).
 
 ### 6.3 Request pacing
 
-`capture_selected` fetched every sport of a date in one burst. The short-notice
+`capture_selected` fetched every sport of a date in one burst. The event-day
 stage would have added a third such burst per day. `capture_selected` now takes
 `pause_seconds` and, when set, fetches serially with that gap — the same 62s
 spacing the settlement capture uses. The stage passes the driver's
@@ -254,12 +281,12 @@ spacing the settlement capture uses. The stage passes the driver's
   tests rather than left as reading comprehension.
 - **Lead is measured from the decision instant**, which is later than the
   capture instant — the conservative direction.
-- **One decision per date** (`find_short_notice_run`) stops a second, better
+- **One decision per date** (`find_event_day_run`) stops a second, better
   informed run from replacing the day's pick.
 - **Tree selection is allowlisted** (`shadow_run_dir` rejects unknown subdirs,
   so `--shadow-subdir` cannot traverse).
 - **Digest separation**: `timing_track` is part of the input digest, so a
-  short-notice run can never collide with a frozen run's digest.
+  event-day run can never collide with a frozen run's digest.
 - **Stage isolation**: every failure mode returns a status dict; the stage
   cannot abort the 24h pipeline.
 
@@ -268,7 +295,7 @@ spacing the settlement capture uses. The stage passes the driver's
 - **The track is football-only right now** because of the kickoff-timezone
   hold in §6.1. Every other sport is refused, by design, until the offset can
   be proven from evidence.
-- **No real short-notice run exists yet.** Nothing here may be reported as a
+- **No real event-day run exists yet.** Nothing here may be reported as a
   hit rate until the stage has dispatched and settled real dates.
 - The track's picks have **hours**, not a day, of lead time. That is a weaker
   evidentiary claim and is labelled as such in every artifact.
@@ -279,7 +306,7 @@ spacing the settlement capture uses. The stage passes the driver's
   produce nothing — correctly. `NO_STRONG_UNDERDOG` / no-pick remains a valid
   outcome on this track too; it never forces a pick to fill a sport.
 - Bundling (`slumdog.shadow_bundle`) is **not** wired to this tree yet; the
-  short-notice artifacts are committed JSON evidence only.
+  event-day artifacts are committed JSON evidence only.
 - The completion pass (append-only supplements for UNSETTLED rows) currently
   runs on the frozen tree only.
 
@@ -287,10 +314,11 @@ spacing the settlement capture uses. The stage passes the driver's
 
 | Concern | File |
 | --- | --- |
-| Track policy, kickoff parsing, per-event gate | `src/slumdog/shadow_evaluator.py` (`TrackPolicy`, `track_policy`, `parse_kickoff_utc`, `_timing_classify_short_notice`, `UTC_KICKOFF_PROVEN_SPORTS`) |
+| Track policy, kickoff parsing, per-event gate | `src/slumdog/shadow_evaluator.py` (`TrackPolicy`, `track_policy`, `parse_kickoff_utc`, `_timing_classify_event_day`, `UTC_KICKOFF_PROVEN_SPORTS`) |
 | Record-level kickoff | `src/slumdog/shadow_contracts.py` (`PreEventRecord.kickoff`) |
-| Declaration | `config/shadow_evaluator_short_notice.json` |
+| Declaration | `config/shadow_evaluator_event_day.json` |
 | Evidence-tree selection for settlement | `src/slumdog/shadow_settle.py` (`shadow_run_dir`, `settlement_receipt_name`, `shadow_subdir=` on every entry point, CLI `--shadow-subdir`) |
-| Daily stage | `scripts/forward_shadow_batch.py` (`run_short_notice_for_date`, `find_short_notice_run`, `summarise_short_notice_run`, `--skip-short-notice`) |
+| Daily stage | `scripts/forward_shadow_batch.py` (`run_event_day_for_date`, `find_event_day_run`, `summarise_event_day_run`, `--skip-event-day`) |
 | Evidence-coverage checker | `scripts/check_workflow_evidence_globs.py` |
-| Tests | `tests/test_short_notice_track.py` (74), `tests/test_short_notice_batch.py` (36) |
+| Kickoff-timezone probe (read-only) | `scripts/probe_kickoff_timezone.py` |
+| Tests | `tests/test_event_day_track.py` (74), `tests/test_event_day_batch.py` (36), `tests/test_probe_kickoff_timezone.py` (17) |

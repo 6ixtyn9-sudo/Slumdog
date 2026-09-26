@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+"""Probe how Forebet renders kickoff times to *us*, and whether the raw
+listing HTML carries a machine-readable start instant.
+
+Why this exists
+---------------
+The EVENT_DAY track's entire claim is "this pick was frozen at least N
+minutes before kickoff". That is only as good as the timezone of the kickoff
+we read off the listing. Measured on 2026-09-26 from a browser-side client:
+
+* the football JSON endpoint pins ``tz=0`` and its ``DATE_BAH`` is UTC, but
+* the HTML boards render kickoff in a timezone derived from the REQUESTING
+  CLIENT, and ``?tz=0`` is ignored there (the 2026-09-26 1X2 board showed
+  match 2468143 as ``09/25/2026 9:00 PM`` against ``2026-09-26 02:00:00`` in
+  the tz=0 JSON — five hours).
+
+So every non-football sport is currently refused by the gate
+(``KICKOFF_TIMEZONE_NOT_PROVEN_UTC``). This script gathers the evidence
+needed to lift that hold honestly. It answers two questions:
+
+1. **Is there a machine-readable start instant in the raw HTML?** (a
+   ``data-*`` attribute, a ``<time datetime=...>``, a JSON-LD ``startDate``,
+   or a bare epoch). If yes, the offset problem disappears: parse that field
+   instead of the rendered text.
+2. **If not, what offset does OUR relay render at?** Measured, not assumed:
+   fetch the football JSON (true UTC) and the football HTML board through the
+   same relay in the same pass, join them on the match id in each row's href,
+   and report the offset distribution.
+
+It is read-only: no capture is frozen, no evidence tree is touched, nothing
+is committed. Run it from the repo root::
+
+    python scripts/probe_kickoff_timezone.py --date 2026-09-27
+    python scripts/probe_kickoff_timezone.py --date 2026-09-27 --sport basketball
+    python scripts/probe_kickoff_timezone.py --date 2026-09-27 --out /tmp/probe.json
+
+Exit status is 0 only when the probe reached a definite answer (either a
+machine-readable field exists, or the offset is unanimous across enough
+joined matches). Anything else exits 1: an ambiguous probe must not be read
+as permission to trust the timestamps.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import re
+import sys
+import time
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from bs4 import BeautifulSoup  # noqa: E402
+
+from slumdog.forebet import (  # noqa: E402
+    RELAY_BASE,
+    fetch_with_fallback,
+    relay_get_markdown,
+    source_url,
+)
+from slumdog.parsers import BASE  # noqa: E402
+from slumdog.sports import SPORTS  # noqa: E402
+
+# A rendered listing time, e.g. "25/09/2026 21:00" or "09/25/2026 9:00 PM".
+_DISPLAY_FORMATS = (
+    "%d/%m/%Y %H:%M",
+    "%m/%d/%Y %I:%M %p",
+    "%Y-%m-%d %H:%M",
+)
+
+# Values that would let us skip the offset problem entirely.
+_ISO_RE = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
+_EPOCH_RE = re.compile(r"^1[5-9]\d{8}$|^2[0-9]\d{8}$")
+
+
+def parse_display_time(text: str) -> dt.datetime | None:
+    """Parse a rendered listing timestamp, timezone unknown by definition."""
+    text = " ".join((text or "").split())
+    for fmt in _DISPLAY_FORMATS:
+        try:
+            return dt.datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def offset_minutes(displayed: dt.datetime, utc: dt.datetime) -> int:
+    """Minutes the rendered time runs AHEAD of the true UTC instant.
+
+    A positive result is the dangerous direction: the board makes an event
+    look later than it is, so a lead gate would overstate the lead.
+    """
+    utc = utc.replace(tzinfo=None)
+    return int(round((displayed - utc).total_seconds() / 60.0))
+
+
+def summarise_offsets(offsets: list[int]) -> dict[str, Any]:
+    """Modal offset plus how unanimous the sample is."""
+    if not offsets:
+        return {
+            "joined": 0, "modal_offset_minutes": None,
+            "agreement": 0.0, "distribution": {}, "unanimous": False,
+        }
+    counts = Counter(offsets)
+    modal, hits = counts.most_common(1)[0]
+    return {
+        "joined": len(offsets),
+        "modal_offset_minutes": modal,
+        "agreement": hits / len(offsets),
+        "distribution": {str(k): v for k, v in sorted(counts.items())},
+        "unanimous": len(counts) == 1,
+    }
+
+
+def machine_readable_candidates(html: bytes | str) -> list[dict[str, str]]:
+    """Attributes/nodes in the raw HTML that look like a real instant.
+
+    Any hit here is worth more than the whole offset calibration: it is a
+    timestamp the site publishes for machines, not a string it rendered for
+    a human in some timezone.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    found: list[dict[str, str]] = []
+
+    for script in soup.select('script[type="application/ld+json"]'):
+        body = script.string or ""
+        if "startDate" in body or _ISO_RE.search(body):
+            found.append({
+                "kind": "json_ld", "attribute": "startDate",
+                "sample": body.strip()[:200],
+            })
+
+    for node in soup.find_all(True):
+        for name, value in (node.attrs or {}).items():
+            if isinstance(value, list):
+                value = " ".join(value)
+            value = str(value)
+            interesting = (
+                name in {"datetime", "data-time", "data-timestamp", "data-utc"}
+                or (name.startswith("data-")
+                    and (_ISO_RE.search(value) or _EPOCH_RE.match(value.strip())))
+            )
+            if interesting:
+                found.append({
+                    "kind": "attribute", "attribute": name,
+                    "element": node.name, "sample": value[:120],
+                })
+        if len(found) >= 25:  # a handful is proof enough
+            break
+    return found
+
+
+def fetch(url: str, *, timeout: int) -> bytes:
+    """Fetch exactly the way the collector does, so the probe measures the
+    path production actually uses (relay first, direct as fallback)."""
+    relay = RELAY_BASE + url
+    try:
+        body, _route = fetch_with_fallback(relay, url, timeout=timeout)
+        return body
+    except Exception:
+        return relay_get_markdown(relay, url, timeout=timeout)
+
+
+def football_utc_kickoffs(date: str, *, timeout: int) -> dict[str, dt.datetime]:
+    """``{match_id: kickoff_utc}`` from the tz=0-pinned JSON endpoint."""
+    from slumdog.parsers import _load_football_payload
+
+    body = fetch(source_url(SPORTS["football"], date), timeout=timeout)
+    payload = _load_football_payload(body)
+    out: dict[str, dt.datetime] = {}
+    for row in payload[0]:
+        if not isinstance(row, dict):
+            continue
+        raw = str(row.get("DATE_BAH") or "")
+        try:
+            out[str(row.get("id"))] = dt.datetime.strptime(
+                raw[:16], "%Y-%m-%d %H:%M")
+        except ValueError:
+            continue
+    return out
+
+
+def html_board_rows(body: bytes) -> list[dict[str, str]]:
+    """``[{match_id, displayed}]`` from a rendered listing board."""
+    soup = BeautifulSoup(body, "html.parser")
+    rows: list[dict[str, str]] = []
+    for row in soup.select("div.rcnt"):
+        link = row.select_one("a.tnmscn")
+        date_node = row.select_one(".date_bah")
+        if not link or not date_node:
+            continue
+        href = str(link.get("href") or "")
+        match_id = href.rstrip("/").split("-")[-1]
+        rows.append({
+            "match_id": match_id,
+            "displayed": " ".join(date_node.get_text(" ").split()),
+        })
+    return rows
+
+
+def run_probe(date: str, *, sport: str, timeout: int, pause: float) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "probed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "target_date": date,
+        "extra_sport": sport,
+    }
+
+    json_kickoffs = football_utc_kickoffs(date, timeout=timeout)
+    report["football_json_matches"] = len(json_kickoffs)
+
+    time.sleep(pause)
+    board_url = f"{BASE}/en/football-predictions/predictions-1x2/{date}"
+    board = fetch(board_url, timeout=timeout)
+    report["football_board_url"] = board_url
+    report["football_board_bytes"] = len(board)
+
+    rows = html_board_rows(board)
+    report["football_board_rows"] = len(rows)
+
+    offsets: list[int] = []
+    samples: list[dict[str, Any]] = []
+    for row in rows:
+        utc = json_kickoffs.get(row["match_id"])
+        displayed = parse_display_time(row["displayed"])
+        if utc is None or displayed is None:
+            continue
+        delta = offset_minutes(displayed, utc)
+        offsets.append(delta)
+        if len(samples) < 5:
+            samples.append({
+                "match_id": row["match_id"],
+                "displayed": row["displayed"],
+                "utc": utc.isoformat(),
+                "offset_minutes": delta,
+            })
+    report["offset"] = summarise_offsets(offsets)
+    report["offset_samples"] = samples
+    report["football_html_candidates"] = machine_readable_candidates(board)
+
+    if sport and sport in SPORTS:
+        time.sleep(pause)
+        other_url = source_url(SPORTS[sport], date)
+        other = fetch(other_url, timeout=timeout)
+        report["extra_sport_url"] = other_url
+        report["extra_sport_bytes"] = len(other)
+        report["extra_sport_rows"] = len(html_board_rows(other))
+        report["extra_sport_candidates"] = machine_readable_candidates(other)
+
+    return report
+
+
+def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
+    """Turn the report into a decision, erring toward 'not proven'."""
+    lines: list[str] = []
+    resolved = False
+
+    candidates = (report.get("football_html_candidates") or []) + (
+        report.get("extra_sport_candidates") or [])
+    if candidates:
+        resolved = True
+        lines.append(
+            f"MACHINE-READABLE START FOUND ({len(candidates)} hit(s)) — parse "
+            "that field instead of the rendered text; no offset calibration "
+            "needed.")
+        for c in candidates[:5]:
+            lines.append(f"  {c.get('kind')}: {c.get('attribute')} = {c.get('sample')}")
+    else:
+        lines.append(
+            "No machine-readable start instant in the raw HTML — the rendered "
+            "text is all there is.")
+
+    off = report.get("offset") or {}
+    joined = off.get("joined", 0)
+    modal = off.get("modal_offset_minutes")
+    if joined >= 20 and off.get("agreement", 0) >= 0.98:
+        resolved = True
+        lines.append(
+            f"RELAY RENDERING OFFSET = {modal:+d} min "
+            f"(joined {joined} matches, agreement {off['agreement']:.1%}).")
+        if modal == 0:
+            lines.append(
+                "  Offset is zero for THIS request. That is one observation, "
+                "not a guarantee: it is IP-derived and can change. Calibrate "
+                "per capture rather than hardcoding it.")
+        else:
+            lines.append(
+                "  Rendered times must be shifted by this offset before any "
+                "lead comparison. A positive offset is the dangerous "
+                "direction (events look later than they are).")
+    else:
+        lines.append(
+            f"OFFSET NOT RESOLVED (joined {joined}, "
+            f"agreement {off.get('agreement', 0):.1%}) — the hold stands.")
+
+    return resolved, lines
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--date", required=True, help="YYYY-MM-DD board to probe")
+    parser.add_argument("--sport", default="basketball",
+                        help="extra HTML board to scan for machine-readable "
+                             "timestamps (default: basketball)")
+    parser.add_argument("--timeout", type=int, default=45)
+    parser.add_argument("--pause", type=float, default=62.0,
+                        help="seconds between requests (politeness)")
+    parser.add_argument("--out", type=Path, default=None,
+                        help="write the full JSON report here")
+    args = parser.parse_args(argv)
+
+    dt.date.fromisoformat(args.date)
+    report = run_probe(
+        args.date, sport=args.sport, timeout=args.timeout, pause=args.pause)
+    resolved, lines = verdict(report)
+    report["resolved"] = resolved
+    report["verdict"] = lines
+
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps(report, indent=2, sort_keys=True))
+
+    print(json.dumps(
+        {k: v for k, v in report.items() if k != "verdict"},
+        indent=2, sort_keys=True))
+    print()
+    for line in lines:
+        print(line)
+    return 0 if resolved else 1
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

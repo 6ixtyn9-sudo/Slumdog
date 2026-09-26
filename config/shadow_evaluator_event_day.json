@@ -10,9 +10,9 @@
   "artifact_path": {
     "manifest": "manifest.json",
     "payload": "shadow_selections.json",
-    "per_date": "data/reports/shadow_short_notice/<target_date>/",
-    "per_run": "data/reports/shadow_short_notice/<target_date>/<run_id>/",
-    "root": "data/reports/shadow_short_notice",
+    "per_date": "data/reports/shadow_event_day/<target_date>/",
+    "per_run": "data/reports/shadow_event_day/<target_date>/<run_id>/",
+    "root": "data/reports/shadow_event_day",
     "summary_markdown": "summary.md"
   },
   "authoring_base_commit": "a7a767c28b6c08d9586ddf0351ad582556c326f7",
@@ -44,7 +44,7 @@
     "top3_cohort_per_sport_day": null,
     "top3_cohort_per_sport_day_null_means": "UNCAPPED: every R2-eligible, R1-ranked candidate for a sport-day is recorded as a selection (rank 1 = PRIMARY_SHADOW_SELECTION, every other rank = TOP3_EVALUATION_COHORT). No candidate that already cleared R2 is discarded. Set to a positive integer instead to cap the recorded cohort at that many non-primary ranks per sport-day (legacy behavior)."
   },
-  "declaration_version": "shadow_evaluator_short_notice",
+  "declaration_version": "shadow_evaluator_event_day",
   "durability": {
     "git_tracked_exception": false,
     "no_compact_digest_writer": true,
@@ -96,7 +96,7 @@
     "no_selection_sport_day": "SHADOW_NO_SELECTION",
     "primary_selection": "PRIMARY_SHADOW_SELECTION",
     "run_blocked": "SHADOW_RUN_BLOCKED",
-    "timing_rejected_short_notice": "INSUFFICIENT_LEAD_BEFORE_KICKOFF",
+    "timing_rejected_event_day": "INSUFFICIENT_LEAD_BEFORE_KICKOFF",
     "timing_unverified": "PRE_EVENT_TIMING_UNVERIFIED",
     "top3_cohort": "TOP3_EVALUATION_COHORT"
   },
@@ -111,7 +111,7 @@
     "require_captured_at_present": true,
     "require_decision_committed_at_present": true,
     "require_parsed_kickoff": true,
-    "track": "SHORT_NOTICE"
+    "track": "EVENT_DAY"
   },
-  "track_purpose": "SHORT_NOTICE evidence track (owner decision 2026-09-26). Forebet does not publish basketball / hockey / baseball / tennis / rugby boards more than about a day ahead, so those sports are structurally unreachable under the frozen 24h date-anchored gate and the standard track produced football-only rank-1 picks on 2026-09-21..26. This track decides on the event day and proves pre-event status per event against the published kickoff. It is a SEPARATE, WEAKER-LEAD-TIME experiment: its artifacts live under their own root, carry track=SHORT_NOTICE, and are never pooled with the 24h-frozen record or reported as part of it."
+  "track_purpose": "EVENT_DAY evidence track (owner decision 2026-09-26). Forebet does not publish basketball / hockey / baseball / tennis / rugby boards more than about a day ahead, so those sports are structurally unreachable under the frozen 24h date-anchored gate and the standard track produced football-only rank-1 picks on 2026-09-21..26. This track decides on the event day and proves pre-event status per event against the published kickoff. It is a SEPARATE, WEAKER-LEAD-TIME experiment: its artifacts live under their own root, carry track=EVENT_DAY, and are never pooled with the 24h-frozen record or reported as part of it."
 }

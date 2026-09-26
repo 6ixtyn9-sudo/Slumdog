@@ -60,13 +60,13 @@ from pathlib import Path
 
 
 # Evidence trees under data/reports/. Never pooled: "shadow" is the frozen
-# 24h pre-event contract, "shadow_short_notice" is the separate per-event
+# 24h pre-event contract, "shadow_event_day" is the separate per-event
 # kickoff-lead track added 2026-09-26 so late-publishing sports can produce a
 # rank-1 pick at all. Mirrors slumdog.shadow_settle's constants (kept as plain
 # strings here so the module imports without the package installed).
 STANDARD_SHADOW_SUBDIR = "shadow"
-SHORT_NOTICE_SHADOW_SUBDIR = "shadow_short_notice"
-SHORT_NOTICE_CONFIG = "config/shadow_evaluator_short_notice.json"
+EVENT_DAY_SHADOW_SUBDIR = "shadow_event_day"
+EVENT_DAY_CONFIG = "config/shadow_evaluator_event_day.json"
 
 # Single source of truth for every SMALL evidence file this pipeline can
 # write and that must survive the runner (the scoped git waiver in AGENTS.md:
@@ -93,19 +93,23 @@ PERSISTED_EVIDENCE: tuple[tuple[str, str], ...] = (
     ("data/reports/shadow", "slumdog-shadow-2026-09-22-abcd.bundle.json"),
     ("data/reports/shadow", "slumdog-shadow-2026-09-22-abcd.tar.gz.sha256"),
     ("data/reports/shadow", "forward_batch_receipt.json"),
-    # --- SHORT_NOTICE track (2026-09-26) ----------------------------------
-    ("data/reports/shadow_short_notice", "shadow_selections.json"),
-    ("data/reports/shadow_short_notice", "manifest.json"),
-    ("data/reports/shadow_short_notice", "settlement.json"),
-    ("data/reports/shadow_short_notice", "settlement.json.sha256"),
+    # --- EVENT_DAY track (2026-09-26) ----------------------------------
+    ("data/reports/shadow_event_day", "shadow_selections.json"),
+    ("data/reports/shadow_event_day", "manifest.json"),
+    ("data/reports/shadow_event_day", "settlement.json"),
+    ("data/reports/shadow_event_day", "settlement.json.sha256"),
     # --- capture receipts -------------------------------------------------
     ("data/reports", "capture_2026-09-26.json"),
     ("data/reports", "capture_refresh_2026-09-26_20260925T043308Z.json"),
-    ("data/reports", "capture_short_notice_2026-09-26_20260926T043000Z.json"),
+    ("data/reports", "capture_event_day_2026-09-26_20260926T043000Z.json"),
     # --- settlement evidence receipts -------------------------------------
     ("data/settlement_evidence", "settlement_capture_receipt.json"),
     ("data/settlement_evidence",
      "settlement_capture_receipt_completion_20260914T000000Z.json"),
+    # Per-track D+1 receipt: the event-day settlement writes its own file so
+    # it cannot overwrite the frozen track's committed capture evidence.
+    ("data/settlement_evidence",
+     "settlement_capture_receipt_shadow_event_day.json"),
 )
 
 # Evidence types the CURRENT workflow does not commit yet, pending the
@@ -120,11 +124,13 @@ KNOWN_UNCOVERED_PENDING_OWNER_PASTE: frozenset[tuple[str, str]] = frozenset({
     ("data/reports/shadow", "settlement_delta_20260922T043000Z.json"),
     ("data/reports/shadow", "settlement_delta_20260922T043000Z.json.sha256"),
     ("data/reports/shadow", "forward_batch_receipt.json"),
-    ("data/reports/shadow_short_notice", "shadow_selections.json"),
-    ("data/reports/shadow_short_notice", "manifest.json"),
-    ("data/reports/shadow_short_notice", "settlement.json"),
-    ("data/reports/shadow_short_notice", "settlement.json.sha256"),
-    # NOTE: capture_short_notice_*.json is ALREADY covered — the persist step's
+    ("data/reports/shadow_event_day", "shadow_selections.json"),
+    ("data/reports/shadow_event_day", "manifest.json"),
+    ("data/reports/shadow_event_day", "settlement.json"),
+    ("data/reports/shadow_event_day", "settlement.json.sha256"),
+    ("data/settlement_evidence",
+     "settlement_capture_receipt_shadow_event_day.json"),
+    # NOTE: capture_event_day_*.json is ALREADY covered — the persist step's
     # `git add -f data/reports/capture_*.json` line matches it.
 })
 
@@ -799,7 +805,7 @@ def run_refresh_backlog(
 
 
 # ---------------------------------------------------------------------------
-# Short-notice stage (owner decision 2026-09-26): one rank-1 (R1) pick per
+# Event-day stage (owner decision 2026-09-26): one rank-1 (R1) pick per
 # sport on the event day itself.
 #
 # Why it exists: Forebet only publishes basketball / hockey / baseball /
@@ -807,22 +813,22 @@ def run_refresh_backlog(
 # forward capture and the T+1/T+2 refresh get "target date missing from HTML"
 # for them — so under the date-anchored 24h contract those sports cannot
 # produce a pick at all, and 2026-09-21..26 were football-only. This stage
-# captures TODAY's board and evaluates it under the SHORT_NOTICE declaration,
+# captures TODAY's board and evaluates it under the EVENT_DAY declaration,
 # which proves pre-event status per event against the published kickoff
 # (>= min_lead_minutes_before_kickoff) instead of against the date anchor.
 #
 # Separation is absolute: its own capture receipt name, its own declaration,
-# its own artifact tree (data/reports/shadow_short_notice/), track labels in
+# its own artifact tree (data/reports/shadow_event_day/), track labels in
 # every payload/manifest, and its own settlement pass. Nothing in this stage
 # reads or writes the 24h-frozen tree, and the two hit rates are never added
 # together.
 # ---------------------------------------------------------------------------
 
 
-def find_short_notice_run(target_date: str, repo_root: Path) -> str | None:
-    """Return the completed short-notice run id for a date, or None."""
+def find_event_day_run(target_date: str, repo_root: Path) -> str | None:
+    """Return the completed event-day run id for a date, or None."""
     day_dir = (repo_root / "data" / "reports"
-               / SHORT_NOTICE_SHADOW_SUBDIR / target_date)
+               / EVENT_DAY_SHADOW_SUBDIR / target_date)
     if not day_dir.is_dir():
         return None
     for child in sorted(day_dir.iterdir()):
@@ -832,8 +838,8 @@ def find_short_notice_run(target_date: str, repo_root: Path) -> str | None:
     return None
 
 
-def summarise_short_notice_run(run_dir: Path) -> dict:
-    """Per-sport R1 summary of one completed short-notice run.
+def summarise_event_day_run(run_dir: Path) -> dict:
+    """Per-sport R1 summary of one completed event-day run.
 
     Returns ``{"sports_with_r1": [...], "r1_count": n, "selection_count": n}``.
     Unreadable artifacts yield zeros rather than raising — the caller's
@@ -856,7 +862,7 @@ def summarise_short_notice_run(run_dir: Path) -> dict:
     return out
 
 
-def run_short_notice_for_date(
+def run_event_day_for_date(
     target_date: str,
     repo_root: Path,
     *,
@@ -865,11 +871,11 @@ def run_short_notice_for_date(
     dry_run: bool = False,
     base_date: dt.date | None = None,
 ) -> dict:
-    """Capture + evaluate today's board on the SHORT_NOTICE track.
+    """Capture + evaluate today's board on the EVENT_DAY track.
 
     Isolated exactly like the settlement and refresh stages: every failure
     lands in the returned dict and is never raised to the batch driver, so a
-    short-notice failure can never cost the 24h-frozen forward pass.
+    event-day failure can never cost the 24h-frozen forward pass.
     """
     from slumdog.forebet import ForebetCollector
     from slumdog.shadow_evaluator import UTC_KICKOFF_PROVEN_SPORTS
@@ -878,7 +884,7 @@ def run_short_notice_for_date(
     entry: dict = {
         "target_date": target_date, "status": "PENDING", "run_id": None,
         "timezone_hold_sports": [],
-        "track": "SHORT_NOTICE", "capture_receipt": None,
+        "track": "EVENT_DAY", "capture_receipt": None,
         "captured_sports": 0, "capture_failures": 0,
         "sports_with_r1": [], "r1_count": 0, "selection_count": 0,
         "timing_rejections": {}, "error": None,
@@ -886,9 +892,9 @@ def run_short_notice_for_date(
     base_date = base_date or dt.datetime.now(dt.timezone.utc).date()
     reports_dir = repo_root / "data" / "reports"
 
-    existing = find_short_notice_run(target_date, repo_root)
+    existing = find_event_day_run(target_date, repo_root)
     if existing is not None:
-        # One short-notice decision per date. Re-running would freeze a
+        # One event-day decision per date. Re-running would freeze a
         # second, later-lead decision for the same day and make the track's
         # hit rate ambiguous.
         entry["status"] = "ALREADY_RUN"
@@ -899,7 +905,7 @@ def run_short_notice_for_date(
         return entry
 
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    receipt_name = f"capture_short_notice_{target_date}_{stamp}.json"
+    receipt_name = f"capture_event_day_{target_date}_{stamp}.json"
     entry["capture_receipt"] = receipt_name
     try:
         collector = ForebetCollector(root=repo_root, timeout=timeout, workers=1)
@@ -927,7 +933,7 @@ def run_short_notice_for_date(
         result = run_evaluator(
             target_date, repo_root,
             receipt_name=receipt_name,
-            config_rel=SHORT_NOTICE_CONFIG,
+            config_rel=EVENT_DAY_CONFIG,
         )
         entry["run_id"] = result.get("run_id")
         run_status = result.get("run_status")
@@ -936,11 +942,11 @@ def run_short_notice_for_date(
             entry["status"] = "BLOCKED"
             entry["error"] = f"evaluator run_status={run_status}"
             return entry
-        entry.update(summarise_short_notice_run(run_dir))
+        entry.update(summarise_event_day_run(run_dir))
         try:
             manifest = json.loads((run_dir / "manifest.json").read_text())
             entry["timing_rejections"] = manifest.get(
-                "short_notice_timing_rejections", {})
+                "event_day_timing_rejections", {})
         except (OSError, json.JSONDecodeError):
             pass
         entry["status"] = (
@@ -948,7 +954,7 @@ def run_short_notice_for_date(
             else "NO_SELECTION"
         )
     except Exception as exc:
-        entry["status"] = "SHORT_NOTICE_FAILED"
+        entry["status"] = "EVENT_DAY_FAILED"
         entry["error"] = f"{type(exc).__name__}: {exc}"
     return entry
 
@@ -992,8 +998,8 @@ def run_evaluator(
     receipt_path = repo_root / "data" / "reports" / (
         receipt_name or f"capture_{target_date}.json")
     # ``config_rel`` selects the timing track: the default frozen 24h
-    # declaration, or the SHORT_NOTICE declaration whose artifacts land in
-    # the separate data/reports/shadow_short_notice tree.
+    # declaration, or the EVENT_DAY declaration whose artifacts land in
+    # the separate data/reports/shadow_event_day tree.
     config_path = repo_root / config_rel
     if not receipt_path.is_file():
         raise RuntimeError(f"capture receipt not found: {receipt_path}")
@@ -1190,10 +1196,10 @@ def main(argv: list[str] | None = None) -> int:
                              "re-snapshots when a completed run exists "
                              "(default 2; deeper windows are progressively "
                              "little refresh — fixtures are largely fixed)")
-    parser.add_argument("--skip-short-notice", action="store_true",
-                        help="Skip the SHORT_NOTICE stage (same-day capture "
+    parser.add_argument("--skip-event-day", action="store_true",
+                        help="Skip the EVENT_DAY stage (same-day capture "
                              "+ per-event kickoff-lead evaluation into "
-                             "data/reports/shadow_short_notice/) and its own "
+                             "data/reports/shadow_event_day/) and its own "
                              "D+1 settlement pass. The frozen 24h track is "
                              "unaffected either way.")
     parser.add_argument("--completion-window-days", type=int,
@@ -1319,36 +1325,36 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
 
-    # Short-notice track (owner decision 2026-09-26). Runs BEFORE the
+    # Event-day track (owner decision 2026-09-26). Runs BEFORE the
     # forward pass: today's picks are the time-critical ones, and the forward
     # pass is the long stage. Both sub-stages are isolated — a failure here
     # can never stop the 24h-frozen pipeline below.
-    short_notice_settlement: list[dict] = []
-    short_notice_results: list[dict] = []
-    if not args.skip_short_notice:
+    event_day_settlement: list[dict] = []
+    event_day_results: list[dict] = []
+    if not args.skip_event_day:
         if not args.skip_settlement:
-            short_notice_settlement = run_settlement_backlog(
+            event_day_settlement = run_settlement_backlog(
                 repo_root,
                 pause_seconds=args.pause_seconds,
                 timeout=args.capture_timeout,
                 dry_run=args.dry_run,
-                shadow_subdir=SHORT_NOTICE_SHADOW_SUBDIR,
+                shadow_subdir=EVENT_DAY_SHADOW_SUBDIR,
             )
-            for sr in short_notice_settlement:
-                print(f"  short-notice settle {sr['target_date']} "
+            for sr in event_day_settlement:
+                print(f"  event-day settle {sr['target_date']} "
                       f"({sr['run_id']}): {sr['status']}", file=sys.stderr)
                 if sr.get("error"):
                     print(f"    Error: {sr['error']}", file=sys.stderr)
         today = dt.datetime.now(dt.timezone.utc).date().isoformat()
-        entry = run_short_notice_for_date(
+        entry = run_event_day_for_date(
             today, repo_root,
             pause_seconds=args.pause_seconds,
             timeout=args.capture_timeout,
             dry_run=args.dry_run,
         )
-        short_notice_results.append(entry)
+        event_day_results.append(entry)
         print(
-            f"  short-notice {entry['target_date']}: {entry['status']}"
+            f"  event-day {entry['target_date']}: {entry['status']}"
             + (f" (R1 in {entry['r1_count']} sport(s): "
                f"{', '.join(entry['sports_with_r1'])})"
                if entry.get("r1_count") else "")
@@ -1391,8 +1397,8 @@ def main(argv: list[str] | None = None) -> int:
         "settlement_completion": completion_results,
         "delta_settlement": delta_settlement_results,
         "refresh": refresh_results,
-        "short_notice": short_notice_results,
-        "short_notice_settlement": short_notice_settlement,
+        "event_day": event_day_results,
+        "event_day_settlement": event_day_settlement,
         "summary": {
             "total": len(results),
             "completed": sum(1 for r in results if r["status"] == "COMPLETED"),
@@ -1435,21 +1441,21 @@ def main(argv: list[str] | None = None) -> int:
             "refresh_failed": sum(
                 1 for r in refresh_results if r["status"] == "REFRESH_FAILED"
             ),
-            # SHORT_NOTICE track counters. Deliberately named apart from the
+            # EVENT_DAY track counters. Deliberately named apart from the
             # frozen-track counters above: the two records are never summed.
-            "short_notice_runs": len(short_notice_results),
-            "short_notice_r1_sports": sum(
-                r.get("r1_count", 0) for r in short_notice_results
+            "event_day_runs": len(event_day_results),
+            "event_day_r1_sports": sum(
+                r.get("r1_count", 0) for r in event_day_results
             ),
-            "short_notice_selections": sum(
-                r.get("selection_count", 0) for r in short_notice_results
+            "event_day_selections": sum(
+                r.get("selection_count", 0) for r in event_day_results
             ),
-            "short_notice_failed": sum(
-                1 for r in short_notice_results
-                if r["status"] in ("SHORT_NOTICE_FAILED", "BLOCKED")
+            "event_day_failed": sum(
+                1 for r in event_day_results
+                if r["status"] in ("EVENT_DAY_FAILED", "BLOCKED")
             ),
-            "short_notice_settled": sum(
-                1 for r in short_notice_settlement if r["status"] == "SETTLED"
+            "event_day_settled": sum(
+                1 for r in event_day_settlement if r["status"] == "SETTLED"
             ),
         },
     }

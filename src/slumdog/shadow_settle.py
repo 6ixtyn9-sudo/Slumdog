@@ -221,7 +221,7 @@ def grade_underdog_win(
 # Two evidence trees exist under data/reports/ and they are never pooled:
 #
 #   shadow/                 STANDARD track — frozen 24h pre-event contract
-#   shadow_short_notice/    SHORT_NOTICE track — per-event kickoff lead
+#   shadow_event_day/    EVENT_DAY track — per-event kickoff lead
 #                           (owner decision 2026-09-26)
 #
 # Every settlement entry point takes ``shadow_subdir`` and defaults to the
@@ -229,8 +229,8 @@ def grade_underdog_win(
 # bit-for-bit unaffected. Grading logic itself is identical for both tracks:
 # an underdog either won outright or it did not.
 STANDARD_SHADOW_SUBDIR = "shadow"
-SHORT_NOTICE_SHADOW_SUBDIR = "shadow_short_notice"
-KNOWN_SHADOW_SUBDIRS = (STANDARD_SHADOW_SUBDIR, SHORT_NOTICE_SHADOW_SUBDIR)
+EVENT_DAY_SHADOW_SUBDIR = "shadow_event_day"
+KNOWN_SHADOW_SUBDIRS = (STANDARD_SHADOW_SUBDIR, EVENT_DAY_SHADOW_SUBDIR)
 
 
 def settlement_receipt_name(
@@ -2031,7 +2031,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    choices=list(KNOWN_SHADOW_SUBDIRS),
                    help="Evidence tree under data/reports/ to settle in. "
                         "'shadow' is the frozen 24h-contract record (default); "
-                        "'shadow_short_notice' is the separate per-event "
+                        "'shadow_event_day' is the separate per-event "
                         "kickoff-lead track. The two are never pooled.")
     return p
 

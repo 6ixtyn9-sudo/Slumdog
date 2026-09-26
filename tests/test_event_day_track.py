@@ -1,9 +1,9 @@
-"""SHORT_NOTICE evidence track (owner decision 2026-09-26).
+"""EVENT_DAY evidence track (owner decision 2026-09-26).
 
 The frozen 24h track anchors its timing gate to ``target_date 00:00 UTC``.
 Forebet does not publish basketball / hockey / baseball / tennis / rugby
 boards that far ahead, so those sports cannot produce a rank-1 (R1) pick at
-all under it — 2026-09-21..26 were football-only. The SHORT_NOTICE track
+all under it — 2026-09-21..26 were football-only. The EVENT_DAY track
 decides on the event day and proves pre-event status PER EVENT against the
 published kickoff.
 
@@ -29,21 +29,21 @@ import pytest
 
 from slumdog.shadow_contracts import PreEventRecord
 from slumdog.shadow_evaluator import (
-    MIN_SHORT_NOTICE_LEAD_MINUTES,
+    MIN_EVENT_DAY_LEAD_MINUTES,
     UTC_KICKOFF_PROVEN_SPORTS,
-    SHORT_NOTICE_ARTIFACT_ROOT,
-    SHORT_NOTICE_DECLARATION_VERSION,
-    SHORT_NOTICE_TRACK,
+    EVENT_DAY_ARTIFACT_ROOT,
+    EVENT_DAY_DECLARATION_VERSION,
+    EVENT_DAY_TRACK,
     STANDARD_TRACK,
     ShadowEvaluatorError,
-    _timing_classify_short_notice,
+    _timing_classify_event_day,
     evaluate_from_disk,
     load_shadow_declaration,
     parse_kickoff_utc,
     track_policy,
 )
 from slumdog.shadow_settle import (
-    SHORT_NOTICE_SHADOW_SUBDIR,
+    EVENT_DAY_SHADOW_SUBDIR,
     STANDARD_SHADOW_SUBDIR,
     SettlementError,
     load_prediction_run,
@@ -54,7 +54,7 @@ from slumdog.sports import SPORTS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STANDARD_DECL = REPO_ROOT / "config" / "shadow_evaluator.json"
-SHORT_NOTICE_DECL = REPO_ROOT / "config" / "shadow_evaluator_short_notice.json"
+EVENT_DAY_DECL = REPO_ROOT / "config" / "shadow_evaluator_event_day.json"
 FROZEN_CONFIG = REPO_ROOT / "config" / "research_baselines.json"
 
 TARGET_DATE = "2026-09-26"
@@ -74,15 +74,15 @@ def tmp_root():
         shutil.copy(FROZEN_CONFIG, root / "config" / "research_baselines.json")
         shutil.copy(STANDARD_DECL, root / "config" / "shadow_evaluator.json")
         shutil.copy(
-            SHORT_NOTICE_DECL,
-            root / "config" / "shadow_evaluator_short_notice.json",
+            EVENT_DAY_DECL,
+            root / "config" / "shadow_evaluator_event_day.json",
         )
         yield root
 
 
 def _decl(tmp_root: Path, **timing_overrides) -> Path:
-    """Write a short-notice declaration with patched timing fields."""
-    obj = json.loads(SHORT_NOTICE_DECL.read_text())
+    """Write a event-day declaration with patched timing fields."""
+    obj = json.loads(EVENT_DAY_DECL.read_text())
     for key, value in timing_overrides.items():
         if value is None:
             obj["timing_safety"].pop(key, None)
@@ -225,12 +225,12 @@ def _row(event_id: str, kickoff_hhmm: str, *, host="Arsenal", guest="Liverpool")
 
 class TestShortNoticeDeclaration:
     def test_shipped_declaration_loads_and_resolves_to_the_track(self):
-        policy = track_policy(load_shadow_declaration(SHORT_NOTICE_DECL))
-        assert policy.name == SHORT_NOTICE_TRACK
-        assert policy.is_short_notice
+        policy = track_policy(load_shadow_declaration(EVENT_DAY_DECL))
+        assert policy.name == EVENT_DAY_TRACK
+        assert policy.is_event_day
         assert policy.safe_cutoff_offset_hours is None
-        assert policy.min_lead_minutes >= MIN_SHORT_NOTICE_LEAD_MINUTES
-        assert policy.artifact_root == SHORT_NOTICE_ARTIFACT_ROOT
+        assert policy.min_lead_minutes >= MIN_EVENT_DAY_LEAD_MINUTES
+        assert policy.artifact_root == EVENT_DAY_ARTIFACT_ROOT
 
     def test_standard_declaration_still_resolves_to_the_frozen_track(self):
         policy = track_policy(load_shadow_declaration(STANDARD_DECL))
@@ -240,10 +240,10 @@ class TestShortNoticeDeclaration:
         assert policy.artifact_root == "data/reports/shadow"
 
     def test_declaration_version_is_distinct(self):
-        assert (json.loads(SHORT_NOTICE_DECL.read_text())["declaration_version"]
-                == SHORT_NOTICE_DECLARATION_VERSION)
+        assert (json.loads(EVENT_DAY_DECL.read_text())["declaration_version"]
+                == EVENT_DAY_DECLARATION_VERSION)
 
-    def test_track_field_must_say_short_notice(self, tmp_root):
+    def test_track_field_must_say_event_day(self, tmp_root):
         with pytest.raises(ShadowEvaluatorError, match="timing_safety.track"):
             load_shadow_declaration(_decl(tmp_root, track="STANDARD"))
 
@@ -274,32 +274,32 @@ class TestShortNoticeDeclaration:
         with pytest.raises(ShadowEvaluatorError, match=flag):
             load_shadow_declaration(_decl(tmp_root, **{flag: False}))
 
-    def test_artifact_root_must_be_the_short_notice_tree(self, tmp_root):
-        obj = json.loads(SHORT_NOTICE_DECL.read_text())
+    def test_artifact_root_must_be_the_event_day_tree(self, tmp_root):
+        obj = json.loads(EVENT_DAY_DECL.read_text())
         obj["artifact_path"]["root"] = "data/reports/shadow"
         path = tmp_root / "config" / "wrong_root.json"
         path.write_text(json.dumps(obj))
         with pytest.raises(ShadowEvaluatorError, match="artifact_path.root"):
             load_shadow_declaration(path)
 
-    def test_standard_declaration_may_not_write_into_the_short_notice_tree(
+    def test_standard_declaration_may_not_write_into_the_event_day_tree(
             self, tmp_root):
         obj = json.loads(STANDARD_DECL.read_text())
-        obj["artifact_path"]["root"] = SHORT_NOTICE_ARTIFACT_ROOT
+        obj["artifact_path"]["root"] = EVENT_DAY_ARTIFACT_ROOT
         path = tmp_root / "config" / "cross.json"
         path.write_text(json.dumps(obj))
         with pytest.raises(ShadowEvaluatorError, match="reserved"):
             load_shadow_declaration(path)
 
     def test_authorizations_remain_fail_closed(self):
-        auth = load_shadow_declaration(SHORT_NOTICE_DECL)["authorizations"]
+        auth = load_shadow_declaration(EVENT_DAY_DECL)["authorizations"]
         assert auth["shadow_evaluation_authorized"] is True
         for gate in ("production_authorized", "shortlist_policy_authorized",
                      "training_authorized", "threshold_optimization_authorized"):
             assert auth[gate] is False
 
     def test_rule_source_is_the_same_frozen_r2_and_r1(self):
-        decl = load_shadow_declaration(SHORT_NOTICE_DECL)
+        decl = load_shadow_declaration(EVENT_DAY_DECL)
         standard = load_shadow_declaration(STANDARD_DECL)
         assert decl["rule"] == standard["rule"]
         assert decl["anti_tuning"] == standard["anti_tuning"]
@@ -338,7 +338,7 @@ class TestShortNoticeTimingGate:
     decision = dt.datetime(2026, 9, 26, 4, 0, tzinfo=dt.timezone.utc)
 
     def _classify(self, records, lead=120):
-        return _timing_classify_short_notice(
+        return _timing_classify_event_day(
             records, target_date=TARGET_DATE,
             decision_dt=self.decision, min_lead_minutes=lead,
         )
@@ -419,7 +419,7 @@ class TestShortNoticeTimingGate:
 class TestShortNoticeEndToEnd:
     decision = dt.datetime(2026, 9, 26, 4, 0, tzinfo=dt.timezone.utc)
 
-    def _run(self, tmp_root, rows, *, config="shadow_evaluator_short_notice.json",
+    def _run(self, tmp_root, rows, *, config="shadow_evaluator_event_day.json",
              decision=None, receipt_name=None, captured_at=None):
         receipt = _write_capture(
             tmp_root, rows, receipt_name=receipt_name,
@@ -443,11 +443,11 @@ class TestShortNoticeEndToEnd:
         assert result.manifest["block_reason"] == (
             "DECISION_COMMITTED_AT_AFTER_SAFE_CUTOFF")
 
-    def test_same_capture_produces_a_real_pick_on_the_short_notice_track(
+    def test_same_capture_produces_a_real_pick_on_the_event_day_track(
             self, tmp_root):
         result = self._run(tmp_root, [_row("1", "18:00")])
         assert result.run_status == "SHADOW_SELECTIONS_EMITTED"
-        assert result.payload["track"] == SHORT_NOTICE_TRACK
+        assert result.payload["track"] == EVENT_DAY_TRACK
         primaries = [s for s in result.payload["selections"]
                      if s["rank_within_sport_day"] == 1]
         assert len(primaries) == 1
@@ -459,18 +459,18 @@ class TestShortNoticeEndToEnd:
     def test_artifacts_land_in_the_separate_tree_only(self, tmp_root):
         result = self._run(tmp_root, [_row("1", "18:00")])
         artifact_dir = Path(result.artifact_dir)
-        assert SHORT_NOTICE_ARTIFACT_ROOT.split("/")[-1] in artifact_dir.parts
+        assert EVENT_DAY_ARTIFACT_ROOT.split("/")[-1] in artifact_dir.parts
         assert not (tmp_root / "data" / "reports" / "shadow"
                     / TARGET_DATE).exists()
 
     def test_payload_and_manifest_are_loudly_labelled(self, tmp_root):
         result = self._run(tmp_root, [_row("1", "18:00")])
         contract = result.payload["timing_contract"]
-        assert contract["track"] == SHORT_NOTICE_TRACK
+        assert contract["track"] == EVENT_DAY_TRACK
         assert contract["satisfies_frozen_24h_contract"] is False
         assert contract["never_pooled_with_standard_track"] is True
         assert contract["min_lead_minutes_before_kickoff"] == 120
-        assert result.manifest["track"] == SHORT_NOTICE_TRACK
+        assert result.manifest["track"] == EVENT_DAY_TRACK
         assert result.manifest["timing_contract"] == contract
 
     def test_manifest_reports_why_events_were_refused(self, tmp_root):
@@ -480,7 +480,7 @@ class TestShortNoticeEndToEnd:
             _row("3", "05:00", host="Leeds", guest="Everton"),
         ]
         result = self._run(tmp_root, rows)
-        rejections = result.manifest["short_notice_timing_rejections"]
+        rejections = result.manifest["event_day_timing_rejections"]
         assert rejections["INSUFFICIENT_LEAD_BEFORE_KICKOFF"] == 2
         assert rejections["KICKOFF_MISSING_OR_UNPARSEABLE"] == 0
 
@@ -511,7 +511,7 @@ class TestShortNoticeEndToEnd:
         assert result.run_status == "SHADOW_RUN_BLOCKED"
         assert result.manifest["block_reason"] == (
             "DECISION_COMMITTED_AT_AFTER_TARGET_DATE")
-        assert result.manifest["track"] == SHORT_NOTICE_TRACK
+        assert result.manifest["track"] == EVENT_DAY_TRACK
 
     def test_blocked_receipt_states_its_cutoff_semantics(self, tmp_root):
         result = self._run(
@@ -523,7 +523,7 @@ class TestShortNoticeEndToEnd:
     def test_digests_differ_from_a_standard_run_over_the_same_capture(
             self, tmp_root):
         """A standard run of the same board (with a legal early decision) and
-        a short-notice run must never collide on run_id/input_digest."""
+        a event-day run must never collide on run_id/input_digest."""
         short = self._run(tmp_root, [_row("1", "18:00")])
         standard = self._run(
             tmp_root, [_row("1", "18:00")],
@@ -545,7 +545,7 @@ class TestShortNoticeEndToEnd:
         assert "track" not in standard.payload
         assert "timing_contract" not in standard.payload
         assert "track" not in standard.manifest
-        assert "short_notice_timing_rejections" not in standard.manifest
+        assert "event_day_timing_rejections" not in standard.manifest
         for sel in standard.payload["selections"]:
             assert "kickoff_utc" not in sel
             assert "lead_minutes_at_decision" not in sel
@@ -571,9 +571,9 @@ class TestSettlementTreeSeparation:
     def test_run_dir_resolves_per_tree(self, tmp_root):
         standard = shadow_run_dir(tmp_root, TARGET_DATE, "abc")
         short = shadow_run_dir(
-            tmp_root, TARGET_DATE, "abc", SHORT_NOTICE_SHADOW_SUBDIR)
+            tmp_root, TARGET_DATE, "abc", EVENT_DAY_SHADOW_SUBDIR)
         assert standard.parts[-3] == STANDARD_SHADOW_SUBDIR
-        assert short.parts[-3] == SHORT_NOTICE_SHADOW_SUBDIR
+        assert short.parts[-3] == EVENT_DAY_SHADOW_SUBDIR
         assert standard != short
 
     def test_unknown_tree_is_refused(self, tmp_root):
@@ -583,18 +583,18 @@ class TestSettlementTreeSeparation:
     def test_loader_reads_the_requested_tree_only(self, tmp_root):
         run_id = "0123456789abcdef"
         run_dir = shadow_run_dir(
-            tmp_root, TARGET_DATE, run_id, SHORT_NOTICE_SHADOW_SUBDIR)
+            tmp_root, TARGET_DATE, run_id, EVENT_DAY_SHADOW_SUBDIR)
         run_dir.mkdir(parents=True)
         payload = {"run_id": run_id, "target_date": TARGET_DATE,
-                   "track": SHORT_NOTICE_TRACK, "selections": []}
+                   "track": EVENT_DAY_TRACK, "selections": []}
         (run_dir / "shadow_selections.json").write_text(json.dumps(payload))
         (run_dir / "manifest.json").write_text(
             json.dumps({"run_id": run_id, "considered_pool": []}))
 
         selections, _ = load_prediction_run(
             TARGET_DATE, run_id, tmp_root,
-            shadow_subdir=SHORT_NOTICE_SHADOW_SUBDIR)
-        assert selections["track"] == SHORT_NOTICE_TRACK
+            shadow_subdir=EVENT_DAY_SHADOW_SUBDIR)
+        assert selections["track"] == EVENT_DAY_TRACK
 
         with pytest.raises(SettlementError, match="not found"):
             load_prediction_run(TARGET_DATE, run_id, tmp_root)
@@ -646,9 +646,9 @@ class TestKickoffTimezoneProof:
             f"{sport}:1", sport=sport, kickoff=f"{TARGET_DATE} 23:00",
             captured_at=f"{TARGET_DATE}T04:00:00Z", draw=draw,
         )
-        timed, rejected, malformed, reasons = _timing_classify_short_notice(
+        timed, rejected, malformed, reasons = _timing_classify_event_day(
             [rec], target_date=TARGET_DATE, decision_dt=decision,
-            min_lead_minutes=MIN_SHORT_NOTICE_LEAD_MINUTES,
+            min_lead_minutes=MIN_EVENT_DAY_LEAD_MINUTES,
         )
         # Ample lead, parseable kickoff, on the target date — refused purely
         # because its timezone cannot be proven.
@@ -661,9 +661,9 @@ class TestKickoffTimezoneProof:
     def test_proven_sport_still_admitted(self):
         decision = dt.datetime(2026, 9, 26, 6, 0, tzinfo=dt.timezone.utc)
         rec = _record("football:1", kickoff=f"{TARGET_DATE} 23:00")
-        timed, rejected, _, reasons = _timing_classify_short_notice(
+        timed, rejected, _, reasons = _timing_classify_event_day(
             [rec], target_date=TARGET_DATE, decision_dt=decision,
-            min_lead_minutes=MIN_SHORT_NOTICE_LEAD_MINUTES,
+            min_lead_minutes=MIN_EVENT_DAY_LEAD_MINUTES,
         )
         assert [r.event_id for r in timed] == ["football:1"]
         assert rejected == 0
@@ -674,9 +674,9 @@ class TestKickoffTimezoneProof:
         hold, not a parse failure: the sport is inadmissible either way."""
         decision = dt.datetime(2026, 9, 26, 6, 0, tzinfo=dt.timezone.utc)
         rec = _record("hockey:1", sport="hockey", kickoff="", draw=None)
-        _, _, _, reasons = _timing_classify_short_notice(
+        _, _, _, reasons = _timing_classify_event_day(
             [rec], target_date=TARGET_DATE, decision_dt=decision,
-            min_lead_minutes=MIN_SHORT_NOTICE_LEAD_MINUTES,
+            min_lead_minutes=MIN_EVENT_DAY_LEAD_MINUTES,
         )
         assert reasons["KICKOFF_TIMEZONE_NOT_PROVEN_UTC"] == 1
         assert reasons["KICKOFF_MISSING_OR_UNPARSEABLE"] == 0
@@ -686,9 +686,9 @@ class TestKickoffTimezoneProof:
         rec = _record(
             "hockey:1", sport="hockey", draw=None,
             captured_at=f"{TARGET_DATE}T09:00:00Z")
-        _, _, _, reasons = _timing_classify_short_notice(
+        _, _, _, reasons = _timing_classify_event_day(
             [rec], target_date=TARGET_DATE, decision_dt=decision,
-            min_lead_minutes=MIN_SHORT_NOTICE_LEAD_MINUTES,
+            min_lead_minutes=MIN_EVENT_DAY_LEAD_MINUTES,
         )
         assert reasons["CAPTURED_AFTER_DECISION"] == 1
         assert reasons["KICKOFF_TIMEZONE_NOT_PROVEN_UTC"] == 0

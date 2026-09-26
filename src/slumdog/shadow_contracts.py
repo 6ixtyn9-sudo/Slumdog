@@ -64,7 +64,7 @@ class PreEventRecord:
     # (``date_bah`` / ``DATE_BAH``). PRE_EVENT by construction: it is a
     # schedule field, never an outcome. Optional and defaulted so every
     # existing construction site stays valid; the standard 24h-frozen track
-    # never reads it. The SHORT_NOTICE track requires it (see
+    # never reads it. The EVENT_DAY track requires it (see
     # ``shadow_evaluator.parse_kickoff_utc``) because a same-day decision
     # can only be proven pre-event against the individual kickoff.
     kickoff: str = ""

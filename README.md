@@ -70,15 +70,15 @@ Football, Basketball, Tennis, Hockey, Baseball, American Football, Rugby, Handba
 - Slumdog emits shadow research only; no CERTIFIED output.
 - **Two evidence tracks, never pooled (owner decision 2026-09-26).**
   `data/reports/shadow/` is the frozen 24h pre-event record — the one the
-  forward hit rate is reported on. `data/reports/shadow_short_notice/` is a
-  separate, clearly-labelled SHORT_NOTICE track that decides on the event day
+  forward hit rate is reported on. `data/reports/shadow_event_day/` is a
+  separate, clearly-labelled EVENT_DAY track that decides on the event day
   and proves pre-event status per event against the published kickoff
   (>= 120 minutes' lead), so sports Forebet only publishes about a day out
   (basketball, hockey, baseball, tennis, rugby, american football) can produce
   an R1 at all. Same frozen R2 rule, same R1 ranking, weaker timing claim,
   own artifacts and own settlement. IMPLEMENTED AND TESTED LOCALLY — no real
-  short-notice run has been dispatched or settled yet. See
-  `docs/SHORT_NOTICE_TRACK.md`.
+  event-day run has been dispatched or settled yet. See
+  `docs/EVENT_DAY_TRACK.md`.
 
 ## Quick Start
 
@@ -108,12 +108,12 @@ slumdog parse
 slumdog details --events data/interim/events_$(date +%F).json --max-events 18
 slumdog enrich --events data/interim/events_$(date +%F).json
 
-# SHORT_NOTICE track (separate evidence tree): same-day board, per-event kickoff lead
+# EVENT_DAY track (separate evidence tree): same-day board, per-event kickoff lead
 python -m slumdog.shadow_evaluator --date $(date +%F) \
-  --capture-receipt data/reports/capture_short_notice_$(date +%F)_<stamp>.json \
-  --config config/shadow_evaluator_short_notice.json --root .
+  --capture-receipt data/reports/capture_event_day_$(date +%F)_<stamp>.json \
+  --config config/shadow_evaluator_event_day.json --root .
 python -m slumdog.shadow_settle --date <date> --run-id <run> \
-  --shadow-subdir shadow_short_notice
+  --shadow-subdir shadow_event_day
 
 # Which driver-written evidence would the forward-shadow workflow actually commit?
 python scripts/check_workflow_evidence_globs.py
@@ -136,7 +136,7 @@ GitHub pipeline (`.github/workflows/pipeline.yml`):
 - `HANDOFF.md` — session continuation record
 - `docs/README.md` — doc index with purpose/status/last-verified
 - `docs/FOREBET_DEPTH_AUDIT.md` — depth freeze receipt + coverage + duplicate audits
-- `docs/SHORT_NOTICE_TRACK.md` — SHORT_NOTICE evidence track (per-event kickoff lead, separate tree)
+- `docs/EVENT_DAY_TRACK.md` — EVENT_DAY evidence track (per-event kickoff lead, separate tree)
 - Every substantive PR must update when applicable: `docs/STATE.md`, `HANDOFF.md`, `docs/README.md`, relevant audit doc. PR incomplete if docs stale.
 
 ## Documentation Governance
