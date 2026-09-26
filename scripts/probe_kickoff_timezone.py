@@ -969,11 +969,14 @@ def _table_slice(body: bytes) -> str:
     table header, which says nothing about whether a ROW names its teams.
     """
     lowered = body.lower()
-    for marker in (b"predictions for", b"home team", b"prob. %"):
+    # "Predictions for" also appears in the nav ("Predictions for TODAY"),
+    # so anchor on the table's own header first.
+    for marker in (b"home team", b"prob. %", b"correct score"):
         idx = lowered.find(marker)
         if idx != -1:
             return body[idx: idx + 1400].decode("utf-8", "replace")
-    return ""
+    # A selector-scoped extract IS the listing, so show it from the top.
+    return body[:1400].decode("utf-8", "replace")
 
 
 def _clock_context(body: bytes) -> str:
