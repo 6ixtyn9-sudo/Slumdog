@@ -631,3 +631,73 @@ class TestJavascriptMiningDetails:
         monkeypatch.setattr(urllib.request, "urlopen", _boom("refused"))
         with pytest.raises(RuntimeError, match="refused"):
             probe.direct_fetch("https://web.archive.org/x", timeout=1)
+
+
+class TestSportCodeHunt:
+    """The basketball bundle builds the same getrs.php URL football uses,
+    differing only in tp=. Finding that code turns a blocked sport into a
+    JSON capture."""
+
+    def test_archive_rewriting_is_stripped_from_refs(self):
+        from scripts.probe_kickoff_timezone import normalise_ref
+
+        assert normalise_ref(
+            "https://web.archive.org/web/20240601052009/"
+            "https://www.forebet.com/scripts/getrs.php?ln="
+        ) == "https://www.forebet.com/scripts/getrs.php?ln="
+
+    def test_scheme_less_reference_is_repaired(self):
+        from scripts.probe_kickoff_timezone import normalise_ref
+
+        assert normalise_ref(
+            "https://www.forebet.com/en/basketball/forebet.com/scripts/"
+            "getjson.php?gdt=") == "https://forebet.com/scripts/getjson.php?gdt="
+
+    def test_tp_literals_are_recovered_from_the_page(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        html = b'<script>var q="&tp=" ; loadr({tp:"bsk"}); go("tp=xx")</script>'
+        monkeypatch.setattr(probe, "archived_html",
+                            lambda url, *, timeout: ("snap", html))
+        out = probe.hunt_endpoints("https://www.forebet.com/en/basketball/p",
+                                   timeout=1, pause=0)
+        assert "bsk" in out["tp_literals"]
+        assert out["inline_script_context"]
+
+    def test_a_code_returning_rows_is_declared_the_capture_route(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        def _relay(url, headers, *, timeout):
+            if "tp=bsk" in url:
+                return b'<html><body>[[{"host":"A","away":"B"}]]</body></html>'
+            return b"<html>no</html>"
+
+        monkeypatch.setattr(probe, "relay_request", _relay)
+        out = probe.test_tp_candidates(
+            "2026-09-27", ["bas", "bsk"], timeout=1, pause=0)
+        assert out["bsk"]["json_like"] and not out["bas"]["json_like"]
+
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "tp_candidates": out})
+        assert any("SPORT CODE FOUND: tp=bsk" in l for l in lines)
+
+    def test_the_known_football_code_is_not_retried(self, monkeypatch):
+        """tp=1x2 is football's; testing it would prove nothing about the
+        blocked sports and would waste a rate-limited request."""
+        import scripts.probe_kickoff_timezone as probe
+
+        calls: list[str] = []
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout: calls.append(url) or b"")
+        monkeypatch.setattr(probe, "hunt_endpoints",
+                            lambda page, *, timeout, pause: {
+                                "tp_literals": ["1x2", "bsk"], "php_refs": []})
+        monkeypatch.setattr(probe, "fetch", lambda *a, **k: b"")
+        monkeypatch.setattr(probe, "test_tp_candidates",
+                            lambda date, values, *, timeout, pause:
+                                {"_values": values})
+        report = probe.run_probe("2026-09-27", sport="basketball",
+                                 timeout=1, pause=0)
+        assert "1x2" not in report["tp_candidates"]["_values"]
+        assert "bsk" in report["tp_candidates"]["_values"]

@@ -351,6 +351,22 @@ def archived_html(page_url: str, *, timeout: int) -> tuple[str, bytes]:
     return url, archived_bytes(timestamp, original, timeout=timeout)
 
 
+TP_LITERAL = re.compile(rb"""tp[=:]\s*[\"']([a-z0-9_]{1,14})[\"']""", re.I)
+INLINE_SCRIPT = re.compile(rb"<script(?![^>]*src=)[^>]*>(.*?)</script>",
+                           re.I | re.S)
+WAYBACK_PREFIX = re.compile(r"^https?://web\.archive\.org/web/[0-9a-z_]+/", re.I)
+
+
+def normalise_ref(ref: str) -> str:
+    """Strip archive rewriting and repair scheme-less forebet references."""
+    ref = WAYBACK_PREFIX.sub("", ref)
+    ref = re.sub(r"^https?://www\.forebet\.com/en/[a-z_\-]+/(?=forebet\.com/)",
+                 "", ref)
+    if ref.startswith("forebet.com/") or ref.startswith("m.forebet.com/"):
+        ref = "https://" + ref
+    return ref
+
+
 def endpoint_candidates(html: bytes, page_url: str) -> list[str]:
     """Absolute .php URLs referenced by a page, most specific first."""
     from urllib.parse import urljoin
@@ -362,7 +378,7 @@ def endpoint_candidates(html: bytes, page_url: str) -> list[str]:
             continue
         if ".php" not in ref.lower():
             continue
-        absolute = urljoin(page_url, ref)
+        absolute = normalise_ref(urljoin(page_url, normalise_ref(ref)))
         if "forebet.com" in absolute and absolute not in found:
             found.append(absolute)
     found.sort(key=lambda u: (0 if "getrs" in u else 1, len(u)))
@@ -418,6 +434,21 @@ def hunt_endpoints(sport_page: str, *, timeout: int, pause: float) -> dict[str, 
     out["php_refs"] = (out["php_refs"] + [
         m for m in mined if not m.startswith("!")])[:14]
 
+    # getrs.php is built as ...&tp=<X>&... so the board's identity is that
+    # one parameter. Recover the literal the page passes.
+    out["tp_literals"] = sorted({
+        m.decode("utf-8", "replace")
+        for m in TP_LITERAL.findall(html)})[:12]
+    inline: list[str] = []
+    for block in INLINE_SCRIPT.findall(html):
+        for needle in (b"getrs", b"&tp=", b"tp:"):
+            idx = block.find(needle)
+            if idx != -1 and len(inline) < 4:
+                inline.append(block[max(0, idx - 160): idx + 220].decode(
+                    "utf-8", "replace"))
+                break
+    out["inline_script_context"] = inline
+
     # Question 1 of the original hold: does a listing row carry a
     # machine-readable start instant, or only rendered local text?
     for needle in (b"date_bah", b"data-time", b"datetime", b"data-ts"):
@@ -426,6 +457,39 @@ def hunt_endpoints(sport_page: str, *, timeout: int, pause: float) -> dict[str, 
             out.setdefault("markup_samples", {})[needle.decode()] = (
                 html[max(0, idx - 160): idx + 200].decode("utf-8", "replace"))
     return out
+
+
+def test_tp_candidates(date: str, values: list[str], *, timeout: int,
+                       pause: float) -> dict[str, Any]:
+    """Call getrs.php with each candidate sport code and see what comes back.
+
+    Football's capture route is this endpoint with tp=1x2. If a sport code
+    returns rows here, that sport can be captured the same way -- through
+    JSON that is not bot-checked and is explicitly tz=0.
+    """
+    results: dict[str, Any] = {}
+    for i, value in enumerate(values):
+        if i:
+            time.sleep(pause)
+        url = ("https://www.forebet.com/scripts/getrs.php?"
+               f"ln=en&tp={value}&in={date}&ord=0&tz=0&tzs=&tze=")
+        try:
+            body = relay_request(RELAY_BASE + url, {
+                "User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
+                "X-No-Cache": "true"}, timeout=timeout)
+        except Exception as exc:
+            results[value] = {"error": f"{type(exc).__name__}: {exc}"[:100]}
+            continue
+        lowered = body.lower()
+        payload_at = lowered.find(b"[[{")
+        results[value] = {
+            "bytes": len(body),
+            "json_like": payload_at != -1,
+            "sample": body[payload_at: payload_at + 220].decode(
+                "utf-8", "replace") if payload_at != -1
+            else body[-160:].decode("utf-8", "replace"),
+        }
+    return results
 
 
 def test_candidates(candidates: list[str], *, timeout: int,
@@ -585,6 +649,18 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float) -> dict[str,
         "https://www.forebet.com/en/football-predictions/predictions-1x2",
         timeout=timeout, pause=pause)
 
+    # Candidate sport codes for getrs.php: whatever the page itself used,
+    # plus the obvious spellings for this sport.
+    codes: list[str] = []
+    for code in (hunt.get("tp_literals") or []) + [
+            sport[:3], sport, "bsk", "bk", "bb"]:
+        if code and code not in codes and code != "1x2":
+            codes.append(code)
+    if codes:
+        time.sleep(pause)
+        report["tp_candidates"] = test_tp_candidates(
+            date, codes[:8], timeout=timeout, pause=min(pause, 6))
+
     refs = [u for u in hunt.get("php_refs", [])
             if any(k in u.lower() for k in ("getrs", "get", "rs.php", "ajax"))][:4]
     if refs:
@@ -674,6 +750,24 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
                 lines.append("  js context: " + hunt["js_context"][:420])
             for needle, sample in (hunt.get("markup_samples") or {}).items():
                 lines.append(f"  markup[{needle}]: {sample[:280]}")
+    tps = report.get("tp_candidates") or {}
+    winners = [c for c, fp in tps.items() if fp.get("json_like")]
+    if tps:
+        lines.append("getrs.php sport codes tried: " + ", ".join(
+            f"{c}={'JSON' if fp.get('json_like') else (fp.get('error') or str(fp.get('bytes')) + 'B')}"
+            for c, fp in tps.items()))
+        if winners:
+            lines.append(
+                "SPORT CODE FOUND: tp=" + ", tp=".join(winners) +
+                " returns JSON from getrs.php — capture this sport the way "
+                "football is captured, no bot check and tz=0.")
+            for c in winners:
+                lines.append(f"  tp={c} sample: {tps[c].get('sample', '')[:240]}")
+    for key in ("tp_literals", "inline_script_context"):
+        value = (report.get("endpoint_hunt") or {}).get(key)
+        if value:
+            lines.append(f"  {key}: " + str(value)[:400])
+
     control = report.get("endpoint_hunt_control") or {}
     if control:
         lines.append("  control (football board) php refs: " +
@@ -742,7 +836,7 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     ]
     hunt_blob = json.dumps({k: report.get(k) for k in
                             ("endpoint_hunt", "endpoint_hunt_control",
-                             "endpoint_tests")},
+                             "endpoint_tests", "tp_candidates")},
                            sort_keys=True)[:3000]
     emitted.append(
         f"::notice title=Endpoint hunt::{_annotation_escape(hunt_blob)}")
