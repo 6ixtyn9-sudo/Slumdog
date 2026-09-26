@@ -60,6 +60,14 @@ class PreEventRecord:
     route: str
     capture_receipt_path: str = ""
     sidecar_path: str = ""
+    # Scheduled start time exactly as Forebet published it on the listing
+    # (``date_bah`` / ``DATE_BAH``). PRE_EVENT by construction: it is a
+    # schedule field, never an outcome. Optional and defaulted so every
+    # existing construction site stays valid; the standard 24h-frozen track
+    # never reads it. The SHORT_NOTICE track requires it (see
+    # ``shadow_evaluator.parse_kickoff_utc``) because a same-day decision
+    # can only be proven pre-event against the individual kickoff.
+    kickoff: str = ""
     facets: dict[str, Any] = field(default_factory=dict)
     facet_timing: dict[str, str] = field(default_factory=dict)
 
@@ -123,6 +131,7 @@ class PreEventRecord:
             route="snapshot",
             capture_receipt_path=capture_receipt_path,
             sidecar_path=sidecar_path,
+            kickoff=getattr(snap, "kickoff", "") or "",
             facets=facets,
             facet_timing=timing,
         )

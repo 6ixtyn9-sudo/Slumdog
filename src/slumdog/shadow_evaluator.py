@@ -41,6 +41,7 @@ import json
 from dataclasses import replace as _dc_replace
 import math
 import os
+import re
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -77,6 +78,91 @@ FROZEN_R2_KEY = "R2_CONSERVATIVE_FIXED_RULE"
 FROZEN_R2_PATH = (
     f"{FROZEN_BASELINE_CONFIG_PATH}:rules.{FROZEN_R2_KEY}"
 )
+
+
+# ---------------------------------------------------------------------------
+# Timing tracks
+# ---------------------------------------------------------------------------
+# Two mutually exclusive timing contracts exist. They share the SAME frozen R2
+# eligibility rule, the SAME R1 ranking comparator and the SAME feature
+# construction — only the proof of pre-event timing differs, and they write to
+# separate artifact roots so their evidence can never be pooled by accident.
+#
+#   STANDARD (declaration_version "shadow_evaluator")
+#       Frozen 24h gate: captured_at AND decision_committed_at must both be
+#       <= target_date 00:00 UTC - 24h. Unchanged since Milestone 7; this is
+#       the record the forward hit-rate is reported on.
+#
+#   SHORT_NOTICE (declaration_version "shadow_evaluator_short_notice")
+#       Owner decision 2026-09-26. Forebet does not publish boards for
+#       basketball / hockey / baseball / tennis / rugby more than ~a day out
+#       ("target date missing from HTML" at both the D+6 forward capture and
+#       the T+1/T+2 refresh), so those sports are structurally unreachable
+#       under the date-anchored 24h gate: 09-21..09-26 produced football-only
+#       rank-1 picks. This track decides on the event day itself and proves
+#       pre-event status PER EVENT against the published kickoff instead of
+#       against the date anchor: an event is admissible only if its parsed
+#       kickoff is at least ``min_lead_minutes_before_kickoff`` after the
+#       decision instant. Events with no parseable kickoff are refused
+#       (fail-closed) — never assumed to be far away.
+#
+# The short-notice track is NOT a relaxation of the standard track: it is a
+# separate, weaker-lead-time experiment whose artifacts live under their own
+# root and carry ``track: "SHORT_NOTICE"`` in every payload and manifest.
+STANDARD_TRACK = "STANDARD"
+SHORT_NOTICE_TRACK = "SHORT_NOTICE"
+STANDARD_DECLARATION_VERSION = "shadow_evaluator"
+SHORT_NOTICE_DECLARATION_VERSION = "shadow_evaluator_short_notice"
+STANDARD_ARTIFACT_ROOT = "data/reports/shadow"
+SHORT_NOTICE_ARTIFACT_ROOT = "data/reports/shadow_short_notice"
+# Floor on the declared per-event lead time. A pick frozen less than half an
+# hour before kickoff is not meaningfully pre-event evidence for this product,
+# so the declaration cannot declare one.
+MIN_SHORT_NOTICE_LEAD_MINUTES = 30
+
+
+@dataclass(frozen=True)
+class TrackPolicy:
+    """Resolved timing contract for one run, derived from the declaration.
+
+    ``name`` is the only branch key used downstream. The two numeric fields
+    are mutually exclusive: the standard track has a date-anchored cutoff
+    offset and no per-event lead requirement; the short-notice track has a
+    per-event lead requirement and no date anchor.
+    """
+
+    name: str
+    safe_cutoff_offset_hours: int | None
+    min_lead_minutes: int | None
+    artifact_root: str
+
+    @property
+    def is_short_notice(self) -> bool:
+        return self.name == SHORT_NOTICE_TRACK
+
+
+def track_policy(declaration: dict[str, Any]) -> TrackPolicy:
+    """Resolve the timing track of an ALREADY-VERIFIED declaration.
+
+    :func:`load_shadow_declaration` has validated every field this reads, so
+    this function performs no re-validation and cannot be used to smuggle an
+    unverified declaration into a run.
+    """
+    timing = declaration.get("timing_safety", {})
+    if declaration.get("declaration_version") == SHORT_NOTICE_DECLARATION_VERSION:
+        return TrackPolicy(
+            name=SHORT_NOTICE_TRACK,
+            safe_cutoff_offset_hours=None,
+            min_lead_minutes=int(timing["min_lead_minutes_before_kickoff"]),
+            artifact_root=declaration["artifact_path"]["root"],
+        )
+    return TrackPolicy(
+        name=STANDARD_TRACK,
+        safe_cutoff_offset_hours=int(timing.get("safe_cutoff_offset_hours_utc", 24)),
+        min_lead_minutes=None,
+        artifact_root=declaration.get("artifact_path", {}).get(
+            "root", STANDARD_ARTIFACT_ROOT),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +244,39 @@ def safe_cutoff_utc(target_date: str, *, offset_hours: int = 24) -> _dt.datetime
     return _dt.datetime(d.year, d.month, d.day, tzinfo=_dt.timezone.utc) - _dt.timedelta(hours=offset_hours)
 
 
+# Forebet listings publish the scheduled start in exactly two shapes, both
+# already in UTC because every capture URL pins ``tz=0``:
+#   HTML listings  (``.date_bah``)  -> "26/09/2026 18:00"
+#   football JSON  (``DATE_BAH``)   -> "2026-09-26 18:00"
+_KICKOFF_DMY = re.compile(r"^(\d{2})/(\d{2})/(\d{4})[ T](\d{2}):(\d{2})")
+_KICKOFF_YMD = re.compile(r"^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})")
+
+
+def parse_kickoff_utc(value: str) -> _dt.datetime | None:
+    """Parse a Forebet listing kickoff string into an aware UTC datetime.
+
+    Returns ``None`` — never a guess — when the string is absent, truncated
+    to a date with no time, or in any other shape. Callers on the
+    short-notice track treat ``None`` as a refusal to admit the event.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    m = _KICKOFF_DMY.match(text)
+    if m:
+        day, month, year, hour, minute = (int(g) for g in m.groups())
+    else:
+        m = _KICKOFF_YMD.match(text)
+        if not m:
+            return None
+        year, month, day, hour, minute = (int(g) for g in m.groups())
+    try:
+        return _dt.datetime(
+            year, month, day, hour, minute, tzinfo=_dt.timezone.utc)
+    except ValueError:
+        return None
+
+
 def load_frozen_baseline_config(root: Path) -> dict[str, Any]:
     """Verify the 6B frozen config: SHA-256 and the exact R2 rule shape."""
     path = Path(root) / FROZEN_BASELINE_CONFIG_PATH
@@ -189,6 +308,54 @@ def load_frozen_baseline_config(root: Path) -> dict[str, Any]:
             f"frozen R2 eligibility drift: actual={sorted(actual_set)}"
         )
     return obj
+
+
+def _validate_short_notice_timing(
+    obj: dict[str, Any], timing: dict[str, Any]
+) -> None:
+    """Fail-closed validation of a SHORT_NOTICE declaration's timing block.
+
+    Every field is mandatory and exactly-valued. The declaration may NOT
+    carry ``safe_cutoff_offset_hours_utc``: a short-notice run must never be
+    able to present itself as satisfying the frozen 24h contract, and the
+    two tracks must never share an artifact root.
+    """
+    if timing.get("track") != SHORT_NOTICE_TRACK:
+        raise ShadowEvaluatorError(
+            f"timing_safety.track must be {SHORT_NOTICE_TRACK!r} for a "
+            f"{SHORT_NOTICE_DECLARATION_VERSION} declaration"
+        )
+    for forbidden in ("safe_cutoff_offset_hours_utc", "safe_cutoff_offset_hours"):
+        if forbidden in timing:
+            raise ShadowEvaluatorError(
+                f"timing_safety.{forbidden} must be absent on the "
+                f"{SHORT_NOTICE_TRACK} track (it does not satisfy the frozen "
+                f"24h contract and must not claim to)"
+            )
+    lead = timing.get("min_lead_minutes_before_kickoff")
+    if isinstance(lead, bool) or not isinstance(lead, int):
+        raise ShadowEvaluatorError(
+            "timing_safety.min_lead_minutes_before_kickoff must be an integer"
+        )
+    if lead < MIN_SHORT_NOTICE_LEAD_MINUTES or lead > 1440:
+        raise ShadowEvaluatorError(
+            f"timing_safety.min_lead_minutes_before_kickoff must be between "
+            f"{MIN_SHORT_NOTICE_LEAD_MINUTES} and 1440 (got {lead})"
+        )
+    for flag in (
+        "require_parsed_kickoff",
+        "refuse_event_without_parsed_kickoff",
+        "never_pooled_with_standard_track",
+    ):
+        if timing.get(flag) is not True:
+            raise ShadowEvaluatorError(f"timing_safety.{flag} must be True")
+    root = obj.get("artifact_path", {}).get("root")
+    if root != SHORT_NOTICE_ARTIFACT_ROOT:
+        raise ShadowEvaluatorError(
+            f"artifact_path.root must be {SHORT_NOTICE_ARTIFACT_ROOT!r} on the "
+            f"{SHORT_NOTICE_TRACK} track (got {root!r}) — the two tracks never "
+            f"share an artifact root"
+        )
 
 
 def load_shadow_declaration(path: str | Path) -> dict[str, Any]:
@@ -224,8 +391,18 @@ def load_shadow_declaration(path: str | Path) -> dict[str, Any]:
     if anti.get("rule_source_frozen_config_sha256") != FROZEN_BASELINE_CONFIG_SHA256:
         raise ShadowEvaluatorError("anti_tuning.rule_source_frozen_config_sha256 mismatch")
     timing = obj.get("timing_safety", {})
-    if timing.get("safe_cutoff_offset_hours_utc") != 24:
+    short_notice = obj.get("declaration_version") == SHORT_NOTICE_DECLARATION_VERSION
+    if short_notice:
+        _validate_short_notice_timing(obj, timing)
+    elif timing.get("safe_cutoff_offset_hours_utc") != 24:
         raise ShadowEvaluatorError("timing_safety.safe_cutoff_offset_hours_utc must be 24 (frozen)")
+    elif obj.get("artifact_path", {}).get("root") == SHORT_NOTICE_ARTIFACT_ROOT:
+        # Symmetric guard: a 24h-frozen declaration must not write into the
+        # short-notice tree either. Separation is enforced from both sides.
+        raise ShadowEvaluatorError(
+            f"artifact_path.root {SHORT_NOTICE_ARTIFACT_ROOT!r} is reserved for "
+            f"{SHORT_NOTICE_DECLARATION_VERSION} declarations"
+        )
     if timing.get("require_captured_at_present") is not True:
         raise ShadowEvaluatorError("timing_safety.require_captured_at_present must be True")
     if timing.get("require_decision_committed_at_present") is not True:
@@ -576,6 +753,73 @@ def _timing_classify(
     return timed, timing_rejected, malformed
 
 
+# Per-event timing rejection reasons on the SHORT_NOTICE track. Every
+# rejected record lands in exactly one bucket and the buckets are reported in
+# the manifest, so "why did this sport produce nothing today" is answerable
+# from the artifact alone.
+SHORT_NOTICE_REJECTION_REASONS = (
+    "CAPTURED_AT_UNPARSEABLE",
+    "CAPTURED_AFTER_DECISION",
+    "KICKOFF_MISSING_OR_UNPARSEABLE",
+    "KICKOFF_NOT_ON_TARGET_DATE",
+    "INSUFFICIENT_LEAD_BEFORE_KICKOFF",
+)
+
+
+def _timing_classify_short_notice(
+    records: list[PreEventRecord],
+    *,
+    target_date: str,
+    decision_dt: _dt.datetime,
+    min_lead_minutes: int,
+) -> tuple[list[PreEventRecord], int, int, dict[str, int]]:
+    """Stage 1 for the SHORT_NOTICE track.
+
+    Replaces the date-anchored cutoff with a strictly per-event proof:
+
+    1. the snapshot must have been captured at or before the decision
+       instant (no capture from the future),
+    2. the listing must carry a parseable kickoff — an event whose start
+       time cannot be read is REFUSED, never assumed distant,
+    3. the kickoff must fall on the target date (a listing row for another
+       day cannot be admitted by this run), and
+    4. the kickoff must be at least ``min_lead_minutes`` after the decision
+       instant, so the pick is frozen that far ahead of the event.
+
+    Returns ``(timed_records, timing_rejected, malformed_or_unkeyable,
+    rejection_reason_counts)``. The first three elements match
+    :func:`_timing_classify` so the downstream accounting is identical.
+    """
+    timed: list[PreEventRecord] = []
+    malformed = 0
+    reasons = {reason: 0 for reason in SHORT_NOTICE_REJECTION_REASONS}
+    min_kickoff = decision_dt + _dt.timedelta(minutes=min_lead_minutes)
+    for r in records:
+        if _extract_decision_fingerprint(r) is None:
+            malformed += 1
+            continue
+        try:
+            cap_at = _parse_utc(r.captured_at)
+        except ValueError:
+            reasons["CAPTURED_AT_UNPARSEABLE"] += 1
+            continue
+        if cap_at > decision_dt:
+            reasons["CAPTURED_AFTER_DECISION"] += 1
+            continue
+        kickoff_dt = parse_kickoff_utc(r.kickoff)
+        if kickoff_dt is None:
+            reasons["KICKOFF_MISSING_OR_UNPARSEABLE"] += 1
+            continue
+        if kickoff_dt.date().isoformat() != target_date:
+            reasons["KICKOFF_NOT_ON_TARGET_DATE"] += 1
+            continue
+        if kickoff_dt < min_kickoff:
+            reasons["INSUFFICIENT_LEAD_BEFORE_KICKOFF"] += 1
+            continue
+        timed.append(r)
+    return timed, sum(reasons.values()), malformed, reasons
+
+
 # ---------------------------------------------------------------------------
 # Stage 2: Conflict classification (runs on every timed-valid record)
 # ---------------------------------------------------------------------------
@@ -875,15 +1119,35 @@ def _emit_run(
 ) -> ShadowRunResult:
     decision_dt = decision_clock or _now_utc()
     decision_committed_at = _now_utc_iso(decision_dt)
-    safe_cutoff = safe_cutoff_utc(target_date)
-    if decision_dt > safe_cutoff:
-        return _blocked_run(
-            target_date=target_date, decision_committed_at=decision_committed_at,
-            declaration=declaration, capture_result=capture_result,
-            history_result=history_result, safe_cutoff=safe_cutoff,
-            block_reason="DECISION_COMMITTED_AT_AFTER_SAFE_CUTOFF",
-            repo_root=repo_root,
-        )
+    policy = track_policy(declaration)
+    if policy.is_short_notice:
+        # The short-notice gate is per event, so the run-level "safe cutoff"
+        # is the earliest kickoff this run may select: decision + declared
+        # lead. Recorded in the payload, manifest and input digest exactly
+        # like the standard cutoff, so the timing claim is always explicit.
+        safe_cutoff = decision_dt + _dt.timedelta(minutes=policy.min_lead_minutes)
+        day_end = safe_cutoff_utc(target_date, offset_hours=-24)
+        if decision_dt >= day_end:
+            # Deciding after the target day has ended in UTC is not a
+            # pre-event decision under any reading.
+            return _blocked_run(
+                target_date=target_date,
+                decision_committed_at=decision_committed_at,
+                declaration=declaration, capture_result=capture_result,
+                history_result=history_result, safe_cutoff=safe_cutoff,
+                block_reason="DECISION_COMMITTED_AT_AFTER_TARGET_DATE",
+                repo_root=repo_root,
+            )
+    else:
+        safe_cutoff = safe_cutoff_utc(target_date)
+        if decision_dt > safe_cutoff:
+            return _blocked_run(
+                target_date=target_date, decision_committed_at=decision_committed_at,
+                declaration=declaration, capture_result=capture_result,
+                history_result=history_result, safe_cutoff=safe_cutoff,
+                block_reason="DECISION_COMMITTED_AT_AFTER_SAFE_CUTOFF",
+                repo_root=repo_root,
+            )
 
     # Refresh-mode pre-filter: drop events already selected by an earlier
     # run for this date (their decisions are frozen artifacts; the refresh
@@ -917,9 +1181,19 @@ def _emit_run(
     #                              canonical
     #   Stage 4  per-sport-day ranking + primary/cohort selection
 
-    timed_records, timing_rejected, malformed_or_unkeyable = _timing_classify(
-        capture_result.records, safe_cutoff=safe_cutoff,
-    )
+    short_notice_rejections: dict[str, int] | None = None
+    if policy.is_short_notice:
+        (timed_records, timing_rejected, malformed_or_unkeyable,
+         short_notice_rejections) = _timing_classify_short_notice(
+            capture_result.records,
+            target_date=target_date,
+            decision_dt=decision_dt,
+            min_lead_minutes=policy.min_lead_minutes,
+        )
+    else:
+        timed_records, timing_rejected, malformed_or_unkeyable = _timing_classify(
+            capture_result.records, safe_cutoff=safe_cutoff,
+        )
     admitted_canonicals, conflict_accounting, conflict_fingerprints = _conflict_classify(
         timed_records,
     )
@@ -1077,6 +1351,16 @@ def _emit_run(
             ev["rank_within_sport_day"] = rank_idx
             if rank_idx > last_cohort_rank:
                 continue
+            short_notice_fields: dict[str, Any] = {}
+            if policy.is_short_notice:
+                kickoff_dt = parse_kickoff_utc(record.kickoff)
+                # The timing gate above refused every record without a
+                # parseable kickoff, so this is never None here.
+                short_notice_fields = {
+                    "kickoff_utc": _now_utc_iso(kickoff_dt),
+                    "lead_minutes_at_decision": int(
+                        (kickoff_dt - decision_dt).total_seconds() // 60),
+                }
             selections.append({
                 "sport": sport, "event_date": _date, "event_id": record.event_id,
                 "rank_within_sport_day": rank_idx, "status": status,
@@ -1097,6 +1381,10 @@ def _emit_run(
                 "route": record.route,
                 "rule_source": FROZEN_R2_PATH,
                 "run_id": "",
+                # Empty on the standard track: the dict comprehension adds
+                # nothing, so those payloads keep their exact historical
+                # schema and digest composition.
+                **short_notice_fields,
             })
         if primary_event_id is not None:
             summary_status = "SHADOW_RULE_QUALIFIED"
@@ -1283,6 +1571,15 @@ def _emit_run(
         # Normal runs omit the key entirely → byte-stable input digests.
         input_digest_payload["refresh_exclude_event_ids"] = sorted(
             exclude_event_ids)
+    if policy.is_short_notice:
+        # Short-notice only (same byte-stability rule as refresh mode): the
+        # timing contract IS an input to the decision, so the track name and
+        # the declared lead are committed to the input digest. A standard and
+        # a short-notice run over the same capture can therefore never
+        # collide on run_id.
+        input_digest_payload["timing_track"] = policy.name
+        input_digest_payload["min_lead_minutes_before_kickoff"] = (
+            policy.min_lead_minutes)
     input_digest = _canonical_sha256(input_digest_payload)
 
     # ``decision_digest`` commits to the conflict-resolved pool,
@@ -1360,6 +1657,18 @@ def _emit_run(
         # Present only in refresh mode so normal (non-refresh) runs keep the
         # exact historical payload schema and digest composition.
         payload["refresh_exclusion_count"] = len(refreshed_excluded)
+    if policy.is_short_notice:
+        # Loud, unmissable labelling: anything reading a short-notice payload
+        # sees the track and the weaker timing claim before it sees a pick.
+        payload["track"] = policy.name
+        payload["timing_contract"] = {
+            "track": policy.name,
+            "min_lead_minutes_before_kickoff": policy.min_lead_minutes,
+            "earliest_admissible_kickoff_utc": _now_utc_iso(safe_cutoff),
+            "kickoff_source": "forebet_listing_scheduled_start_utc",
+            "satisfies_frozen_24h_contract": False,
+            "never_pooled_with_standard_track": True,
+        }
     payload_bytes = canonical_json_bytes(payload)
     fd_p, tmp_p = tempfile.mkstemp(prefix="shadow_selections.", suffix=".json.tmp", dir=str(artifact_dir))
     try:
@@ -1398,6 +1707,13 @@ def _emit_run(
         "r2_exclusion_breakdown": _summarise_r2_exclusions(considered_pool_dicts),
         "decision_conflicts": conflict_fingerprints,
     }
+    if policy.is_short_notice:
+        manifest["track"] = policy.name
+        manifest["timing_contract"] = dict(payload["timing_contract"])
+        # Why each sport produced nothing is answerable from the artifact
+        # alone — the whole point of the track.
+        manifest["short_notice_timing_rejections"] = dict(
+            sorted((short_notice_rejections or {}).items()))
     if exclude_event_ids is not None:
         # Refresh-mode-only manifest fields (see payload note above): the
         # exclusion request itself is provenance for the refreshed run.
@@ -1477,6 +1793,11 @@ def _blocked_run(
         "declaration_sha256": _canonical_sha256(declaration),
         "frozen_baseline_config_sha256": FROZEN_BASELINE_CONFIG_SHA256,
     }
+    if declaration.get("declaration_version") == SHORT_NOTICE_DECLARATION_VERSION:
+        # A blocked short-notice receipt must be identifiable as such; its
+        # "safe_cutoff_utc" is an earliest-admissible-kickoff, not a 24h gate.
+        body["track"] = SHORT_NOTICE_TRACK
+        body["safe_cutoff_semantics"] = "earliest_admissible_kickoff_utc"
     if capture_result is not None:
         body["capture_provenance"] = {
             "receipt_path": capture_result.receipt_path,
@@ -1522,7 +1843,14 @@ def evaluate_from_disk(
     repo_root = Path(repo_root).resolve()
     declaration = load_shadow_declaration(declaration_path)
     load_frozen_baseline_config(repo_root)
-    safe_cutoff = safe_cutoff_utc(target_date)
+    _policy = track_policy(declaration)
+    if _policy.is_short_notice:
+        # Load-failure receipts must state the same timing claim the run
+        # would have made: earliest admissible kickoff, not a 24h cutoff.
+        safe_cutoff = (decision_clock or _now_utc()) + _dt.timedelta(
+            minutes=_policy.min_lead_minutes)
+    else:
+        safe_cutoff = safe_cutoff_utc(target_date)
     try:
         capture_result = load_capture_records(
             target_date=target_date,

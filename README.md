@@ -68,6 +68,17 @@ Football, Basketball, Tennis, Hockey, Baseball, American Football, Rugby, Handba
 - Phase: Milestone 4: COMPLETE — pending real-data receipt execution, Current phase: Milestone 5 readiness review. Milestone 0 COMPLETE, Milestone 1 COMPLETE reference audit, Milestone 2 COMPLETE including 2E hardening (identity-bound label, SPORTS registry draw capability, exact reason preservation, 40 tests), Milestone 3 COMPLETE feature timing contract (period_values UNKNOWN PROHIBITED, does not block future progress, stays outside new path), Milestone 4 architecture COMPLETE and verified (262 tests) + 4E hardening COMPLETE and verified (305 tests) — dataset.py hardened (no unsafe defaults winner/disposition required, no silent swallowing malformed counted corrupt fails, raw vs canonical accounting with invariants raw=schema+valid valid=exact+canonical canonical=eligible+builder, strengthened digest versioned fields excluding odds deliberately stable under reordering, duplicate identity composite key exact collapse vs conflict fail loudly, provenance 64-hex validation, date semantics canonical vs eligible explicit), dataset_audit.py entry point `python -m slumdog.dataset_audit --root data --receipt /tmp/slumdog_price_free/receipt.json --sample /tmp/slumdog_price_free/examples_sample.json --sample-size 5` no network writes only under /tmp tested adapters settled_history.json and history_*.jsonl.gz explicit NO_SUPPORTED_INPUT_FILES vs fail loudly, 30 + 34 + 9 = 73 new tests. `docs/STATE.md` is canonical current truth, `docs/PRICE_FREE_DATASET_CONTRACT.md` is CURRENT hardened dataset contract, `docs/FEATURE_TIMING_CONTRACT.md` remains CURRENT governing ALLOWED.
 - Model training: FROZEN. See `docs/STATE.md` for blockers (missing prices NOT blockers), data limitations (reference observations), unresolved evidence. No model training, ranking thresholds, or daily production changes until Milestone 4 approved and real-data receipt executed. Dataset builder produces tested research foundation only.
 - Slumdog emits shadow research only; no CERTIFIED output.
+- **Two evidence tracks, never pooled (owner decision 2026-09-26).**
+  `data/reports/shadow/` is the frozen 24h pre-event record — the one the
+  forward hit rate is reported on. `data/reports/shadow_short_notice/` is a
+  separate, clearly-labelled SHORT_NOTICE track that decides on the event day
+  and proves pre-event status per event against the published kickoff
+  (>= 120 minutes' lead), so sports Forebet only publishes about a day out
+  (basketball, hockey, baseball, tennis, rugby, american football) can produce
+  an R1 at all. Same frozen R2 rule, same R1 ranking, weaker timing claim,
+  own artifacts and own settlement. IMPLEMENTED AND TESTED LOCALLY — no real
+  short-notice run has been dispatched or settled yet. See
+  `docs/SHORT_NOTICE_TRACK.md`.
 
 ## Quick Start
 
@@ -97,6 +108,16 @@ slumdog parse
 slumdog details --events data/interim/events_$(date +%F).json --max-events 18
 slumdog enrich --events data/interim/events_$(date +%F).json
 
+# SHORT_NOTICE track (separate evidence tree): same-day board, per-event kickoff lead
+python -m slumdog.shadow_evaluator --date $(date +%F) \
+  --capture-receipt data/reports/capture_short_notice_$(date +%F)_<stamp>.json \
+  --config config/shadow_evaluator_short_notice.json --root .
+python -m slumdog.shadow_settle --date <date> --run-id <run> \
+  --shadow-subdir shadow_short_notice
+
+# Which driver-written evidence would the forward-shadow workflow actually commit?
+python scripts/check_workflow_evidence_globs.py
+
 # Price-free dataset audit (hardened, read-only, no network, writes only under /tmp)
 python -m slumdog.dataset_audit --root data --receipt /tmp/slumdog_price_free/receipt.json --sample /tmp/slumdog_price_free/examples_sample.json --sample-size 5
 
@@ -115,6 +136,7 @@ GitHub pipeline (`.github/workflows/pipeline.yml`):
 - `HANDOFF.md` — session continuation record
 - `docs/README.md` — doc index with purpose/status/last-verified
 - `docs/FOREBET_DEPTH_AUDIT.md` — depth freeze receipt + coverage + duplicate audits
+- `docs/SHORT_NOTICE_TRACK.md` — SHORT_NOTICE evidence track (per-event kickoff lead, separate tree)
 - Every substantive PR must update when applicable: `docs/STATE.md`, `HANDOFF.md`, `docs/README.md`, relevant audit doc. PR incomplete if docs stale.
 
 ## Documentation Governance

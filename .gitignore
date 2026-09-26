@@ -24,6 +24,13 @@ data/reports/*
 data/reports/shadow/**/raw_bodies/*
 data/reports/shadow/**/*.tar.gz
 
+# SHORT_NOTICE evidence tree (owner decision 2026-09-26). Same policy as the
+# frozen-track tree: small JSON/text evidence is committed, raw bodies and
+# archives never are.
+!data/reports/shadow_short_notice/
+data/reports/shadow_short_notice/**/raw_bodies/*
+data/reports/shadow_short_notice/**/*.tar.gz
+
 # Settlement evidence: commit receipts, exclude raw capture bodies.
 data/settlement_evidence/*
 !data/settlement_evidence/.gitkeep

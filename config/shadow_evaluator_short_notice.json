@@ -1,0 +1,117 @@
+{
+  "anti_tuning": {
+    "config_hash_immutable_after_first_real_run": true,
+    "result_driven_amendments": "prohibited",
+    "rule_source_frozen": "R2_CONSERVATIVE_FIXED_RULE",
+    "rule_source_frozen_config_path": "config/research_baselines.json",
+    "rule_source_frozen_config_sha256": "666dabe7ea21e11867cf4816f4c2edcd771247646c6c9d7726c22611cda700a1",
+    "tuning_on_observed_results": "prohibited"
+  },
+  "artifact_path": {
+    "manifest": "manifest.json",
+    "payload": "shadow_selections.json",
+    "per_date": "data/reports/shadow_short_notice/<target_date>/",
+    "per_run": "data/reports/shadow_short_notice/<target_date>/<run_id>/",
+    "root": "data/reports/shadow_short_notice",
+    "summary_markdown": "summary.md"
+  },
+  "authoring_base_commit": "a7a767c28b6c08d9586ddf0351ad582556c326f7",
+  "authoring_session": "arena/01a0dd7a-slumdog",
+  "authorizations": {
+    "production_authorized": false,
+    "shadow_evaluation_authorized": true,
+    "shortlist_policy_authorized": false,
+    "threshold_optimization_authorized": false,
+    "training_authorized": false
+  },
+  "capture_provenance": {
+    "hash_algorithm": "sha256",
+    "never_rewrite_capture_receipt": true,
+    "never_rewrite_interim": true,
+    "never_rewrite_raw_capture": true,
+    "preserve_body_path": true,
+    "preserve_captured_at": true,
+    "preserve_route": true,
+    "preserve_sidecar_path": true,
+    "preserve_source_url": true,
+    "require_per_sidecar_hash_verification": true,
+    "require_raw_capture_receipt": true
+  },
+  "cohort_policy": {
+    "no_global_cap": true,
+    "primary_selection_per_sport_day": 1,
+    "ranks_4_plus_recorded_but_not_in_cohort": true,
+    "top3_cohort_per_sport_day": null,
+    "top3_cohort_per_sport_day_null_means": "UNCAPPED: every R2-eligible, R1-ranked candidate for a sport-day is recorded as a selection (rank 1 = PRIMARY_SHADOW_SELECTION, every other rank = TOP3_EVALUATION_COHORT). No candidate that already cleared R2 is discarded. Set to a positive integer instead to cap the recorded cohort at that many non-primary ranks per sport-day (legacy behavior)."
+  },
+  "declaration_version": "shadow_evaluator_short_notice",
+  "durability": {
+    "git_tracked_exception": false,
+    "no_compact_digest_writer": true,
+    "no_external_storage": true,
+    "no_force_overwrite": true,
+    "second_copy_procedure": "DEFERRED_TO_SEPARATE_APPROVAL",
+    "status": "LOCAL_CODESPACE_ONLY_NOT_BACKED_UP"
+  },
+  "frozen_at": "2026-09-26",
+  "history_loader": {
+    "conflict_handling": "report_all_conflicting_source_hashes",
+    "deterministic_duplicate_handling": "deterministic",
+    "disallow_no_contest": true,
+    "disallow_two_way_anomalous_draw": true,
+    "disallow_void": true,
+    "exclude_same_day": true,
+    "name": "loaded_priors_only",
+    "odds_must_not_influence": true,
+    "strict_event_date_lt_target": true,
+    "use_loaded_history": true
+  },
+  "idempotency": {
+    "decision_digest_canonical_selections_only": true,
+    "input_digest_canonical_inputs_only": true,
+    "manifest_written_last": true,
+    "no_force": true,
+    "no_overwrite": true,
+    "no_supersede": true,
+    "partial_run_preserved_untouched": true,
+    "payload_file_sha256_after_final_write": true,
+    "retry_creates_new_run_id_sibling_dir": true,
+    "run_id_unique_per_finalization": true
+  },
+  "rule": {
+    "eligibility_features": {
+      "favorite_prior_games_min": 5,
+      "forebet_probability_gap_max": 0.2,
+      "h2h_prior_games_min": 1,
+      "underdog_prior_games_min": 5
+    },
+    "name": "R2_CONSERVATIVE_FIXED_RULE",
+    "policy_candidate": false,
+    "quota_forced": false,
+    "rank_policy": "R1_ALWAYS_RANK_COMPARATOR",
+    "source": "config/research_baselines.json:rules.R2_CONSERVATIVE_FIXED_RULE"
+  },
+  "statuses": {
+    "feature_incomplete": "FEATURE_INCOMPLETE_OR_R2_INELIGIBLE",
+    "no_selection_sport_day": "SHADOW_NO_SELECTION",
+    "primary_selection": "PRIMARY_SHADOW_SELECTION",
+    "run_blocked": "SHADOW_RUN_BLOCKED",
+    "timing_rejected_short_notice": "INSUFFICIENT_LEAD_BEFORE_KICKOFF",
+    "timing_unverified": "PRE_EVENT_TIMING_UNVERIFIED",
+    "top3_cohort": "TOP3_EVALUATION_COHORT"
+  },
+  "timing_safety": {
+    "fail_closed_status_on_violation": "PRE_EVENT_TIMING_UNVERIFIED",
+    "margin_description": "Per-event pre-event timing gate: captured_at <= decision_committed_at, the listing must carry a parseable scheduled start (Forebet date_bah / DATE_BAH, UTC because every capture URL pins tz=0), that start must fall on the target date, and it must be at least 120 minutes after decision_committed_at. An event whose start time cannot be parsed is REFUSED, never assumed distant. This is NOT the frozen 24h contract and must never be reported as satisfying it.",
+    "margin_frozen_in_declaration": true,
+    "min_lead_minutes_before_kickoff": 120,
+    "never_pooled_with_standard_track": true,
+    "refuse_event_without_parsed_kickoff": true,
+    "require_both_timestamps_tz_aware_utc": true,
+    "require_captured_at_present": true,
+    "require_decision_committed_at_present": true,
+    "require_parsed_kickoff": true,
+    "track": "SHORT_NOTICE"
+  },
+  "track_purpose": "SHORT_NOTICE evidence track (owner decision 2026-09-26). Forebet does not publish basketball / hockey / baseball / tennis / rugby boards more than about a day ahead, so those sports are structurally unreachable under the frozen 24h date-anchored gate and the standard track produced football-only rank-1 picks on 2026-09-21..26. This track decides on the event day and proves pre-event status per event against the published kickoff. It is a SEPARATE, WEAKER-LEAD-TIME experiment: its artifacts live under their own root, carry track=SHORT_NOTICE, and are never pooled with the 24h-frozen record or reported as part of it."
+}

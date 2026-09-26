@@ -30,6 +30,7 @@ This index classifies every file under `docs/` as:
 | `MILESTONE7_SHADOW_PICKS_PLAN.md` | Milestone 7 shadow pick evaluator plan. | **REFERENCE** | 2026-08-28 | Plan record for the merged Milestone 7 evaluator work. |
 | `MILESTONE7B_SHADOW_BUNDLE.md` | Verifiable full-payload shadow bundle (create + verify, deterministic archives, bounded-memory streaming). | **CURRENT** | 2026-08-29 | Operating doc for the merged (PR #12) Milestone 7B bundle tooling. |
 | `MILESTONE7D_CLOUD_BACKUP.md` | Cloud-only second-copy procedure: manual-dispatch workflow, synthetic fixture generator, artifact retention (30 days, NOT permanent), verification receipt, honest status distinctions. | **CURRENT** | 2026-08-30 | Operating doc for the Milestone 7D cloud backup PR (opened, NOT merged; workflow NOT yet dispatched). |
+| `SHORT_NOTICE_TRACK.md` | SHORT_NOTICE evidence track: why date-anchored capture cannot reach late-publishing sports, the per-event kickoff-lead gate, the separation guarantees vs the frozen 24h record, the daily stage, the owner paste for the workflow persist step, and honest limits. | **CURRENT** | 2026-09-26 | Operating doc for the track added 2026-09-26. IMPLEMENTED/TESTED LOCALLY — no real short-notice run has been dispatched or settled yet. |
 | `README.md` (this file) | Doc index with purpose/status/last-verified/canonical relationships. | **CURRENT** | 2026-08-24 | Canonical index — required by Milestone 0, updated for Milestone 4 COMPLETE (4E hardening). |
 
 ## Classification Report (Milestone 0-4E)
