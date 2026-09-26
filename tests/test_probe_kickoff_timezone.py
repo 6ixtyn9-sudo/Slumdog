@@ -287,3 +287,101 @@ class TestBodyFingerprint:
         })
         assert resolved is False
         assert any("RETURNED NO LISTING ROWS" in line for line in lines)
+
+
+class TestRouteDiagnostic:
+    """The capture path asks the relay for `X-Return-Format: html` and got a
+    challenge page. If another mode returns a real board, that is the fix for
+    the coverage collapse itself."""
+
+    def test_every_mode_is_tried_and_fingerprinted(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        seen: list[dict] = []
+
+        def _fake(url, headers, *, timeout):
+            seen.append(headers)
+            if headers.get("X-Respond-With") == "html":
+                return b'<div class="rcnt">real board</div>'
+            return b"<html><title>Just a moment...</title></html>"
+
+        monkeypatch.setattr(probe, "relay_request", _fake)
+        out = probe.probe_routes("https://x.invalid", timeout=1, pause=0)
+
+        assert set(out) == {
+            "return_format_html", "respond_with_html", "markdown_reader"}
+        assert out["respond_with_html"]["has_rcnt"] is True
+        assert out["return_format_html"]["looks_like"] == "challenge_page"
+        assert len(seen) == 3
+
+    def test_a_failing_mode_is_recorded_not_raised(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "relay_request", _boom("401"))
+        out = probe.probe_routes("https://x.invalid", timeout=1, pause=0)
+        assert all("error" in fp for fp in out.values())
+
+    def test_verdict_names_a_working_route(self):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        _, lines = verdict({
+            "fetch_errors": [], "offset": summarise_offsets([]),
+            "route_diagnostic_url": "https://x.invalid",
+            "route_diagnostic": {
+                "return_format_html": {"bytes": 5931, "has_rcnt": False,
+                                       "looks_like": "challenge_page"},
+                "respond_with_html": {"bytes": 150000, "has_rcnt": True,
+                                      "looks_like": "board_html"},
+            },
+        })
+        assert any("WORKING CAPTURE ROUTE(S): respond_with_html" in l for l in lines)
+
+    def test_verdict_says_so_when_no_route_works(self):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        _, lines = verdict({
+            "fetch_errors": [], "offset": summarise_offsets([]),
+            "route_diagnostic": {
+                "return_format_html": {"bytes": 5931, "has_rcnt": False,
+                                       "looks_like": "challenge_page"}},
+        })
+        assert any("NO RELAY MODE RETURNED A BOARD" in l for l in lines)
+
+
+class TestChallengePageRejection:
+    """Challenge pages were being stored as genuine captures for the two
+    current_only sports, because only the lenient label check applied."""
+
+    def test_challenge_page_is_rejected_for_a_current_only_sport(self):
+        import pytest as _pytest
+
+        from slumdog.forebet import validate_html_body
+
+        body = (b'<html lang="en-US"><head><title>Just a moment...</title>'
+                b'</head><body>esoccer</body></html>' + b"x" * 200)
+        with _pytest.raises(ValueError, match="challenge page"):
+            validate_html_body(body, "esoccer", "2026-09-27")
+
+    def test_challenge_page_is_rejected_for_a_dated_sport(self):
+        import pytest as _pytest
+
+        from slumdog.forebet import validate_html_body
+
+        body = (b'<html><body><div class="challenge-platform">basketball '
+                b'27/09/2026</div></body></html>' + b"x" * 200)
+        with _pytest.raises(ValueError, match="challenge page"):
+            validate_html_body(body, "basketball", "2026-09-27")
+
+    def test_a_real_board_still_validates(self):
+        from slumdog.forebet import validate_html_body
+
+        body = (b'<html><body>basketball <div class="rcnt">'
+                b'<span class="date_bah">27/09/2026 18:00</span></div>'
+                b'</body></html>' + b"x" * 200)
+        validate_html_body(body, "basketball", "2026-09-27")
+
+    def test_detector_is_exposed_for_reuse(self):
+        from slumdog.forebet import looks_like_challenge_page
+
+        assert looks_like_challenge_page(b"<title>Just a moment...</title>")
+        assert not looks_like_challenge_page(b'<div class="rcnt">ok</div>')

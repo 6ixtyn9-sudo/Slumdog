@@ -271,6 +271,46 @@ def html_board_rows(body: bytes) -> list[dict[str, str]]:
     return rows
 
 
+def relay_request(url: str, headers: dict[str, str], *, timeout: int) -> bytes:
+    """Raw relay GET with explicit headers, for route comparison."""
+    import urllib.request
+
+    request = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def probe_routes(board_url: str, *, timeout: int, pause: float) -> dict[str, Any]:
+    """Fingerprint every way we know of asking the relay for one board.
+
+    The capture path currently uses ``X-Return-Format: html``, which is what
+    returned the challenge page. If another mode comes back with real listing
+    rows, that is the fix for the whole coverage collapse, not just for the
+    timezone question.
+    """
+    relay = RELAY_BASE + board_url
+    attempts = {
+        "return_format_html": lambda: relay_request(relay, {
+            "User-Agent": "Slumdog", "Accept": "text/plain",
+            "X-No-Cache": "true", "X-Return-Format": "html"}, timeout=timeout),
+        "respond_with_html": lambda: relay_request(relay, {
+            "User-Agent": "Slumdog", "Accept": "text/plain",
+            "X-No-Cache": "true", "X-Respond-With": "html"}, timeout=timeout),
+        "markdown_reader": lambda: relay_request(relay, {
+            "User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
+            "X-No-Cache": "true"}, timeout=timeout),
+    }
+    out: dict[str, Any] = {}
+    for i, (name, call) in enumerate(attempts.items()):
+        if i:
+            time.sleep(pause)
+        try:
+            out[name] = body_fingerprint(call())
+        except Exception as exc:
+            out[name] = {"error": f"{type(exc).__name__}: {exc}"[:200]}
+    return out
+
+
 def run_probe(date: str, *, sport: str, timeout: int, pause: float) -> dict[str, Any]:
     report: dict[str, Any] = {
         "probed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -323,6 +363,13 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float) -> dict[str,
         report["extra_sport_candidates"] = (
             machine_readable_candidates(other) if other else [])
 
+    # Which relay mode, if any, returns a real board?
+    time.sleep(pause)
+    routes_url = source_url(SPORTS[sport], date) if sport in SPORTS else board_url
+    report["route_diagnostic_url"] = routes_url
+    report["route_diagnostic"] = probe_routes(
+        routes_url, timeout=timeout, pause=pause)
+
     report["fetch_errors"] = list(FETCH_ERRORS)
     return report
 
@@ -368,6 +415,27 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
                 "the board was not fetched at all, so this run says nothing "
                 "about timezones.")
             lines.append(f"  first bytes: {fp.get('sample', '')[:200]}")
+
+    routes = report.get("route_diagnostic") or {}
+    working = [name for name, fp in routes.items() if fp.get("has_rcnt")]
+    if routes:
+        lines.append("Relay route comparison on " +
+                     str(report.get("route_diagnostic_url", "")) + ":")
+        for name, fp in routes.items():
+            detail = fp.get("error") or (
+                f"{fp.get('bytes')} bytes, {fp.get('looks_like')}, "
+                f"rows={'yes' if fp.get('has_rcnt') else 'no'}")
+            lines.append(f"  {name}: {detail}")
+        if working:
+            lines.append(
+                "WORKING CAPTURE ROUTE(S): " + ", ".join(working) +
+                " — switching the collector to this mode is the fix for the "
+                "missing non-football boards.")
+        else:
+            lines.append(
+                "NO RELAY MODE RETURNED A BOARD — the boards are unreachable "
+                "from a runner right now; that, not publishing lag, is why "
+                "non-football sports have no picks.")
 
     off = report.get("offset") or {}
     joined = off.get("joined", 0)

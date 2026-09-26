@@ -353,9 +353,37 @@ def unwrap_reader(raw: bytes | str, expected_url: str) -> bytes:
     return body_bytes
 
 
+# Markers of a bot-check interstitial served instead of the page. Measured
+# 2026-09-26: the relay's html mode returns a ~5.8KB "Just a moment..." page
+# for Forebet listing boards. For dated boards that page failed the
+# date check by accident, but for ``current_only`` sports (esoccer, afl) the
+# lenient label check let it through, so challenge pages were being stored as
+# genuine captures. Reject them explicitly rather than relying on a
+# coincidence.
+_CHALLENGE_MARKERS = (
+    b"just a moment",
+    b"challenge-platform",
+    b"cf_chl_opt",
+    b"cf-chl",
+    b"attention required! | cloudflare",
+    b"enable javascript and cookies to continue",
+)
+
+
+def looks_like_challenge_page(body: bytes) -> bool:
+    """True if the body is a bot-check interstitial rather than content."""
+    lower = body.lower()
+    return any(marker in lower for marker in _CHALLENGE_MARKERS)
+
+
 def validate_html_body(body: bytes, sport: str, target_date: str) -> None:
     if len(body) < 100:
         raise ValueError("HTML capture unexpectedly short")
+    if looks_like_challenge_page(body):
+        raise ValueError(
+            f"relay returned a bot-check challenge page, not a board "
+            f"({len(body)} bytes)"
+        )
     lower = body.lower()
     if b"not what you were looking for" in lower or b"forebet 404 error" in lower:
         raise ValueError("Forebet returned a 404 content page")
