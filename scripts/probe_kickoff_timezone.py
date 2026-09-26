@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import re
 import sys
 import time
@@ -153,23 +154,61 @@ def machine_readable_candidates(html: bytes | str) -> list[dict[str, str]]:
     return found
 
 
-def fetch(url: str, *, timeout: int) -> bytes:
-    """Fetch exactly the way the collector does, so the probe measures the
-    path production actually uses (relay first, direct as fallback)."""
+# Every fetch failure is recorded here instead of raising. A probe that dies
+# on its first request tells us nothing at all, and on a runner its traceback
+# goes to stderr where it is easy to lose — which is exactly what happened on
+# the first attempt (run 36242469136: the step finished in under a second and
+# wrote no report).
+FETCH_ERRORS: list[dict[str, str]] = []
+
+
+def fetch(url: str, *, timeout: int, json_endpoint: bool = False) -> bytes | None:
+    """Fetch the way production does, and never raise.
+
+    ``json_endpoint`` selects the order the collector itself uses: the
+    football JSON endpoint is qualified for the relay's Markdown reader mode
+    (the html-forced mode 401s on cloud IPs), while HTML boards go through
+    ``fetch_with_fallback`` first. Returns ``None`` when every route failed;
+    the reason lands in :data:`FETCH_ERRORS`.
+    """
     relay = RELAY_BASE + url
-    try:
-        body, _route = fetch_with_fallback(relay, url, timeout=timeout)
-        return body
-    except Exception:
-        return relay_get_markdown(relay, url, timeout=timeout)
+    routes = (
+        [("relay_markdown", lambda: relay_get_markdown(relay, url, timeout=timeout)),
+         ("relay_or_direct", lambda: fetch_with_fallback(relay, url, timeout=timeout)[0])]
+        if json_endpoint else
+        [("relay_or_direct", lambda: fetch_with_fallback(relay, url, timeout=timeout)[0]),
+         ("relay_markdown", lambda: relay_get_markdown(relay, url, timeout=timeout))]
+    )
+    for route, call in routes:
+        try:
+            body = call()
+            if body:
+                return body
+            FETCH_ERRORS.append({"url": url, "route": route, "error": "empty body"})
+        except Exception as exc:
+            FETCH_ERRORS.append({
+                "url": url, "route": route,
+                "error": f"{type(exc).__name__}: {exc}"[:300],
+            })
+    return None
 
 
 def football_utc_kickoffs(date: str, *, timeout: int) -> dict[str, dt.datetime]:
     """``{match_id: kickoff_utc}`` from the tz=0-pinned JSON endpoint."""
     from slumdog.parsers import _load_football_payload
 
-    body = fetch(source_url(SPORTS["football"], date), timeout=timeout)
-    payload = _load_football_payload(body)
+    body = fetch(
+        source_url(SPORTS["football"], date), timeout=timeout, json_endpoint=True)
+    if body is None:
+        return {}
+    try:
+        payload = _load_football_payload(body)
+    except Exception as exc:
+        FETCH_ERRORS.append({
+            "url": "football-json", "route": "parse",
+            "error": f"{type(exc).__name__}: {exc}"[:300],
+        })
+        return {}
     out: dict[str, dt.datetime] = {}
     for row in payload[0]:
         if not isinstance(row, dict):
@@ -215,9 +254,9 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float) -> dict[str,
     board_url = f"{BASE}/en/football-predictions/predictions-1x2/{date}"
     board = fetch(board_url, timeout=timeout)
     report["football_board_url"] = board_url
-    report["football_board_bytes"] = len(board)
+    report["football_board_bytes"] = len(board or b"")
 
-    rows = html_board_rows(board)
+    rows = html_board_rows(board) if board else []
     report["football_board_rows"] = len(rows)
 
     offsets: list[int] = []
@@ -238,17 +277,20 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float) -> dict[str,
             })
     report["offset"] = summarise_offsets(offsets)
     report["offset_samples"] = samples
-    report["football_html_candidates"] = machine_readable_candidates(board)
+    report["football_html_candidates"] = (
+        machine_readable_candidates(board) if board else [])
 
     if sport and sport in SPORTS:
         time.sleep(pause)
         other_url = source_url(SPORTS[sport], date)
         other = fetch(other_url, timeout=timeout)
         report["extra_sport_url"] = other_url
-        report["extra_sport_bytes"] = len(other)
-        report["extra_sport_rows"] = len(html_board_rows(other))
-        report["extra_sport_candidates"] = machine_readable_candidates(other)
+        report["extra_sport_bytes"] = len(other or b"")
+        report["extra_sport_rows"] = len(html_board_rows(other)) if other else 0
+        report["extra_sport_candidates"] = (
+            machine_readable_candidates(other) if other else [])
 
+    report["fetch_errors"] = list(FETCH_ERRORS)
     return report
 
 
@@ -256,6 +298,10 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
     """Turn the report into a decision, erring toward 'not proven'."""
     lines: list[str] = []
     resolved = False
+
+    if report.get("crashed"):
+        lines.append(f"PROBE CRASHED: {report['crashed']}")
+        lines.append((report.get("traceback") or "").strip()[-600:])
 
     candidates = (report.get("football_html_candidates") or []) + (
         report.get("extra_sport_candidates") or [])
@@ -271,6 +317,13 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
         lines.append(
             "No machine-readable start instant in the raw HTML — the rendered "
             "text is all there is.")
+
+    errors = report.get("fetch_errors") or []
+    if errors:
+        lines.append(f"FETCH FAILURES ({len(errors)}) — the probe could not "
+                     "reach part of the source:")
+        for err in errors[:6]:
+            lines.append(f"  {err.get('route')} {err.get('url')}: {err.get('error')}")
 
     off = report.get("offset") or {}
     joined = off.get("joined", 0)
@@ -298,6 +351,35 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
     return resolved, lines
 
 
+def _annotation_escape(text: str) -> str:
+    """Escape a value for a GitHub Actions workflow command."""
+    return (text.replace("%", "%25").replace("\r", "%0D")
+                .replace("\n", "%0A").replace("::", "%3A%3A"))
+
+
+def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
+    """Print the verdict as Actions annotations and return what was printed.
+
+    Annotations are served by api.github.com, whereas run logs and build
+    artifacts are served from blob storage. That difference matters: it is
+    what lets the result be read back without a human copying it out of a
+    browser.
+    """
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return []
+    compact = json.dumps({
+        k: v for k, v in report.items()
+        if k not in {"verdict", "offset_samples"}
+    }, sort_keys=True)[:3000]
+    emitted = [
+        f"::notice title=Kickoff timezone verdict::{_annotation_escape(chr(10).join(lines))}",
+        f"::notice title=Kickoff timezone report::{_annotation_escape(compact)}",
+    ]
+    for line in emitted:
+        print(line)
+    return emitted
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", required=True, help="YYYY-MM-DD board to probe")
@@ -312,8 +394,19 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     dt.date.fromisoformat(args.date)
-    report = run_probe(
-        args.date, sport=args.sport, timeout=args.timeout, pause=args.pause)
+    try:
+        report = run_probe(
+            args.date, sport=args.sport, timeout=args.timeout, pause=args.pause)
+    except Exception as exc:  # a crashed probe must still report
+        import traceback
+        report = {
+            "probed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "target_date": args.date,
+            "crashed": f"{type(exc).__name__}: {exc}",
+            "traceback": traceback.format_exc()[-1500:],
+            "fetch_errors": list(FETCH_ERRORS),
+            "offset": summarise_offsets([]),
+        }
     resolved, lines = verdict(report)
     report["resolved"] = resolved
     report["verdict"] = lines
@@ -328,6 +421,8 @@ def main(argv: list[str] | None = None) -> int:
     print()
     for line in lines:
         print(line)
+
+    emit_annotations(report, lines)
     return 0 if resolved else 1
 
 

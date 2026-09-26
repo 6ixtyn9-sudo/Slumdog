@@ -19,6 +19,12 @@ from scripts.probe_kickoff_timezone import (
 )
 
 
+def _boom(message: str):
+    def _raise(*args, **kwargs):
+        raise RuntimeError(message)
+    return _raise
+
+
 class TestDisplayTimeParsing:
     def test_parses_both_published_display_shapes(self):
         assert parse_display_time("25/09/2026 21:00") == dt.datetime(
@@ -140,3 +146,101 @@ class TestVerdict:
                  "sample": "1790000000"}]))
         assert resolved is True
         assert any("MACHINE-READABLE START FOUND" in line for line in lines)
+
+
+class TestProbeSurvivesFetchFailure:
+    """Run 36242469136 died in under a second and wrote nothing, because an
+    unhandled fetch error went to stderr. A probe that cannot report is
+    worse than no probe: it burns a round trip and teaches nothing."""
+
+    def test_fetch_records_the_error_instead_of_raising(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "FETCH_ERRORS", [])
+        monkeypatch.setattr(probe, "relay_get_markdown", _boom("relay down"))
+        monkeypatch.setattr(probe, "fetch_with_fallback", _boom("403"))
+
+        assert probe.fetch("https://x.invalid", timeout=1) is None
+        assert len(probe.FETCH_ERRORS) == 2
+        assert {e["route"] for e in probe.FETCH_ERRORS} == {
+            "relay_or_direct", "relay_markdown"}
+
+    def test_json_endpoint_tries_markdown_route_first(self, monkeypatch):
+        """Production's order, because the html-forced relay mode 401s on
+        cloud IPs for the JSON endpoint."""
+        import scripts.probe_kickoff_timezone as probe
+
+        order: list[str] = []
+        monkeypatch.setattr(probe, "FETCH_ERRORS", [])
+        monkeypatch.setattr(
+            probe, "relay_get_markdown",
+            lambda *a, **k: order.append("markdown") or b"ok")
+        monkeypatch.setattr(
+            probe, "fetch_with_fallback",
+            lambda *a, **k: (order.append("fallback") or b"ok", "relay"))
+
+        probe.fetch("https://x.invalid", timeout=1, json_endpoint=True)
+        assert order == ["markdown"]
+        order.clear()
+        probe.fetch("https://x.invalid", timeout=1)
+        assert order == ["fallback"]
+
+    def test_probe_reports_a_total_outage_rather_than_crashing(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "FETCH_ERRORS", [])
+        monkeypatch.setattr(probe, "relay_get_markdown", _boom("relay down"))
+        monkeypatch.setattr(probe, "fetch_with_fallback", _boom("403"))
+
+        report = probe.run_probe(
+            "2026-09-27", sport="basketball", timeout=1, pause=0)
+        resolved, lines = probe.verdict(report)
+
+        assert resolved is False
+        assert report["fetch_errors"]
+        assert any("FETCH FAILURES" in line for line in lines)
+        assert any("NOT RESOLVED" in line for line in lines)
+
+    def test_crash_is_reported_in_the_verdict(self):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        resolved, lines = verdict({
+            "crashed": "RuntimeError: boom",
+            "traceback": "Traceback...\nRuntimeError: boom",
+            "fetch_errors": [],
+            "offset": summarise_offsets([]),
+        })
+        assert resolved is False
+        assert lines[0].startswith("PROBE CRASHED: RuntimeError: boom")
+
+
+class TestAnnotations:
+    """Annotations come back through api.github.com; run logs and artifacts
+    come from blob storage. Only the former can be read back automatically."""
+
+    def test_nothing_is_emitted_outside_actions(self, monkeypatch):
+        from scripts.probe_kickoff_timezone import emit_annotations
+
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+        assert emit_annotations({"a": 1}, ["verdict"]) == []
+
+    def test_verdict_and_report_are_emitted_inside_actions(self, monkeypatch):
+        from scripts.probe_kickoff_timezone import emit_annotations
+
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        emitted = emit_annotations(
+            {"target_date": "2026-09-27", "offset_samples": ["dropped"]},
+            ["line one", "line two"])
+        assert len(emitted) == 2
+        assert emitted[0].startswith("::notice title=Kickoff timezone verdict::")
+        # Newlines must be escaped or the annotation is truncated at line one.
+        assert "%0A" in emitted[0]
+        assert "\n" not in emitted[0]
+        assert "2026-09-27" in emitted[1]
+        assert "dropped" not in emitted[1]
+
+    def test_escaping_protects_the_workflow_command_syntax(self):
+        from scripts.probe_kickoff_timezone import _annotation_escape
+
+        assert _annotation_escape("a::b") == "a%3A%3Ab"
+        assert _annotation_escape("50%") == "50%25"
