@@ -1689,3 +1689,45 @@ class TestTeamNameSelector:
         _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
                             "dom_selectors": out})
         assert not any("TEAM NAMES EXTRACTED" in l for l in lines)
+
+
+class TestRowAlignment:
+    """A capture needs one row per match — names, a kickoff and a link — in
+    the same count as the numeric rows, or the two extracts cannot be
+    joined."""
+
+    def test_links_clocks_and_dates_are_counted(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        row = (b"[Abejas Santos 09/27/2026 2:00 AM]"
+               b"(https://www.forebet.com/en/basketball/matches/"
+               b"abejas-santos-2500001)\n")
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout:
+                                b"Markdown Content:\n" + row * 3)
+        out = probe.live_dom_selectors("2026-09-27", "basketball",
+                                       timeout=1, pause=0)
+        fp = out["div.tnms"]
+        assert fp["links"] == 1  # deduplicated
+        assert fp["clocks"] == 3 and fp["dates"] == 3
+
+    def test_the_richest_extract_is_the_one_shown(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        links = b"\n".join(
+            b"[Team%d Rival%d 09/27/2026 2:00 AM]"
+            b"(https://www.forebet.com/en/basketball/matches/t%d-r%d-250000%d)"
+            % (i, i, i, i, i) for i in range(8))
+
+        def _relay(url, headers, *, timeout):
+            if headers.get("X-Target-Selector") == "div.tnms":
+                return b"Markdown Content:\n" + links
+            return b"71 29 92-78"
+
+        monkeypatch.setattr(probe, "relay_request", _relay)
+        out = probe.live_dom_selectors("2026-09-27", "basketball",
+                                       timeout=1, pause=0)
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "dom_selectors": out})
+        assert any("div.tnms rows:" in l for l in lines)

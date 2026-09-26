@@ -750,11 +750,17 @@ def live_dom_selectors(date: str, sport_path: str, *,
             marker = "Markdown Content:"
             payload = text.split(marker, 1)[1].strip() if marker in text \
                 else text
+            encoded = payload.encode()
             out[selector] = {
                 "bytes": len(body),
                 "found": True,
-                "names": len(NAME_TOKEN.findall(payload.encode())),
-                "sample": payload[:420],
+                "names": len(NAME_TOKEN.findall(encoded)),
+                # A capture needs one row per match: names, a kickoff and a
+                # link, in the same count as the numeric rows.
+                "links": len(dict.fromkeys(MATCH_LINK.findall(encoded))),
+                "clocks": len(CLOCK.findall(encoded)),
+                "dates": len(re.findall(rb"\d{2}/\d{2}/\d{4}", encoded)),
+                "sample": payload[:1500],
             }
         except Exception as exc:
             code = getattr(exc, "code", None)
@@ -1709,9 +1715,15 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
                 f"FOUND {fp.get('bytes')}B" if fp.get("found")
                 else str(fp.get("error"))))
         for selector, fp in dom.items():
-            if fp.get("found") and fp.get("sample"):
-                lines.append(f"  {selector} → names={fp.get('names')} "
-                             f"{fp['sample'][:360]}")
+            if fp.get("found"):
+                lines.append(
+                    f"  {selector} → {fp.get('bytes')}B "
+                    f"names={fp.get('names')} links={fp.get('links')} "
+                    f"clocks={fp.get('clocks')} dates={fp.get('dates')}")
+        best = max(((s, fp) for s, fp in dom.items() if fp.get("found")),
+                   key=lambda kv: kv[1].get("links") or 0, default=None)
+        if best and (best[1].get("links") or 0) > 5:
+            lines.append(f"  {best[0]} rows: {best[1].get('sample', '')[:1100]}")
         named = [s for s, fp in dom.items() if (fp.get("names") or 0) > 25]
         if named:
             lines.append("TEAM NAMES EXTRACTED VIA SELECTOR: " +
