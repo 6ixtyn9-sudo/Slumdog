@@ -523,6 +523,53 @@ def relay_request(url: str, headers: dict[str, str], *, timeout: int) -> bytes:
         return response.read()
 
 
+MATCH_LINK = re.compile(
+    rb"https?://(?:www\.|m\.)?forebet\.com/en/[a-z\-]+/predictions?/[^\s)\"']*\d{4,}",
+    re.I)
+CLOCK = re.compile(rb"\b([01]?\d|2[0-3]):[0-5]\d\b")
+
+
+def markdown_modes(date: str, sport_path: str, *, timeout: int,
+                   pause: float) -> dict[str, Any]:
+    """The Markdown engine is the only route that clears the bot check, so
+    the question is no longer "can we fetch" but "does what it returns carry
+    a match identity and a kickoff time".
+
+    The plain Markdown of a basketball board has the numbers but no team
+    names and no clock. These variants ask the same engine for the same page
+    in forms that might keep them — notably a link summary, since every row
+    links to a match page whose URL carries both teams and the match id.
+    """
+    url = f"https://www.forebet.com/en/{sport_path}/predictions/{date}"
+    base = {"User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
+            "X-No-Cache": "true"}
+    variants = {
+        "plain": {},
+        "text_format": {"X-Return-Format": "text"},
+        "links_summary": {"X-With-Links-Summary": "true"},
+        "target_selector": {"X-Target-Selector": ".rcnt"},
+    }
+    out: dict[str, Any] = {}
+    for i, (name, extra) in enumerate(variants.items()):
+        if i:
+            time.sleep(min(pause, 8))
+        try:
+            body = relay_request(RELAY_BASE + url, {**base, **extra},
+                                 timeout=timeout)
+        except Exception as exc:
+            out[name] = {"error": f"{type(exc).__name__}: {exc}"[:110]}
+            continue
+        links = [m.decode() for m in dict.fromkeys(MATCH_LINK.findall(body))]
+        out[name] = {
+            "bytes": len(body),
+            "match_links": len(links),
+            "clocks": len(CLOCK.findall(body)),
+            "link_sample": links[:3],
+            "sample": body[400:900].decode("utf-8", "replace"),
+        }
+    return out
+
+
 def fetch_matrix(date: str, sport_path: str, *, timeout: int,
                  pause: float) -> dict[str, Any]:
     """Try every host and fetcher we know of against one board.
@@ -623,7 +670,8 @@ def probe_routes(board_url: str, *, timeout: int, pause: float) -> dict[str, Any
     return out
 
 
-def run_probe(date: str, *, sport: str, timeout: int, pause: float) -> dict[str, Any]:
+def run_probe(date: str, *, sport: str, timeout: int, pause: float,
+              run_hunt: bool = False) -> dict[str, Any]:
     report: dict[str, Any] = {
         "probed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "target_date": date,
@@ -681,6 +729,15 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float) -> dict[str,
     report["route_diagnostic_url"] = routes_url
     report["route_diagnostic"] = probe_routes(
         routes_url, timeout=timeout, pause=pause)
+
+    time.sleep(pause)
+    report["markdown_modes"] = markdown_modes(
+        date, SPORTS[sport].path if sport in SPORTS else sport,
+        timeout=timeout, pause=pause)
+
+    if not run_hunt:
+        report["fetch_errors"] = list(FETCH_ERRORS)
+        return report
 
     time.sleep(pause)
     report["fetch_matrix"] = fetch_matrix(
@@ -786,6 +843,29 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
                 "NO RELAY MODE RETURNED A BOARD — the boards are unreachable "
                 "from a runner right now; that, not publishing lag, is why "
                 "non-football sports have no picks.")
+
+    modes = report.get("markdown_modes") or {}
+    if modes:
+        lines.append("Markdown variants (the only route that clears the check):")
+        for name, fp in modes.items():
+            lines.append(f"  {name}: " + (fp.get("error") or
+                         f"{fp.get('bytes')}B links={fp.get('match_links')} "
+                         f"clocks={fp.get('clocks')}"))
+        usable = [n for n, fp in modes.items()
+                  if (fp.get("match_links") or 0) > 5]
+        if usable:
+            lines.append(
+                "MATCH IDENTITY RECOVERABLE VIA: " + ", ".join(usable) +
+                " — the row links carry team names and match ids, which is "
+                "enough to build a pick without the HTML board.")
+            for n in usable[:2]:
+                lines.append(f"  {n} links: {modes[n].get('link_sample')}")
+        else:
+            lines.append("NO MARKDOWN VARIANT CARRIES MATCH IDENTITY — the "
+                         "numbers come through but nothing names the teams.")
+        for n, fp in modes.items():
+            if fp.get("sample"):
+                lines.append(f"  {n} sample: {fp['sample'][:300]}")
 
     matrix = report.get("fetch_matrix") or {}
     if matrix:
@@ -902,7 +982,7 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     hunt_blob = json.dumps({k: report.get(k) for k in
                             ("endpoint_hunt", "endpoint_hunt_control",
                              "endpoint_tests", "tp_candidates",
-                             "fetch_matrix")},
+                             "fetch_matrix", "markdown_modes")},
                            sort_keys=True)[:3000]
     emitted.append(
         f"::notice title=Endpoint hunt::{_annotation_escape(hunt_blob)}")
@@ -914,6 +994,9 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", required=True, help="YYYY-MM-DD board to probe")
+    parser.add_argument("--hunt", action="store_true",
+                        help="also run the archive/endpoint hunt (slow, "
+                             "already answered: no JSON twin exists)")
     parser.add_argument("--sport", default="basketball",
                         help="extra HTML board to scan for machine-readable "
                              "timestamps (default: basketball)")
@@ -926,8 +1009,8 @@ def main(argv: list[str] | None = None) -> int:
 
     dt.date.fromisoformat(args.date)
     try:
-        report = run_probe(
-            args.date, sport=args.sport, timeout=args.timeout, pause=args.pause)
+        report = run_probe(args.date, sport=args.sport, timeout=args.timeout,
+                              pause=args.pause, run_hunt=args.hunt)
     except Exception as exc:  # a crashed probe must still report
         import traceback
         report = {

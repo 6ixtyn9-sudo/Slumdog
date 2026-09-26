@@ -697,8 +697,10 @@ class TestSportCodeHunt:
         monkeypatch.setattr(probe, "test_tp_candidates",
                             lambda date, values, *, timeout, pause:
                                 {"_values": values})
+        monkeypatch.setattr(probe, "markdown_modes", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "fetch_matrix", lambda *a, **k: {})
         report = probe.run_probe("2026-09-27", sport="basketball",
-                                 timeout=1, pause=0)
+                                 timeout=1, pause=0, run_hunt=True)
         assert "1x2" not in report["tp_candidates"]["_values"]
         assert "bsk" in report["tp_candidates"]["_values"]
 
@@ -748,3 +750,74 @@ class TestFetchMatrix:
     def test_every_failure_is_isolated(self, monkeypatch):
         out = self._matrix(monkeypatch, _boom("blocked"))
         assert len(out) == 6 and all("error" in fp for fp in out.values())
+
+
+class TestMarkdownModes:
+    """Markdown is the only route that clears the bot check, so coverage now
+    depends on whether Markdown carries a match identity and a kickoff time —
+    the plain variant has the numbers but names no teams."""
+
+    def _run(self, monkeypatch, responder):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout: responder(headers))
+        return probe.markdown_modes("2026-09-27", "basketball",
+                                    timeout=1, pause=0)
+
+    def test_every_variant_is_asked_for(self, monkeypatch):
+        seen: list[dict] = []
+        out = self._run(monkeypatch, lambda h: seen.append(h) or b"x" * 500)
+        assert set(out) == {"plain", "text_format", "links_summary",
+                            "target_selector"}
+        assert {"text", None} & {h.get("X-Return-Format") for h in seen}
+        assert any(h.get("X-With-Links-Summary") == "true" for h in seen)
+
+    def test_row_links_are_counted_and_deduplicated(self, monkeypatch):
+        link = (b"https://www.forebet.com/en/basketball/predictions/"
+                b"lakers-vs-heat-1234567")
+        out = self._run(monkeypatch, lambda h: b"pad" * 200 + link + b" " + link)
+        assert out["plain"]["match_links"] == 1
+        assert out["plain"]["link_sample"][0].endswith("1234567")
+
+    def test_kickoff_clocks_are_counted(self, monkeypatch):
+        out = self._run(monkeypatch, lambda h: b"x" * 400 + b" 14:00 19:30 ")
+        assert out["plain"]["clocks"] == 2
+
+    def test_a_variant_with_links_is_declared_usable(self, monkeypatch):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        links = b" ".join(
+            b"https://www.forebet.com/en/basketball/predictions/a-vs-b-%d"
+            % (1000000 + i) for i in range(6))
+        out = self._run(monkeypatch,
+                        lambda h: b"pad" * 200 + links
+                        if h.get("X-With-Links-Summary") else b"pad" * 200)
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "markdown_modes": out})
+        assert any("MATCH IDENTITY RECOVERABLE VIA: links_summary" in l
+                   for l in lines)
+
+    def test_no_identity_anywhere_is_stated_plainly(self, monkeypatch):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        out = self._run(monkeypatch, lambda h: b"36 64 2 85-86 " * 40)
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "markdown_modes": out})
+        assert any("NO MARKDOWN VARIANT CARRIES MATCH IDENTITY" in l
+                   for l in lines)
+
+    def test_the_answered_hunt_is_off_by_default(self, monkeypatch):
+        """The archive hunt is finished and costs rate-limited requests."""
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "fetch", lambda *a, **k: b"")
+        monkeypatch.setattr(probe, "probe_routes",
+                            lambda *a, **k: {})
+        monkeypatch.setattr(probe, "markdown_modes", lambda *a, **k: {"ok": {}})
+        monkeypatch.setattr(probe, "hunt_endpoints", _boom("must not run"))
+        monkeypatch.setattr(probe, "fetch_matrix", _boom("must not run"))
+        report = probe.run_probe("2026-09-27", sport="basketball",
+                                 timeout=1, pause=0)
+        assert "fetch_matrix" not in report
+        assert report["markdown_modes"] == {"ok": {}}
