@@ -1519,3 +1519,51 @@ class TestRenderWaits:
         out = self._run(monkeypatch, lambda u, h: (_ for _ in ()).throw(
             RuntimeError("gateway")))
         assert len(out) == 4 and all("error" in fp for fp in out.values())
+
+
+class TestCurrentBundle:
+    """Everything known about the endpoints came from a 2020 archived bundle,
+    while the board has since been rebuilt — the 2024 archive has team names
+    in the markup and the live page renders none."""
+
+    JS = (b'var a="/scripts/getrs.php?ln="+l+"&tp="+t;'
+          b'x.innerHTML=\'<div class="rcnt">\'+r.host+\'</div>\';')
+
+    def test_the_live_bundle_is_preferred_over_the_archive(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        seen: list[str] = []
+        monkeypatch.setattr(probe, "direct_fetch",
+                            lambda url, *, timeout, attempts=3:
+                                seen.append(url) or self.JS)
+        out = probe.current_bundle_scan(timeout=1, pause=0)
+        assert "web.archive.org" not in " ".join(seen)
+        assert out["source"].startswith("direct")
+        assert any("getrs.php" in ref for ref in out["php_refs"])
+
+    def test_it_falls_back_to_the_relay_when_refused(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "direct_fetch", _boom("403"))
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout: self.JS)
+        out = probe.current_bundle_scan(timeout=1, pause=0)
+        assert out["source"].startswith("relay")
+        assert out["errors"]
+
+    def test_row_building_context_is_captured(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "direct_fetch",
+                            lambda url, *, timeout, attempts=3: self.JS)
+        out = probe.current_bundle_scan(timeout=1, pause=0)
+        assert "innerHTML" in out["contexts"]
+        assert "rcnt" in out["contexts"]
+
+    def test_total_failure_is_reported_not_raised(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "direct_fetch", _boom("403"))
+        monkeypatch.setattr(probe, "relay_request", _boom("502"))
+        out = probe.current_bundle_scan(timeout=1, pause=0)
+        assert "php_refs" not in out and len(out["errors"]) == 4

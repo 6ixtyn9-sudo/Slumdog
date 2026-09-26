@@ -991,6 +991,65 @@ def _clock_context(body: bytes) -> str:
 NAME_TOKEN = re.compile(rb"[A-Z][a-z]{3,}(?:\s+[A-Z][a-z]{2,})?")
 
 
+def current_bundle_scan(*, timeout: int, pause: float) -> dict[str, Any]:
+    """Read TODAY's script bundle, not a 2020 archived copy.
+
+    Everything known about the endpoints came from a bundle snapshotted in
+    November 2020. Meanwhile the board itself has changed: the 2024 archive
+    has team names in the markup as <span itemprop="name">, and the live
+    page renders none, even after a hydration wait. So the names now arrive
+    some other way, and only the current bundle can say how. Static assets
+    are plain files and may not sit behind the check at all.
+    """
+    out: dict[str, Any] = {}
+    urls = [
+        "https://www.forebet.com/includes/js/all.js",
+        "https://www.forebet.com/includes/js/all.js?v=378",
+    ]
+    body = b""
+    for i, url in enumerate(urls):
+        if i:
+            time.sleep(min(pause, 5))
+        for mode in ("direct", "relay"):
+            try:
+                if mode == "direct":
+                    body = direct_fetch(url, timeout=timeout, attempts=1)
+                else:
+                    body = relay_request(RELAY_BASE + url, {
+                        "User-Agent": "EdgeFactory/1.0",
+                        "Accept": "text/plain", "X-No-Cache": "true",
+                        "X-Return-Format": "text"}, timeout=timeout)
+                out["source"] = f"{mode}: {url}"
+                out["bytes"] = len(body)
+                break
+            except Exception as exc:
+                out.setdefault("errors", []).append(
+                    f"{mode} {url.rsplit('/', 1)[-1][:14]}: "
+                    f"{type(exc).__name__}"[:60])
+                body = b""
+        if body:
+            break
+
+    if not body:
+        return out
+
+    refs = []
+    for match in PHP_REF.findall(body):
+        ref = normalise_ref(match.decode("utf-8", "replace").strip())
+        if "forebet" in ref or ref.startswith("/"):
+            if ref not in refs:
+                refs.append(ref)
+    out["php_refs"] = refs[:14]
+
+    # How does a row get built? Find where markup is written for a listing.
+    for needle in (b"rcnt", b"itemprop", b"innerHTML", b"getrs", b"tp="):
+        idx = body.find(needle)
+        if idx != -1:
+            out.setdefault("contexts", {})[needle.decode()] = body[
+                max(0, idx - 200): idx + 260].decode("utf-8", "replace")
+    return out
+
+
 def render_wait_modes(date: str, sport_path: str, *, timeout: int,
                       pause: float) -> dict[str, Any]:
     """Give the renderer time to hydrate before it snapshots.
@@ -1269,6 +1328,10 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
             f"/predictions/{date}", timeout=timeout)
 
     time.sleep(pause)
+    report["current_bundle"] = current_bundle_scan(
+        timeout=timeout, pause=pause)
+
+    time.sleep(pause)
     report["render_waits"] = render_wait_modes(
         date, SPORTS[sport].path if sport in SPORTS else sport,
         timeout=timeout, pause=pause)
@@ -1468,6 +1531,17 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
             lines.append("  control: getrs.php answers DIRECTLY from the "
                          "runner — the APIs are not behind the bot check, so "
                          "an API route would need no relay at all.")
+
+    bundle = report.get("current_bundle") or {}
+    if bundle:
+        lines.append(f"Current bundle: {bundle.get('source')} "
+                     f"{bundle.get('bytes')}B "
+                     f"{bundle.get('errors') or ''}")
+        if bundle.get("php_refs"):
+            lines.append("  endpoints in TODAY's bundle: " +
+                         ", ".join(bundle["php_refs"]))
+        for needle, ctx in (bundle.get("contexts") or {}).items():
+            lines.append(f"  bundle[{needle}]: {ctx[:300]}")
 
     waits = report.get("render_waits") or {}
     if waits:
@@ -1739,7 +1813,8 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
                              "save_page_now", "getjson_crack",
                              "js_call_sites", "sitemaps",
                              "match_ids", "match_json", "dom_selectors",
-                             "harvested_links", "render_waits")},
+                             "harvested_links", "render_waits",
+                             "current_bundle")},
                            sort_keys=True)[:3000]
     emitted.append(
         f"::notice title=Endpoint hunt::{_annotation_escape(hunt_blob)}")
