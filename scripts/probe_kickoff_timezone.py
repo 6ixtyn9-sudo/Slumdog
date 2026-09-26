@@ -300,16 +300,45 @@ def direct_fetch(url: str, *, timeout: int) -> bytes:
         return response.read()
 
 
+CDX_SEARCH = (
+    "https://web.archive.org/cdx/search/cdx?url={pattern}&output=json"
+    "&filter=statuscode:200&collapse=urlkey&limit={limit}&matchType=prefix"
+)
+
+
+def cdx_snapshots(pattern: str, *, limit: int, timeout: int) -> list[tuple[str, str]]:
+    """(timestamp, original_url) pairs from the Wayback index.
+
+    The availability API only answers for an exact URL; the CDX index does
+    prefix search, which is what finds a sport board whose exact path was
+    never archived but whose dated siblings were.
+    """
+    raw = direct_fetch(
+        CDX_SEARCH.format(pattern=pattern, limit=limit), timeout=timeout)
+    rows = json.loads(raw or b"[]")
+    return [(r[1], r[2]) for r in rows[1:]] if len(rows) > 1 else []
+
+
+def archived_bytes(timestamp: str, original: str, *, timeout: int,
+                   kind: str = "id_") -> bytes:
+    return direct_fetch(
+        f"https://web.archive.org/web/{timestamp}{kind}/{original}",
+        timeout=timeout)
+
+
 def archived_html(page_url: str, *, timeout: int) -> tuple[str, bytes]:
-    """Raw archived markup for a page, with the archive's own rewriting off."""
-    meta = json.loads(direct_fetch(WAYBACK_AVAILABLE + page_url, timeout=timeout))
-    snap = ((meta.get("archived_snapshots") or {}).get("closest") or {})
-    if not snap.get("available"):
+    """Raw archived markup for a page (or its nearest archived sibling)."""
+    pattern = page_url.split("://", 1)[-1]
+    snaps = cdx_snapshots(pattern, limit=8, timeout=timeout)
+    if not snaps:
+        # Fall back to the parent path: any board of this sport will do,
+        # since they all ship the same scripts.
+        snaps = cdx_snapshots(pattern.rsplit("/", 1)[0], limit=8, timeout=timeout)
+    if not snaps:
         raise RuntimeError(f"no archived snapshot for {page_url}")
-    # `id_` asks for the original bytes rather than the archive's rewritten
-    # copy, so script src values and inline JS survive intact.
-    raw_url = snap["url"].replace("/http", "id_/http", 1)
-    return raw_url, direct_fetch(raw_url, timeout=timeout)
+    timestamp, original = snaps[-1]
+    url = f"https://web.archive.org/web/{timestamp}id_/{original}"
+    return url, archived_bytes(timestamp, original, timeout=timeout)
 
 
 def endpoint_candidates(html: bytes, page_url: str) -> list[str]:
@@ -343,8 +372,36 @@ def hunt_endpoints(sport_page: str, *, timeout: int, pause: float) -> dict[str, 
     out["bytes"] = len(html)
     out["rcnt_rows"] = html.lower().count(b'class="rcnt')
     out["php_refs"] = endpoint_candidates(html, sport_page)[:12]
-    out["script_srcs"] = [
-        s.decode("utf-8", "replace") for s in SCRIPT_SRC.findall(html)[:8]]
+    scripts = [s.decode("utf-8", "replace") for s in SCRIPT_SRC.findall(html)]
+    out["script_srcs"] = scripts[:8]
+
+    # The board fetches its rows from somewhere; that call lives in the
+    # page's JavaScript, not its markup.
+    from urllib.parse import urljoin
+
+    timestamp = ""
+    snap = out.get("snapshot", "")
+    if "/web/" in snap:
+        timestamp = snap.split("/web/", 1)[1].split("id_", 1)[0]
+    mined: list[str] = []
+    for src in scripts:
+        if len(mined) >= 6:
+            break
+        absolute = urljoin(sport_page, src.replace("id_/", "/"))
+        if "forebet.com" not in absolute or not absolute.endswith(".js"):
+            continue
+        time.sleep(pause)
+        try:
+            body = archived_bytes(timestamp, absolute, timeout=timeout, kind="js_")
+        except Exception as exc:
+            mined.append(f"! {absolute}: {type(exc).__name__}")
+            continue
+        for ref in endpoint_candidates(body, sport_page):
+            if ref not in mined:
+                mined.append(ref)
+    out["js_php_refs"] = mined[:10]
+    out["php_refs"] = (out["php_refs"] + [
+        m for m in mined if not m.startswith("!")])[:14]
 
     # Question 1 of the original hold: does a listing row carry a
     # machine-readable start instant, or only rendered local text?
@@ -505,7 +562,16 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float) -> dict[str,
         if sport in SPORTS else board_url
     hunt = hunt_endpoints(page, timeout=timeout, pause=pause)
     report["endpoint_hunt"] = hunt
-    refs = [u for u in hunt.get("php_refs", []) if "getrs" in u.lower()][:3]
+    # Positive control: run the same miner over a football board, where we
+    # already know a JSON endpoint exists. If it finds nothing there either,
+    # the miner is at fault, not the sport.
+    time.sleep(pause)
+    report["endpoint_hunt_control"] = hunt_endpoints(
+        "https://www.forebet.com/en/football-predictions/predictions-1x2",
+        timeout=timeout, pause=pause)
+
+    refs = [u for u in hunt.get("php_refs", [])
+            if any(k in u.lower() for k in ("getrs", "get", "rs.php", "ajax"))][:4]
     if refs:
         time.sleep(pause)
         report["endpoint_tests"] = test_candidates(
@@ -591,6 +657,12 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
                                            or "none found"))
             for needle, sample in (hunt.get("markup_samples") or {}).items():
                 lines.append(f"  markup[{needle}]: {sample[:280]}")
+    control = report.get("endpoint_hunt_control") or {}
+    if control:
+        lines.append("  control (football board) php refs: " +
+                     (", ".join(control.get("php_refs", [])) or
+                      "NONE — the miner itself found nothing where an "
+                      "endpoint is known to exist"))
     tested = report.get("endpoint_tests") or {}
     for url, fp in tested.items():
         if fp.get("json_like"):
@@ -652,7 +724,8 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
         f"::notice title=Kickoff timezone report::{_annotation_escape(compact)}",
     ]
     hunt_blob = json.dumps({k: report.get(k) for k in
-                            ("endpoint_hunt", "endpoint_tests")},
+                            ("endpoint_hunt", "endpoint_hunt_control",
+                             "endpoint_tests")},
                            sort_keys=True)[:3000]
     emitted.append(
         f"::notice title=Endpoint hunt::{_annotation_escape(hunt_blob)}")

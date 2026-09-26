@@ -8,6 +8,9 @@ No test here touches the network.
 from __future__ import annotations
 
 import datetime as dt
+import json
+
+import pytest
 
 from scripts.probe_kickoff_timezone import (
     html_board_rows,
@@ -462,3 +465,93 @@ class TestEndpointHunt:
                 "bytes": 5931, "looks_like": "challenge_page",
                 "json_like": False}}})
         assert not any("JSON ENDPOINT WORKS" in l for l in lines)
+
+
+class TestArchiveLookup:
+    """The availability API only answers for an exact URL, and the sport
+    boards' exact paths are not archived. The CDX index does prefix search."""
+
+    ROWS = json.dumps([
+        ["urlkey", "timestamp", "original", "mimetype", "statuscode"],
+        ["com,forebet)/en/basketball", "20250101000000",
+         "https://www.forebet.com/en/basketball", "text/html", "200"],
+        ["com,forebet)/en/basketball/predictions/2025-01-02", "20250102000000",
+         "https://www.forebet.com/en/basketball/predictions/2025-01-02",
+         "text/html", "200"],
+    ]).encode()
+
+    def test_prefix_search_finds_a_sibling_board(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        calls: list[str] = []
+
+        def _fetch(url, *, timeout):
+            calls.append(url)
+            if "cdx" in url:
+                return self.ROWS
+            return b"<html>archived</html>"
+
+        monkeypatch.setattr(probe, "direct_fetch", _fetch)
+        url, body = probe.archived_html(
+            "https://www.forebet.com/en/basketball/predictions", timeout=1)
+        assert "id_/" in url and body == b"<html>archived</html>"
+        assert any("matchType=prefix" in c for c in calls)
+
+    def test_empty_index_falls_back_to_the_parent_path(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        patterns: list[str] = []
+
+        def _fetch(url, *, timeout):
+            if "cdx" in url:
+                patterns.append(url)
+                return b"[]"
+            return b""
+
+        monkeypatch.setattr(probe, "direct_fetch", _fetch)
+        with pytest.raises(RuntimeError, match="no archived snapshot"):
+            probe.archived_html(
+                "https://www.forebet.com/en/basketball/predictions", timeout=1)
+        assert len(patterns) == 2
+        assert "predictions" not in patterns[1].split("url=")[1].split("&")[0]
+
+    def test_javascript_is_mined_for_endpoints(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        page = b'<html><script src="/js/bsk.js"></script></html>'
+        monkeypatch.setattr(
+            probe, "archived_html",
+            lambda url, *, timeout: (
+                "https://web.archive.org/web/20250101000000id_/x", page))
+        monkeypatch.setattr(
+            probe, "archived_bytes",
+            lambda ts, url, *, timeout, kind="id_":
+                b'xhr.open("GET","/scripts/getrs_bsk.php?ln=en")')
+
+        out = probe.hunt_endpoints(
+            "https://www.forebet.com/en/basketball/predictions",
+            timeout=1, pause=0)
+        assert any("getrs_bsk.php" in ref for ref in out["js_php_refs"])
+        assert any("getrs_bsk.php" in ref for ref in out["php_refs"])
+
+    def test_a_broken_script_fetch_does_not_sink_the_hunt(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(
+            probe, "archived_html",
+            lambda url, *, timeout: (
+                "https://web.archive.org/web/20250101000000id_/x",
+                b'<html><script src="/js/bsk.js"></script></html>'))
+        monkeypatch.setattr(probe, "archived_bytes", _boom("410 gone"))
+
+        out = probe.hunt_endpoints("https://www.forebet.com/en/basketball/p",
+                                   timeout=1, pause=0)
+        assert out["js_php_refs"] == ["! https://www.forebet.com/js/bsk.js: RuntimeError"]
+
+    def test_control_absence_is_reported_as_a_miner_fault(self):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        _, lines = verdict({
+            "fetch_errors": [], "offset": summarise_offsets([]),
+            "endpoint_hunt_control": {"php_refs": []}})
+        assert any("the miner itself found nothing" in l for l in lines)
