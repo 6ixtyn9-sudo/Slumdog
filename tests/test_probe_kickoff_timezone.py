@@ -1318,7 +1318,8 @@ class TestSitemapRoute:
             probe, "relay_request",
             lambda url, headers, *, timeout:
                 b'Markdown Content:\n[{"id":"2476264",'
-                b'"DATE_BAH":"2026-09-27 19:30:00"}]')
+                b'"DATE_BAH":"2026-09-27 19:30:00","host":"Lakers",'
+                b'"guest":"Heat","Pred_1":"71","Pred_2":"29"}]')
         out = probe.test_match_json("lakers-vs-heat", "2476264", timeout=1)
         assert out["empty"] is False and out["has_date_bah"]
 
