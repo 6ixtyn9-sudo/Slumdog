@@ -1359,7 +1359,7 @@ class TestLiveDomSelectors:
         out = probe.live_dom_selectors("2026-09-27", "basketball",
                                        timeout=1, pause=0)
         assert out[".rcnt"]["found"] is False
-        assert out["table"]["found"] is True
+        assert out[".tnms"]["found"] is True
 
     def test_a_missing_rcnt_is_called_out_as_a_parser_problem(self):
         from scripts.probe_kickoff_timezone import summarise_offsets, verdict
@@ -1638,3 +1638,54 @@ class TestArchiveRecency:
                             lambda p, *, limit, timeout: [])
         out = probe.recent_markup_check("basketball", timeout=1, pause=0)
         assert out["error"] == "no snapshots"
+
+
+class TestTeamNameSelector:
+    """The archived markup puts the names in <div class="tnms"> as
+    <meta itemprop="name" content="A vs B" />. The row container came back
+    without them, so ask for the name element itself."""
+
+    def test_the_name_block_is_requested(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        seen: list[str] = []
+        monkeypatch.setattr(
+            probe, "relay_request",
+            lambda url, headers, *, timeout:
+                seen.append(headers.get("X-Target-Selector")) or b"x")
+        probe.live_dom_selectors("2026-09-27", "basketball", timeout=1, pause=0)
+        assert ".tnms" in seen and "[itemprop=name]" in seen
+
+    def test_names_behind_a_selector_are_the_headline(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        roster = " ".join(f"Team{chr(65+i)} Alpha" for i in range(30)).encode()
+
+        def _relay(url, headers, *, timeout):
+            if headers.get("X-Target-Selector") in (".tnms", "div.tnms"):
+                return b"Markdown Content:\n" + roster
+            return b"71 29 92-78"
+
+        monkeypatch.setattr(probe, "relay_request", _relay)
+        out = probe.live_dom_selectors("2026-09-27", "basketball",
+                                       timeout=1, pause=0)
+        assert out[".tnms"]["names"] > 25
+
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "dom_selectors": out})
+        assert any("TEAM NAMES EXTRACTED VIA SELECTOR: .tnms" in l
+                   for l in lines)
+
+    def test_a_numbers_only_extract_is_not_called_names(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout:
+                                b"27/09/2026 LBP 71 29 1 92-78 167.4")
+        out = probe.live_dom_selectors("2026-09-27", "basketball",
+                                       timeout=1, pause=0)
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "dom_selectors": out})
+        assert not any("TEAM NAMES EXTRACTED" in l for l in lines)

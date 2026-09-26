@@ -732,8 +732,13 @@ def live_dom_selectors(date: str, sport_path: str, *,
     """
     url = f"https://www.forebet.com/en/{sport_path}/predictions/{date}"
     out: dict[str, Any] = {}
+    # .tnms is the team-name block: the archived markup carries
+    # <div class="tnms"><meta itemprop="name" content="A vs B" /> inside it.
+    # The row container (.rcnt) came back without names, so ask for the name
+    # element itself rather than the row that should contain it.
     for i, selector in enumerate(
-            (".rcnt", "div.rcnt", "table", ".schema", "tbody", ".moduletable")):
+            (".tnms", "div.tnms", ".rcnt .tnms", "[itemprop=name]",
+             ".homeTeam", ".rcnt")):
         if i:
             time.sleep(min(pause, 4))
         try:
@@ -741,8 +746,16 @@ def live_dom_selectors(date: str, sport_path: str, *,
                 "User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
                 "X-No-Cache": "true", "X-Target-Selector": selector},
                 timeout=timeout)
-            out[selector] = {"bytes": len(body), "found": True,
-                             "sample": body[-200:].decode("utf-8", "replace")}
+            text = body.decode("utf-8", "replace")
+            marker = "Markdown Content:"
+            payload = text.split(marker, 1)[1].strip() if marker in text \
+                else text
+            out[selector] = {
+                "bytes": len(body),
+                "found": True,
+                "names": len(NAME_TOKEN.findall(payload.encode())),
+                "sample": payload[:420],
+            }
         except Exception as exc:
             code = getattr(exc, "code", None)
             out[selector] = {"found": False if code == 422 else None,
@@ -1695,6 +1708,16 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
             lines.append(f"  {selector}: " + (
                 f"FOUND {fp.get('bytes')}B" if fp.get("found")
                 else str(fp.get("error"))))
+        for selector, fp in dom.items():
+            if fp.get("found") and fp.get("sample"):
+                lines.append(f"  {selector} → names={fp.get('names')} "
+                             f"{fp['sample'][:360]}")
+        named = [s for s, fp in dom.items() if (fp.get("names") or 0) > 25]
+        if named:
+            lines.append("TEAM NAMES EXTRACTED VIA SELECTOR: " +
+                         ", ".join(named) + " — identity comes from this "
+                         "element, the numbers from .rcnt, and neither needs "
+                         "the raw HTML.")
         if dom.get(".rcnt", {}).get("found") is False:
             lines.append("THE LIVE BOARD HAS NO .rcnt — the markup our parser "
                          "targets is gone, so fetching alone would not have "
