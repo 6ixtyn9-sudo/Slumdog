@@ -845,6 +845,10 @@ class TestBrowserProbe:
 
         def goto(self, url, **kw):
             self.url = url
+            self.visited = getattr(self, "visited", []) + [url]
+
+        def wait_for_timeout(self, ms):
+            pass
 
         def wait_for_selector(self, selector, **kw):
             self.waited = True
@@ -943,3 +947,33 @@ class TestBrowserProbe:
                               "first_row_text": "Lakers Heat 19:30"}})
         assert any("REAL BROWSER GETS THE BOARD: 82 rows" in l for l in lines)
         assert any("Lakers Heat" in l for l in lines)
+
+
+class TestBrowserWarmup:
+    """Chromium ran the challenge JS and still sat on the interstitial, so
+    the remaining hypothesis is that clearance is granted on the site root
+    and carried into the board by cookie — the way a visitor arrives."""
+
+    def test_the_root_is_visited_before_the_board(self):
+        from scripts.probe_kickoff_timezone import playwright_fetch
+
+        page = TestBrowserProbe._Page('<div class="rcnt">x</div>', [])
+        out = playwright_fetch(
+            "https://www.forebet.com/en/basketball/predictions/2026-09-27",
+            launcher=TestBrowserProbe()._launcher(page))
+        assert page.visited[0] == "https://www.forebet.com/en/"
+        assert page.visited[1].endswith("2026-09-27")
+        assert out["warmup"]
+
+    def test_the_verdict_no_longer_hides_the_fingerprint(self):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        _, lines = verdict({
+            "fetch_errors": [], "offset": summarise_offsets([]),
+            "browser_probe": {"install": "ok", "rows": 0, "bytes": 28664,
+                              "looks_like": "challenge_page",
+                              "title": "Just a moment...",
+                              "wait_error": "TimeoutError"}})
+        line = next(l for l in lines if "BROWSER PROBE FOUND NO ROWS" in l)
+        assert "28664B" in line and "challenge_page" in line
+        assert "TimeoutError" in line

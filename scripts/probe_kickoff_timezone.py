@@ -568,7 +568,16 @@ def playwright_fetch(url: str, *, wait_ms: int = 45000,
         page = browser.new_page(
             user_agent=BROWSER_UA, locale="en-GB",
             viewport={"width": 1280, "height": 900})
+        try:
+            page.goto("https://www.forebet.com/en/", wait_until="load",
+                      timeout=wait_ms)
+            page.wait_for_timeout(12000)
+            out["warmup"] = (page.title() or "")[:80]
+        except Exception as exc:
+            out["warmup"] = f"{type(exc).__name__}"[:40]
+
         page.goto(url, wait_until="domcontentloaded", timeout=wait_ms)
+        page.wait_for_timeout(8000)
         try:
             # The interstitial resolves itself and then the board renders.
             page.wait_for_selector("div.rcnt", timeout=wait_ms)
@@ -931,12 +940,15 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
             if browser.get("first_row_html"):
                 lines.append(f"  first row html: {browser['first_row_html']}")
         else:
-            lines.append(
-                "BROWSER PROBE FOUND NO ROWS: " +
-                str(browser.get("error") or browser.get("install") or
-                    f"{browser.get('bytes')}B {browser.get('looks_like')} "
-                    f"title={browser.get('title')!r} "
-                    f"{browser.get('wait_error', '')}"))
+            detail = (f"install={browser.get('install')} "
+                      f"{browser.get('bytes')}B "
+                      f"{browser.get('looks_like')} "
+                      f"title={browser.get('title')!r} "
+                      f"wait={browser.get('wait_error', '-')} "
+                      f"warmup={browser.get('warmup', '-')}")
+            if browser.get("error"):
+                detail = f"{browser['error']} | {detail}"
+            lines.append("BROWSER PROBE FOUND NO ROWS: " + detail)
 
     modes = report.get("markdown_modes") or {}
     if modes:
