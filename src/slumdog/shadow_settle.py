@@ -233,6 +233,27 @@ SHORT_NOTICE_SHADOW_SUBDIR = "shadow_short_notice"
 KNOWN_SHADOW_SUBDIRS = (STANDARD_SHADOW_SUBDIR, SHORT_NOTICE_SHADOW_SUBDIR)
 
 
+def settlement_receipt_name(
+    shadow_subdir: str = STANDARD_SHADOW_SUBDIR,
+) -> str:
+    """Per-track filename of the one-shot D+1 settlement capture receipt.
+
+    The standard tree keeps the historical, already-committed name. Every
+    other evidence tree gets its own file: two tracks can hold a run for the
+    same target date, and the second settlement of that date must not
+    overwrite the first track's committed capture evidence (the receipt each
+    ``settlement.json`` points at must stay the bytes that graded it).
+    """
+    if shadow_subdir not in KNOWN_SHADOW_SUBDIRS:
+        raise SettlementError(
+            f"unknown shadow evidence tree {shadow_subdir!r} "
+            f"(known: {', '.join(KNOWN_SHADOW_SUBDIRS)})"
+        )
+    if shadow_subdir == STANDARD_SHADOW_SUBDIR:
+        return "settlement_capture_receipt.json"
+    return f"settlement_capture_receipt_{shadow_subdir}.json"
+
+
 def shadow_run_dir(
     repo_root: Path,
     target_date: str,
@@ -338,6 +359,7 @@ def fetch_settlement_capture(
     timeout: int = 45,
     sports: list[str] | None = None,
     receipt_name: str | None = None,
+    capture_purpose: str | None = None,
 ) -> dict[str, Any]:
     """Fetch post-event Forebet listings for sports on ``target_date``.
 
@@ -435,7 +457,11 @@ def fetch_settlement_capture(
         # ``settlement_capture_receipt.json``); ``settlement_completion`` for a
         # later completion-pass re-capture, which must NOT overwrite the D+1
         # receipt already embedded in settlement.json.
-        "capture_purpose": (
+        # An explicit ``capture_purpose`` overrides the inference: a
+        # non-standard track's one-shot D+1 capture also passes a
+        # ``receipt_name`` (its own per-track file) but is still a
+        # ``settlement`` capture, not a completion re-capture.
+        "capture_purpose": capture_purpose or (
             "settlement_completion" if receipt_name is not None else "settlement"
         ),
         "captured": [asdict(item) for item in captured],
@@ -1111,9 +1137,9 @@ def write_settlement_artifact(
     marker_content = f"{artifact_sha}  settlement.json\n"
     marker_path.write_text(marker_content)
 
-    # Find the settlement receipt path
+    # Find the settlement receipt path (per-track filename)
     evidence_dir = repo_root / "data" / "settlement_evidence" / target_date
-    receipt_path = evidence_dir / "settlement_capture_receipt.json"
+    receipt_path = evidence_dir / settlement_receipt_name(shadow_subdir)
 
     return SettlementResult(
         target_date=target_date,
@@ -1192,13 +1218,25 @@ def settle_run(
     if offline:
         settlement_receipt = load_settlement_receipt(
             target_date, repo_root,
-            Path(settlement_receipt_path) if settlement_receipt_path else None,
+            Path(settlement_receipt_path) if settlement_receipt_path
+            else (
+                repo_root / "data" / "settlement_evidence" / target_date
+                / settlement_receipt_name(shadow_subdir)
+            ),
         )
     else:
+        # Per-track receipt file: settling the same date on a second track
+        # must never overwrite the first track's committed capture evidence.
+        track_receipt_name = settlement_receipt_name(shadow_subdir)
         settlement_receipt = fetch_settlement_capture(
             target_date, repo_root,
             workers=workers, pause_seconds=pause_seconds, timeout=timeout,
             sports=sports,
+            receipt_name=(
+                None if shadow_subdir == STANDARD_SHADOW_SUBDIR
+                else track_receipt_name
+            ),
+            capture_purpose="settlement",
         )
 
     # Step 4: Parse settled results

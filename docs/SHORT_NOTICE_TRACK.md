@@ -41,13 +41,16 @@ and no amount of re-running the existing pipeline changes that.
 It decides on the event day and proves pre-event status **per event** against
 the published kickoff, instead of against a date anchor.
 
-An event is admitted only if all four hold:
+An event is admitted only if all five hold:
 
 1. `captured_at <= decision_committed_at` (no capture from the future);
-2. the listing carries a **parseable** scheduled start (Forebet `date_bah` /
-   `DATE_BAH`, UTC because every capture URL pins `tz=0`);
-3. that start falls on the target date; and
-4. that start is at least `min_lead_minutes_before_kickoff` (**120**, frozen
+2. the sport's capture source **proves the kickoff timezone is UTC**
+   (`UTC_KICKOFF_PROVEN_SPORTS` — football's JSON endpoint pins `tz=0`; HTML
+   boards render in the relay's local timezone and are refused, see §6.1);
+3. the listing carries a **parseable** scheduled start (Forebet `date_bah` /
+   `DATE_BAH`);
+4. that start falls on the target date; and
+5. that start is at least `min_lead_minutes_before_kickoff` (**120**, frozen
    in the declaration) after the decision instant.
 
 An event whose start time cannot be parsed is **refused**, never assumed to be
@@ -58,6 +61,7 @@ today" is answerable from the artifact alone:
 ```
 CAPTURED_AT_UNPARSEABLE
 CAPTURED_AFTER_DECISION
+KICKOFF_TIMEZONE_NOT_PROVEN_UTC
 KICKOFF_MISSING_OR_UNPARSEABLE
 KICKOFF_NOT_ON_TARGET_DATE
 INSUFFICIENT_LEAD_BEFORE_KICKOFF
@@ -166,8 +170,104 @@ exits 0. The suite asserts only that the gap is a **subset** of
 `KNOWN_UNCOVERED_PENDING_OWNER_PASTE`, so it is green both before and after —
 but it fails loudly if a new artifact type is ever added without coverage.
 
-## 6. Honest status and limits
+## 6. Red-team review (2026-09-26) — what was wrong and what is now enforced
 
+The track was adversarially reviewed before any real dispatch. Three defects
+were found; all three are fixed in code and pinned by tests.
+
+### 6.1 BLOCKER — kickoff timezone is NOT UTC outside football
+
+The per-event gate's whole claim is "this pick was frozen at least 120 minutes
+before kickoff". That claim is only as good as the timezone of the kickoff we
+read off the listing.
+
+Measured against the live site on 2026-09-26:
+
+| Source | Same board, same date (2026-09-26) | Kickoff shown for match `2468143` |
+| --- | --- | --- |
+| Football JSON `getrs.php?...&tz=0` (what we capture for football) | pinned UTC | `2026-09-26 02:00:00` |
+| HTML 1X2 board `/en/football-predictions/predictions-1x2/2026-09-26` | client-local | `09/25/2026 9:00 PM` |
+| Same HTML board with `?tz=0&tzs=&tze=` appended | **unchanged** | `09/25/2026 9:00 PM` |
+
+Two conclusions:
+
+1. HTML listing pages render kickoff in a timezone derived from the
+   **requesting client** (our relay's egress IP), five hours off UTC in this
+   sample, and
+2. the `tz=0` parameter that pins the football JSON is **ignored** on HTML
+   pages, so the timezone cannot be forced from the URL.
+
+Every sport except football is captured from an HTML board. If the relay ever
+renders east of UTC, an event looks *later* than it is, and a "120 minutes of
+lead" proof could be sold for an event that has already kicked off — the exact
+leakage the gate exists to prevent, arriving silently and in the direction that
+flatters the record.
+
+**Enforcement.** `shadow_evaluator.UTC_KICKOFF_PROVEN_SPORTS` lists the sports
+whose captured kickoff is provably UTC. It currently contains `football` only.
+Any record from any other sport is refused by the gate with the reason
+`KICKOFF_TIMEZONE_NOT_PROVEN_UTC`, counted in the manifest like every other
+rejection, and the daily stage does not even fetch those boards (a
+guaranteed-rejected request is wasted politeness budget); the held-back sports
+are listed in the stage receipt as `timezone_hold_sports`.
+
+**Consequence, stated plainly:** until the hold is lifted, this track cannot
+deliver the "R1 in every sport, every day" goal. It runs football-only.
+
+**How to lift the hold honestly (not yet implemented).** Calibrate the offset
+from evidence instead of assuming it: on the same pass, capture the football
+JSON (true UTC) *and* the football HTML board through the same relay, join the
+two on the match id in the row href, and take the modal difference. That is the
+relay's rendering offset for HTML for that capture; record it in the manifest,
+apply it to the other sports' HTML kickoffs, and refuse the whole track if the
+join is too small or the offsets disagree. One extra request per day, and the
+offset becomes an auditable artifact rather than an assumption.
+
+### 6.2 Settlement evidence collision
+
+`settle_run` wrote every D+1 settlement capture to
+`data/settlement_evidence/<date>/settlement_capture_receipt.json`. Both tracks
+can hold a run for the same date and the driver settles both on the same
+morning, so the short-notice capture would have **overwritten the committed
+evidence file that the frozen track's `settlement.json` points at**.
+
+Fixed: `shadow_settle.settlement_receipt_name(shadow_subdir)` gives each
+non-standard tree its own file
+(`settlement_capture_receipt_shadow_short_notice.json`); the standard name is
+untouched so no existing artifact's pointer goes stale. The per-track capture
+is still labelled `capture_purpose: settlement` (it is a D+1 capture, not a
+completion re-capture).
+
+### 6.3 Request pacing
+
+`capture_selected` fetched every sport of a date in one burst. The short-notice
+stage would have added a third such burst per day. `capture_selected` now takes
+`pause_seconds` and, when set, fetches serially with that gap — the same 62s
+spacing the settlement capture uses. The stage passes the driver's
+`--pause-seconds` through.
+
+### 6.4 Checked and found already safe
+
+- **Finished / in-play rows never enter the track.** `parse_football_json`
+  drops rows with a score or `comment` in `{FT, LIVE}`; `parse_html_events`
+  drops any row whose result cell contains a digit. Both are now pinned by
+  tests rather than left as reading comprehension.
+- **Lead is measured from the decision instant**, which is later than the
+  capture instant — the conservative direction.
+- **One decision per date** (`find_short_notice_run`) stops a second, better
+  informed run from replacing the day's pick.
+- **Tree selection is allowlisted** (`shadow_run_dir` rejects unknown subdirs,
+  so `--shadow-subdir` cannot traverse).
+- **Digest separation**: `timing_track` is part of the input digest, so a
+  short-notice run can never collide with a frozen run's digest.
+- **Stage isolation**: every failure mode returns a status dict; the stage
+  cannot abort the 24h pipeline.
+
+## 7. Honest status and limits
+
+- **The track is football-only right now** because of the kickoff-timezone
+  hold in §6.1. Every other sport is refused, by design, until the offset can
+  be proven from evidence.
 - **No real short-notice run exists yet.** Nothing here may be reported as a
   hit rate until the stage has dispatched and settled real dates.
 - The track's picks have **hours**, not a day, of lead time. That is a weaker
@@ -183,14 +283,14 @@ but it fails loudly if a new artifact type is ever added without coverage.
 - The completion pass (append-only supplements for UNSETTLED rows) currently
   runs on the frozen tree only.
 
-## 7. Where the code lives
+## 8. Where the code lives
 
 | Concern | File |
 | --- | --- |
-| Track policy, kickoff parsing, per-event gate | `src/slumdog/shadow_evaluator.py` (`TrackPolicy`, `track_policy`, `parse_kickoff_utc`, `_timing_classify_short_notice`) |
+| Track policy, kickoff parsing, per-event gate | `src/slumdog/shadow_evaluator.py` (`TrackPolicy`, `track_policy`, `parse_kickoff_utc`, `_timing_classify_short_notice`, `UTC_KICKOFF_PROVEN_SPORTS`) |
 | Record-level kickoff | `src/slumdog/shadow_contracts.py` (`PreEventRecord.kickoff`) |
 | Declaration | `config/shadow_evaluator_short_notice.json` |
-| Evidence-tree selection for settlement | `src/slumdog/shadow_settle.py` (`shadow_run_dir`, `shadow_subdir=` on every entry point, CLI `--shadow-subdir`) |
+| Evidence-tree selection for settlement | `src/slumdog/shadow_settle.py` (`shadow_run_dir`, `settlement_receipt_name`, `shadow_subdir=` on every entry point, CLI `--shadow-subdir`) |
 | Daily stage | `scripts/forward_shadow_batch.py` (`run_short_notice_for_date`, `find_short_notice_run`, `summarise_short_notice_run`, `--skip-short-notice`) |
 | Evidence-coverage checker | `scripts/check_workflow_evidence_globs.py` |
-| Tests | `tests/test_short_notice_track.py` (61), `tests/test_short_notice_batch.py` (31) |
+| Tests | `tests/test_short_notice_track.py` (74), `tests/test_short_notice_batch.py` (36) |

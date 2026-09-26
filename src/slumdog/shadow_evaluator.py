@@ -753,6 +753,28 @@ def _timing_classify(
     return timed, timing_rejected, malformed
 
 
+# Sports whose captured kickoff timestamp is PROVEN to be UTC.
+#
+# Red-team finding 2026-09-26 (measured against the live site, not assumed):
+#   * Football is captured from the JSON endpoint ``getrs.php?...&tz=0``,
+#     which pins the rendering timezone. ``DATE_BAH`` is therefore UTC.
+#   * Every other sport is captured from an HTML listing page, whose times
+#     are rendered in a timezone derived from the REQUESTING CLIENT (our
+#     relay's egress IP), not UTC, and the ``tz=0`` query parameter is
+#     IGNORED on those pages. Evidence: the 1X2 board for 2026-09-26
+#     displayed "09/25/2026 9:00 PM" for match 2468143 while the tz=0 JSON
+#     gave ``DATE_BAH = 2026-09-26 02:00:00`` for the same board — a 5 hour
+#     client-side offset, unchanged by appending ``?tz=0``.
+#
+# A positive (east-of-UTC) rendering offset would make an event look LATER
+# than it is, i.e. it could let this track admit an event that has already
+# started — the exact leakage the lead gate exists to prevent. The offset is
+# not observable from the artifact, so the track refuses these sports rather
+# than guessing. Extending this set requires a per-capture calibration that
+# recovers the offset from evidence; see docs/SHORT_NOTICE_TRACK.md.
+UTC_KICKOFF_PROVEN_SPORTS = frozenset({"football"})
+
+
 # Per-event timing rejection reasons on the SHORT_NOTICE track. Every
 # rejected record lands in exactly one bucket and the buckets are reported in
 # the manifest, so "why did this sport produce nothing today" is answerable
@@ -760,6 +782,7 @@ def _timing_classify(
 SHORT_NOTICE_REJECTION_REASONS = (
     "CAPTURED_AT_UNPARSEABLE",
     "CAPTURED_AFTER_DECISION",
+    "KICKOFF_TIMEZONE_NOT_PROVEN_UTC",
     "KICKOFF_MISSING_OR_UNPARSEABLE",
     "KICKOFF_NOT_ON_TARGET_DATE",
     "INSUFFICIENT_LEAD_BEFORE_KICKOFF",
@@ -805,6 +828,13 @@ def _timing_classify_short_notice(
             continue
         if cap_at > decision_dt:
             reasons["CAPTURED_AFTER_DECISION"] += 1
+            continue
+        if r.sport not in UTC_KICKOFF_PROVEN_SPORTS:
+            # The lead proof is only as good as the kickoff's timezone.
+            # See UTC_KICKOFF_PROVEN_SPORTS: HTML boards render in the
+            # relay's local timezone, so their kickoff cannot be proven
+            # pre-event. Refuse instead of assuming UTC.
+            reasons["KICKOFF_TIMEZONE_NOT_PROVEN_UTC"] += 1
             continue
         kickoff_dt = parse_kickoff_utc(r.kickoff)
         if kickoff_dt is None:

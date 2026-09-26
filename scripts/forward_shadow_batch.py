@@ -872,9 +872,12 @@ def run_short_notice_for_date(
     short-notice failure can never cost the 24h-frozen forward pass.
     """
     from slumdog.forebet import ForebetCollector
+    from slumdog.shadow_evaluator import UTC_KICKOFF_PROVEN_SPORTS
+    from slumdog.sports import SPORTS
 
     entry: dict = {
         "target_date": target_date, "status": "PENDING", "run_id": None,
+        "timezone_hold_sports": [],
         "track": "SHORT_NOTICE", "capture_receipt": None,
         "captured_sports": 0, "capture_failures": 0,
         "sports_with_r1": [], "r1_count": 0, "selection_count": 0,
@@ -900,8 +903,17 @@ def run_short_notice_for_date(
     entry["capture_receipt"] = receipt_name
     try:
         collector = ForebetCollector(root=repo_root, timeout=timeout, workers=1)
+        # Only fetch boards this track is allowed to decide from. Every other
+        # sport's HTML listing renders kickoff in the relay's local timezone,
+        # so the evaluator refuses it (KICKOFF_TIMEZONE_NOT_PROVEN_UTC) and
+        # fetching it would be a guaranteed-rejected request. Paced the same
+        # way as the settlement capture.
+        entry["timezone_hold_sports"] = sorted(
+            s for s in SPORTS if s not in UTC_KICKOFF_PROVEN_SPORTS)
         collector.capture_selected(
-            target_date, force=True, receipt_name=receipt_name)
+            target_date, sorted(UTC_KICKOFF_PROVEN_SPORTS),
+            force=True, receipt_name=receipt_name,
+            pause_seconds=pause_seconds)
         try:
             receipt = json.loads((reports_dir / receipt_name).read_text())
             entry["captured_sports"] = len(receipt.get("captured", []))

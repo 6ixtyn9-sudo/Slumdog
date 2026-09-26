@@ -473,7 +473,8 @@ class ForebetCollector:
 
     def capture_selected(self, target_date: str, sports: list[str] | None = None,
                          *, force: bool = False,
-                         receipt_name: str | None = None) -> list[RawCapture]:
+                         receipt_name: str | None = None,
+                         pause_seconds: float = 0.0) -> list[RawCapture]:
         date.fromisoformat(target_date)
         selected = list(SPORTS) if not sports else sports
         unknown = [sport for sport in selected if sport not in SPORTS]
@@ -495,13 +496,26 @@ class ForebetCollector:
         to_fetch = [sport for sport in selected if sport not in existing]
         captures: list[RawCapture] = [cap for cap in self._existing_captures(target_date) if cap.sport in selected]
         failures: list[str] = []
-        with ThreadPoolExecutor(max_workers=self.workers) as executor:
-            futures = {sport: executor.submit(self._fetch, sport, target_date) for sport in to_fetch}
-            for sport in to_fetch:  # deterministic result order
+        if pause_seconds and pause_seconds > 0:
+            # Paced serial path. A same-day stage fetches every sport in one
+            # burst; ``pause_seconds`` spaces those requests the same way the
+            # settlement capture does, so an extra daily stage does not raise
+            # the request rate seen by the source.
+            for i, sport in enumerate(to_fetch):
+                if i > 0:
+                    time.sleep(pause_seconds)
                 try:
-                    captures.append(futures[sport].result())
+                    captures.append(self._fetch(sport, target_date))
                 except Exception as exc:  # each satellite fails independently
                     failures.append(f"{sport}:{type(exc).__name__}:{exc}")
+        else:
+            with ThreadPoolExecutor(max_workers=self.workers) as executor:
+                futures = {sport: executor.submit(self._fetch, sport, target_date) for sport in to_fetch}
+                for sport in to_fetch:  # deterministic result order
+                    try:
+                        captures.append(futures[sport].result())
+                    except Exception as exc:  # each satellite fails independently
+                        failures.append(f"{sport}:{type(exc).__name__}:{exc}")
 
         # Capture the five distinct JSON markets for the date. They cover all
         # matches in one request each, so they are cheap enough to fetch for

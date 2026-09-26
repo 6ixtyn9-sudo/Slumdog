@@ -1,5 +1,14 @@
 # Slumdog Living Handoff
 
+**Last updated:** 2026-09-26 (UTC, later session) — **RED-TEAM PASS ON THE SHORT_NOTICE TRACK BEFORE ITS FIRST DISPATCH.**
+
+- **Blocker found and fixed: the kickoff timezone was an assumption, not a fact.** The gate's whole claim is "frozen ≥120 minutes before kickoff", which is only as good as the timezone of the kickoff we read. Only football's capture URL pins `tz=0`. A live measurement on 2026-09-26 showed HTML boards render kickoff in the requesting client's timezone (5h off UTC in the sample) and ignore `?tz=0`. Sports other than football are now refused with `KICKOFF_TIMEZONE_NOT_PROVEN_UTC` (`UTC_KICKOFF_PROVEN_SPORTS`), and the stage does not fetch those boards; they are listed as `timezone_hold_sports` in the stage receipt. The track is therefore football-only until an evidence-based calibration of the relay's rendering offset is built (design recorded in `docs/SHORT_NOTICE_TRACK.md` §6.1).
+- **Settlement evidence collision fixed.** `settlement_receipt_name(shadow_subdir)` gives each non-standard tree its own D+1 receipt file, so a second track settling the same date can no longer overwrite the frozen track's committed capture evidence.
+- **Pacing fixed.** `ForebetCollector.capture_selected(..., pause_seconds=)` fetches serially with the settlement capture's 62s spacing; the short-notice stage passes the driver's value through, so the new daily stage does not raise the request rate.
+- **Confirmed safe (now pinned by tests, not by reading):** finished/in-play rows are dropped by `parse_football_json` and `parse_html_events`; lead measured from the decision instant; one decision per date; tree allowlist; digest separation; stage isolation.
+- **Gates:** 1186 passed, pyflakes clean, `py_compile` ok, `git diff --check` ok. New tests: `tests/test_short_notice_track.py` 74, `tests/test_short_notice_batch.py` 36.
+- **Unchanged:** no workflow file touched; the delta-evidence persist gap still needs the owner paste (`docs/SHORT_NOTICE_TRACK.md` §5); no real short-notice run exists.
+
 **Last updated:** 2026-09-26 (UTC) — **SHORT_NOTICE TRACK LANDED LOCALLY (owner decision 2026-09-26) + WORKFLOW EVIDENCE-GLOB GAP FOUND AND DOCUMENTED FOR OWNER PASTE.**
 
 1. **Why.** The product promises a shortlist per sport; the frozen track has been delivering football only since 2026-09-21 (09-23 and 09-25 also had handball). Root cause is capture timing, not the model: Forebet publishes basketball / hockey / baseball / tennis / rugby / american-football boards only about a day out, so the date-anchored 24h gate (`captured_at` and `decision_committed_at` <= `target_date 00:00 UTC - 24h`) can never admit them — the T+1/T+2 refresh added on 2026-09-22 still gets `target date missing from HTML` for all of them. The owner chose (2026-09-26) a **separate, clearly-labelled short-notice track** over relaxing the frozen gate.

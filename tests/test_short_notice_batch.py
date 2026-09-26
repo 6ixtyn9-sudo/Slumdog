@@ -134,7 +134,7 @@ class TestShortNoticeStage:
         assert entry["status"] == "SHORT_NOTICE_FAILED"
         assert "relay down" in entry["error"]
 
-    def _stub_collector(self, tmp_path, monkeypatch, sports: list[str],
+    def _stub_collector(self, tmp_path, monkeypatch, captured_sports: list[str],
                         failures: int = 0):
         reports = tmp_path / "data" / "reports"
         reports.mkdir(parents=True, exist_ok=True)
@@ -143,11 +143,11 @@ class TestShortNoticeStage:
             def __init__(self, **kwargs):
                 pass
 
-            def capture_selected(self, target_date, force=False,
-                                 receipt_name=None):
+            def capture_selected(self, target_date, sports=None, force=False,
+                                 receipt_name=None, pause_seconds=0):
                 (reports / receipt_name).write_text(json.dumps({
                     "target_date": target_date,
-                    "captured": [{"sport": s} for s in sports],
+                    "captured": [{"sport": s} for s in captured_sports],
                     "failures": [f"x{i}" for i in range(failures)],
                 }))
                 return []
@@ -417,3 +417,153 @@ class TestWorkflowGlobCoverage:
                          "settlement.json", "settlement.json.sha256"):
             assert is_covered("data/reports/shadow", filename, rules)
         assert is_covered("data/reports", "capture_2026-09-26.json", rules)
+
+
+# ===========================================================================
+# Group 4: settlement evidence separation (red-team finding 2026-09-26)
+#
+# Both tracks can hold a run for the SAME target date, and the driver settles
+# both on the same morning. The settlement capture receipt is written under
+# data/settlement_evidence/<date>/, so a shared filename would let the second
+# track's capture overwrite the committed evidence the first track's
+# settlement.json points at.
+# ===========================================================================
+
+
+class TestSettlementEvidenceSeparation:
+    def test_receipt_name_is_per_track(self):
+        from slumdog.shadow_settle import (
+            SHORT_NOTICE_SHADOW_SUBDIR,
+            STANDARD_SHADOW_SUBDIR,
+            settlement_receipt_name,
+        )
+
+        standard = settlement_receipt_name(STANDARD_SHADOW_SUBDIR)
+        short_notice = settlement_receipt_name(SHORT_NOTICE_SHADOW_SUBDIR)
+        # The standard name is historical and already committed: it must not
+        # change, or every prior settlement's pointer goes stale.
+        assert standard == "settlement_capture_receipt.json"
+        assert short_notice != standard
+        assert SHORT_NOTICE_SHADOW_SUBDIR in short_notice
+
+    def test_unknown_tree_is_refused(self):
+        from slumdog.shadow_settle import SettlementError, settlement_receipt_name
+
+        with pytest.raises(SettlementError, match="unknown shadow evidence tree"):
+            settlement_receipt_name("../../etc")
+
+    def test_short_notice_settlement_writes_its_own_receipt_file(
+            self, tmp_path, monkeypatch):
+        """The short-notice settlement must not reuse — and therefore must
+        not clobber — the standard track's receipt for the same date."""
+        import slumdog.shadow_settle as ss
+
+        # Standard track already settled this date: its receipt is on disk.
+        evidence = tmp_path / "data" / "settlement_evidence" / TARGET_DATE
+        evidence.mkdir(parents=True)
+        standard_receipt = evidence / "settlement_capture_receipt.json"
+        standard_receipt.write_text(json.dumps({"marker": "standard"}))
+
+        seen: dict = {}
+
+        def _fake_fetch(target_date, repo_root, **kwargs):
+            seen.update(kwargs)
+            receipt = {
+                "target_date": target_date,
+                "generated_at": "2026-09-27T06:00:00Z",
+                "capture_type": "settlement_evidence",
+                "capture_purpose": kwargs.get("capture_purpose"),
+                "captured": [], "failures": [],
+            }
+            name = kwargs.get("receipt_name") or "settlement_capture_receipt.json"
+            (Path(repo_root) / "data" / "settlement_evidence" / target_date
+             / name).write_text(json.dumps(receipt))
+            return receipt
+
+        monkeypatch.setattr(ss, "fetch_settlement_capture", _fake_fetch)
+        _write_run(tmp_path, "shadow_short_notice", TARGET_DATE, RUN_ID,
+                   [_selection("football", 1)])
+
+        result = ss.settle_run(
+            target_date=TARGET_DATE, run_id=RUN_ID, repo_root=tmp_path,
+            shadow_subdir="shadow_short_notice",
+            settled_at="2026-09-27T06:00:00Z",
+        )
+
+        assert seen["receipt_name"] == (
+            "settlement_capture_receipt_shadow_short_notice.json")
+        # A per-track D+1 capture is still a settlement, not a completion pass.
+        assert seen["capture_purpose"] == "settlement"
+        # The standard track's committed evidence is untouched.
+        assert json.loads(standard_receipt.read_text()) == {"marker": "standard"}
+        assert (evidence
+                / "settlement_capture_receipt_shadow_short_notice.json").is_file()
+        assert result.settlement_receipt_path.endswith(
+            "settlement_capture_receipt_shadow_short_notice.json")
+
+
+# ===========================================================================
+# Group 5: request pacing and timezone hold on the same-day capture
+# ===========================================================================
+
+
+class TestShortNoticeCaptureIsPacedAndScoped:
+    def test_capture_selected_paces_serial_fetches(self, tmp_path, monkeypatch):
+        from slumdog import forebet
+
+        sleeps: list[float] = []
+        fetched: list[str] = []
+        monkeypatch.setattr(forebet.time, "sleep", lambda s: sleeps.append(s))
+
+        collector = forebet.ForebetCollector(root=tmp_path, workers=1)
+        monkeypatch.setattr(
+            collector, "_fetch",
+            lambda sport, target_date: fetched.append(sport) or forebet.RawCapture(
+                sport=sport, target_date=target_date,
+                captured_at="2026-09-26T04:00:00Z",
+                source_url="https://x.invalid", relay_url="https://r.invalid",
+                body_format="html", sha256="0" * 64, bytes=1,
+                body_path="data/raw/x.txt", metadata_path="data/raw/x.json",
+                route="test"))
+
+        # No football: its capture also triggers the markets fetch, whose
+        # own retry backoff would pollute the recorded sleeps.
+        collector.capture_selected(
+            TARGET_DATE, ["handball", "rugby", "volleyball"],
+            force=True, pause_seconds=62)
+
+        assert fetched == ["handball", "rugby", "volleyball"]
+        # One pause BETWEEN each pair of requests, never before the first.
+        assert sleeps == [62, 62]
+
+    def test_stage_only_captures_sports_it_may_decide_from(
+            self, tmp_path, monkeypatch):
+        from slumdog.shadow_evaluator import UTC_KICKOFF_PROVEN_SPORTS
+
+        calls: dict = {}
+
+        class _FakeCollector:
+            def __init__(self, **kwargs):
+                pass
+
+            def capture_selected(self, target_date, sports=None, **kwargs):
+                calls["sports"] = sports
+                calls["pause_seconds"] = kwargs.get("pause_seconds")
+                (tmp_path / "data" / "reports").mkdir(parents=True, exist_ok=True)
+                (tmp_path / "data" / "reports" / kwargs["receipt_name"]).write_text(
+                    json.dumps({"captured": [], "failures": []}))
+                return []
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector", _FakeCollector)
+        entry = fsb.run_short_notice_for_date(
+            TARGET_DATE, tmp_path, pause_seconds=62,
+            base_date=dt.date.fromisoformat(TARGET_DATE))
+
+        assert entry["status"] == "NO_CAPTURES"
+        assert calls["sports"] == sorted(UTC_KICKOFF_PROVEN_SPORTS)
+        assert calls["pause_seconds"] == 62
+        # Every sport held back by the timezone finding is named in the receipt
+        # entry, so "why is basketball missing" is answerable from evidence.
+        assert "basketball" in entry["timezone_hold_sports"]
+        assert "football" not in entry["timezone_hold_sports"]

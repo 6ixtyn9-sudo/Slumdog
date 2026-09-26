@@ -30,6 +30,7 @@ import pytest
 from slumdog.shadow_contracts import PreEventRecord
 from slumdog.shadow_evaluator import (
     MIN_SHORT_NOTICE_LEAD_MINUTES,
+    UTC_KICKOFF_PROVEN_SPORTS,
     SHORT_NOTICE_ARTIFACT_ROOT,
     SHORT_NOTICE_DECLARATION_VERSION,
     SHORT_NOTICE_TRACK,
@@ -48,6 +49,8 @@ from slumdog.shadow_settle import (
     load_prediction_run,
     shadow_run_dir,
 )
+
+from slumdog.sports import SPORTS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STANDARD_DECL = REPO_ROOT / "config" / "shadow_evaluator.json"
@@ -98,15 +101,17 @@ def _record(
     event_date: str = TARGET_DATE,
     p1: str = "Arsenal",
     p2: str = "Liverpool",
+    sport: str = "football",
+    draw: float | None = 0.10,
 ) -> PreEventRecord:
     return PreEventRecord(
-        event_id=event_id, sport="football", event_date=event_date,
+        event_id=event_id, sport=sport, event_date=event_date,
         participant_1=p1, participant_2=p2,
-        probability_1=0.50, probability_2=0.40, draw_probability=0.10,
+        probability_1=0.50, probability_2=0.40, draw_probability=draw,
         source_url=f"https://example.invalid/{event_id}",
         raw_sha256=hashlib.sha256(event_id.encode()).hexdigest(),
         captured_at=captured_at,
-        body_path=f"data/raw/football/{event_date}/{event_id}.txt",
+        body_path=f"data/raw/{sport}/{event_date}/{event_id}.txt",
         route="snapshot", kickoff=kickoff,
     )
 
@@ -593,3 +598,149 @@ class TestSettlementTreeSeparation:
 
         with pytest.raises(SettlementError, match="not found"):
             load_prediction_run(TARGET_DATE, run_id, tmp_root)
+
+
+# ---------------------------------------------------------------------------
+# Kickoff timezone proof (red-team finding 2026-09-26)
+#
+# Forebet's HTML listing pages render kickoff in a timezone derived from the
+# requesting client, and ``?tz=0`` is ignored there; only the football JSON
+# endpoint pins ``tz=0``. A positive (east-of-UTC) rendering offset makes an
+# event look LATER than it is, which is exactly how an already-started event
+# could sneak past a lead gate. The track therefore refuses any sport whose
+# kickoff timezone is not proven.
+# ---------------------------------------------------------------------------
+
+
+class TestKickoffTimezoneProof:
+    """Fail-closed hold on sports whose kickoff timezone is unproven."""
+
+    def test_only_tz_pinned_sports_are_admissible(self):
+        assert UTC_KICKOFF_PROVEN_SPORTS == frozenset({"football"})
+
+    def test_football_capture_url_pins_tz_zero(self):
+        from slumdog.forebet import source_url
+        from slumdog.sports import SPORTS
+
+        url = source_url(SPORTS["football"], TARGET_DATE)
+        assert "tz=0" in url
+        for sport in UTC_KICKOFF_PROVEN_SPORTS:
+            assert "tz=0" in source_url(SPORTS[sport], TARGET_DATE)
+
+    def test_no_html_sport_is_treated_as_utc(self):
+        from slumdog.forebet import source_url
+        from slumdog.sports import SPORTS
+
+        # Any sport whose board is an HTML page must NOT be admissible:
+        # the tz parameter is ignored on those pages.
+        for sport, spec in SPORTS.items():
+            if "tz=0" not in source_url(spec, TARGET_DATE):
+                assert sport not in UTC_KICKOFF_PROVEN_SPORTS
+
+    @pytest.mark.parametrize(
+        "sport", ["basketball", "hockey", "baseball", "rugby", "handball"])
+    def test_unproven_timezone_sport_is_refused(self, sport):
+        decision = dt.datetime(2026, 9, 26, 6, 0, tzinfo=dt.timezone.utc)
+        draw = 0.10 if SPORTS[sport].draw_possible else None
+        rec = _record(
+            f"{sport}:1", sport=sport, kickoff=f"{TARGET_DATE} 23:00",
+            captured_at=f"{TARGET_DATE}T04:00:00Z", draw=draw,
+        )
+        timed, rejected, malformed, reasons = _timing_classify_short_notice(
+            [rec], target_date=TARGET_DATE, decision_dt=decision,
+            min_lead_minutes=MIN_SHORT_NOTICE_LEAD_MINUTES,
+        )
+        # Ample lead, parseable kickoff, on the target date — refused purely
+        # because its timezone cannot be proven.
+        assert timed == []
+        assert rejected == 1
+        assert malformed == 0
+        assert reasons["KICKOFF_TIMEZONE_NOT_PROVEN_UTC"] == 1
+        assert reasons["INSUFFICIENT_LEAD_BEFORE_KICKOFF"] == 0
+
+    def test_proven_sport_still_admitted(self):
+        decision = dt.datetime(2026, 9, 26, 6, 0, tzinfo=dt.timezone.utc)
+        rec = _record("football:1", kickoff=f"{TARGET_DATE} 23:00")
+        timed, rejected, _, reasons = _timing_classify_short_notice(
+            [rec], target_date=TARGET_DATE, decision_dt=decision,
+            min_lead_minutes=MIN_SHORT_NOTICE_LEAD_MINUTES,
+        )
+        assert [r.event_id for r in timed] == ["football:1"]
+        assert rejected == 0
+        assert reasons["KICKOFF_TIMEZONE_NOT_PROVEN_UTC"] == 0
+
+    def test_timezone_check_precedes_kickoff_parse(self):
+        """An unparseable kickoff on an unproven sport reports the timezone
+        hold, not a parse failure: the sport is inadmissible either way."""
+        decision = dt.datetime(2026, 9, 26, 6, 0, tzinfo=dt.timezone.utc)
+        rec = _record("hockey:1", sport="hockey", kickoff="", draw=None)
+        _, _, _, reasons = _timing_classify_short_notice(
+            [rec], target_date=TARGET_DATE, decision_dt=decision,
+            min_lead_minutes=MIN_SHORT_NOTICE_LEAD_MINUTES,
+        )
+        assert reasons["KICKOFF_TIMEZONE_NOT_PROVEN_UTC"] == 1
+        assert reasons["KICKOFF_MISSING_OR_UNPARSEABLE"] == 0
+
+    def test_capture_after_decision_still_wins_over_timezone_hold(self):
+        decision = dt.datetime(2026, 9, 26, 6, 0, tzinfo=dt.timezone.utc)
+        rec = _record(
+            "hockey:1", sport="hockey", draw=None,
+            captured_at=f"{TARGET_DATE}T09:00:00Z")
+        _, _, _, reasons = _timing_classify_short_notice(
+            [rec], target_date=TARGET_DATE, decision_dt=decision,
+            min_lead_minutes=MIN_SHORT_NOTICE_LEAD_MINUTES,
+        )
+        assert reasons["CAPTURED_AFTER_DECISION"] == 1
+        assert reasons["KICKOFF_TIMEZONE_NOT_PROVEN_UTC"] == 0
+
+
+class TestFinishedRowsNeverEnterTheTrack:
+    """Both listing parsers drop scored / in-play rows before any track
+    sees them. A finished row carries a settled outcome, so admitting one
+    would be outright leakage rather than a timing question."""
+
+    def test_football_json_skips_finished_and_live_rows(self):
+        from slumdog.parsers import parse_football_json
+
+        def _row(rid, **over):
+            row = {
+                "id": rid, "DATE_BAH": f"{TARGET_DATE} 18:00:00",
+                "Pred_1": "50", "Pred_X": "20", "Pred_2": "30",
+                "HOST_NAME": "A", "GUEST_NAME": "B", "Host_SC": None,
+                "comment": None,
+            }
+            row.update(over)
+            return row
+
+        body = json.dumps([[
+            _row("1"),
+            _row("2", Host_SC="2", Guest_SC="1", comment="FT"),
+            _row("3", comment="LIVE"),
+        ]]).encode()
+        events = parse_football_json(
+            body, TARGET_DATE, f"{TARGET_DATE}T04:00:00Z", "https://x.invalid")
+        assert [e.event_id for e in events] == ["football:1"]
+
+    def test_html_listing_skips_rows_with_a_score(self):
+        from slumdog.parsers import parse_html_events
+
+        def _html(result_cell: str) -> bytes:
+            return (
+                '<div class="rcnt">'
+                '<a class="tnmscn" href="/en/basketball/matches/a-b-99">x</a>'
+                '<span class="homeTeam">A</span>'
+                '<span class="awayTeam">B</span>'
+                f'<span class="date_bah">26/09/2026 18:00</span>'
+                '<div class="fprc"><span>60</span><span>40</span></div>'
+                f'<div class="lscr_td">{result_cell}</div>'
+                '</div>'
+            ).encode()
+
+        pre = parse_html_events(
+            _html(""), "basketball", TARGET_DATE,
+            f"{TARGET_DATE}T04:00:00Z", "https://x.invalid")
+        assert len(pre) == 1
+        finished = parse_html_events(
+            _html("88 - 81"), "basketball", TARGET_DATE,
+            f"{TARGET_DATE}T04:00:00Z", "https://x.invalid")
+        assert finished == []
