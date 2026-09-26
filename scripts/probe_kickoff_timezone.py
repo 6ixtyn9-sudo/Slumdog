@@ -529,6 +529,104 @@ MATCH_LINK = re.compile(
 CLOCK = re.compile(rb"\b([01]?\d|2[0-3]):[0-5]\d\b")
 
 
+def api_endpoint_sweep(date: str, *, timeout: int,
+                       pause: float) -> dict[str, Any]:
+    """Test the sibling API endpoints mined from the bundle, direct and relayed.
+
+    The bundle referenced getjson.php?gdt=, getjson_y.php?lg=, getjson_t.php,
+    getftr.php?int=, get_live_r.php and get_menu.php, and none of them were
+    ever tried — the earlier sweep only varied getrs.php's tp value. These
+    matter because the bot check is on the site, not on its APIs: getrs.php
+    answers fine, which is the sole reason football still captures. If any of
+    these serves other-sport rows, the blocked sports are capturable again.
+    """
+    base = "https://www.forebet.com/scripts/"
+    targets = {
+        "getjson_gdt": f"{base}getjson.php?gdt={date}",
+        "getjson_gdt_ln": f"{base}getjson.php?ln=en&gdt={date}",
+        "getftr_int": f"{base}getftr.php?int=1&ln=en",
+        "get_live_r": f"{base}get_live_r.php?ln=en",
+        "get_menu": f"{base}get_menu.php?ln=en",
+        "getrs_control": (f"{base}getrs.php?ln=en&tp=1x2&in={date}"
+                          "&ord=0&tz=0&tzs=&tze="),
+    }
+    out: dict[str, Any] = {}
+    for i, (name, url) in enumerate(targets.items()):
+        if i:
+            time.sleep(min(pause, 5))
+        entry: dict[str, Any] = {"url": url}
+        # Direct first: if the APIs are not behind the check, this is the
+        # cheapest possible capture route — no relay, no rate limit.
+        try:
+            body = direct_fetch(url, timeout=timeout, attempts=1)
+            entry["direct"] = _api_fingerprint(body)
+        except Exception as exc:
+            entry["direct"] = {"error": f"{type(exc).__name__}: {exc}"[:90]}
+        if not (entry["direct"].get("json_like") if
+                isinstance(entry["direct"], dict) else False):
+            time.sleep(min(pause, 5))
+            try:
+                body = relay_request(RELAY_BASE + url, {
+                    "User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
+                    "X-No-Cache": "true"}, timeout=timeout)
+                entry["relayed"] = _api_fingerprint(body)
+            except Exception as exc:
+                entry["relayed"] = {"error": f"{type(exc).__name__}: {exc}"[:90]}
+        out[name] = entry
+    return out
+
+
+def _api_fingerprint(body: bytes) -> dict[str, Any]:
+    stripped = body.lstrip()
+    payload_at = body.lower().find(b"[[{")
+    json_like = stripped[:1] in (b"[", b"{") or payload_at != -1
+    return {
+        "bytes": len(body),
+        "json_like": json_like,
+        "challenge": looks_like_challenge(body),
+        "sample": body[max(0, payload_at): max(0, payload_at) + 260].decode(
+            "utf-8", "replace"),
+    }
+
+
+def looks_like_challenge(body: bytes) -> bool:
+    lowered = body.lower()
+    return b"just a moment" in lowered or b"cf_chl" in lowered
+
+
+def save_page_now(page_url: str, *, timeout: int) -> dict[str, Any]:
+    """Ask the archive to fetch the live page, then read what it captured.
+
+    Archive.org crawls from its own infrastructure, and the runner can
+    already read archived snapshots — so if their crawler is allowed
+    through, this is a rendering proxy that costs nothing.
+    """
+    out: dict[str, Any] = {"page": page_url}
+    try:
+        direct_fetch("https://web.archive.org/save/" + page_url,
+                     timeout=timeout, attempts=1)
+        out["save"] = "requested"
+    except Exception as exc:
+        out["save"] = f"{type(exc).__name__}: {exc}"[:110]
+
+    # Whether or not the save call returned cleanly, ask the index what the
+    # newest snapshot now is.
+    try:
+        snaps = cdx_snapshots(page_url.split("://", 1)[-1], limit=40,
+                              timeout=timeout)
+        out["snapshots"] = len(snaps)
+        if snaps:
+            timestamp, original = snaps[-1]
+            out["newest"] = timestamp
+            body = archived_bytes(timestamp, original, timeout=timeout)
+            out["bytes"] = len(body)
+            out["rows"] = body.lower().count(b'class="rcnt')
+            out["challenge"] = looks_like_challenge(body)
+    except Exception as exc:
+        out["read_error"] = f"{type(exc).__name__}: {exc}"[:110]
+    return out
+
+
 def install_playwright(*, runner: Any = None) -> str:
     """Install Playwright + Chromium on the runner, returning a status."""
     import subprocess
@@ -751,7 +849,7 @@ def probe_routes(board_url: str, *, timeout: int, pause: float) -> dict[str, Any
 
 
 def run_probe(date: str, *, sport: str, timeout: int, pause: float,
-              run_hunt: bool = False) -> dict[str, Any]:
+              run_hunt: bool = False, run_browser: bool = False) -> dict[str, Any]:
     report: dict[str, Any] = {
         "probed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "target_date": date,
@@ -815,8 +913,22 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
         date, SPORTS[sport].path if sport in SPORTS else sport,
         timeout=timeout, pause=pause)
 
-    report["browser_probe"] = browser_probe(
-        date, SPORTS[sport].path if sport in SPORTS else sport)
+    time.sleep(pause)
+    report["api_sweep"] = api_endpoint_sweep(date, timeout=timeout, pause=pause)
+
+    time.sleep(pause)
+    report["save_page_now"] = save_page_now(
+        f"https://www.forebet.com/en/"
+        f"{SPORTS[sport].path if sport in SPORTS else sport}/predictions/{date}",
+        timeout=timeout)
+
+    if not run_browser and not run_hunt:
+        report["fetch_errors"] = list(FETCH_ERRORS)
+        return report
+
+    if run_browser:
+        report["browser_probe"] = browser_probe(
+            date, SPORTS[sport].path if sport in SPORTS else sport)
 
     if not run_hunt:
         report["fetch_errors"] = list(FETCH_ERRORS)
@@ -926,6 +1038,44 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
                 "NO RELAY MODE RETURNED A BOARD — the boards are unreachable "
                 "from a runner right now; that, not publishing lag, is why "
                 "non-football sports have no picks.")
+
+    sweep = report.get("api_sweep") or {}
+    if sweep:
+        lines.append("Sibling API endpoints (never tested before):")
+        wins = []
+        for name, entry in sweep.items():
+            for mode in ("direct", "relayed"):
+                fp = entry.get(mode)
+                if not fp:
+                    continue
+                desc = fp.get("error") or (
+                    f"{fp.get('bytes')}B json={fp.get('json_like')} "
+                    f"challenge={fp.get('challenge')}")
+                lines.append(f"  {name} [{mode}]: {desc}")
+                if fp.get("json_like") and name != "getrs_control":
+                    wins.append(f"{name} [{mode}]")
+        if wins:
+            lines.append("API RETURNS DATA: " + ", ".join(wins))
+            for name in {w.split(" ")[0] for w in wins}:
+                fp = sweep[name].get("direct") or sweep[name].get("relayed")
+                lines.append(f"  {name} sample: {str(fp.get('sample'))[:260]}")
+        control = (sweep.get("getrs_control") or {}).get("direct") or {}
+        if control.get("json_like"):
+            lines.append("  control: getrs.php answers DIRECTLY from the "
+                         "runner — the APIs are not behind the bot check, so "
+                         "an API route would need no relay at all.")
+
+    spn = report.get("save_page_now") or {}
+    if spn:
+        lines.append(
+            f"Save Page Now: save={spn.get('save')} "
+            f"snapshots={spn.get('snapshots')} newest={spn.get('newest')} "
+            f"bytes={spn.get('bytes')} rows={spn.get('rows')} "
+            f"challenge={spn.get('challenge')} "
+            f"{spn.get('read_error', '')}")
+        if (spn.get("rows") or 0) > 0:
+            lines.append("ARCHIVE CRAWLER GETS THE BOARD — the archive can "
+                         "fetch what we cannot, so capture can go through it.")
 
     browser = report.get("browser_probe") or {}
     if browser:
@@ -1089,7 +1239,8 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
                             ("endpoint_hunt", "endpoint_hunt_control",
                              "endpoint_tests", "tp_candidates",
                              "fetch_matrix", "markdown_modes",
-                             "browser_probe")},
+                             "browser_probe", "api_sweep",
+                             "save_page_now")},
                            sort_keys=True)[:3000]
     emitted.append(
         f"::notice title=Endpoint hunt::{_annotation_escape(hunt_blob)}")
@@ -1101,6 +1252,9 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", required=True, help="YYYY-MM-DD board to probe")
+    parser.add_argument("--browser", action="store_true",
+                        help="also run the headless-browser probe (slow, "
+                             "already answered: the site challenges it)")
     parser.add_argument("--hunt", action="store_true",
                         help="also run the archive/endpoint hunt (slow, "
                              "already answered: no JSON twin exists)")
@@ -1117,7 +1271,8 @@ def main(argv: list[str] | None = None) -> int:
     dt.date.fromisoformat(args.date)
     try:
         report = run_probe(args.date, sport=args.sport, timeout=args.timeout,
-                              pause=args.pause, run_hunt=args.hunt)
+                              pause=args.pause, run_hunt=args.hunt,
+                              run_browser=args.browser)
     except Exception as exc:  # a crashed probe must still report
         import traceback
         report = {

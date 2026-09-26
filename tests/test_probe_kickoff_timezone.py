@@ -699,6 +699,8 @@ class TestSportCodeHunt:
                                 {"_values": values})
         monkeypatch.setattr(probe, "markdown_modes", lambda *a, **k: {})
         monkeypatch.setattr(probe, "fetch_matrix", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "api_endpoint_sweep", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "save_page_now", lambda *a, **k: {})
         report = probe.run_probe("2026-09-27", sport="basketball",
                                  timeout=1, pause=0, run_hunt=True)
         assert "1x2" not in report["tp_candidates"]["_values"]
@@ -977,3 +979,120 @@ class TestBrowserWarmup:
         line = next(l for l in lines if "BROWSER PROBE FOUND NO ROWS" in l)
         assert "28664B" in line and "challenge_page" in line
         assert "TimeoutError" in line
+
+
+class TestApiSweep:
+    """The bundle named six sibling endpoints and the earlier sweep tested
+    none of them — it only varied getrs.php's tp value. The bot check is on
+    the site, not its APIs, which is the whole reason football survives."""
+
+    def _sweep(self, monkeypatch, direct, relayed=b""):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "direct_fetch",
+                            lambda url, *, timeout, attempts=3: direct(url))
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout: relayed)
+        return probe.api_endpoint_sweep("2026-09-27", timeout=1, pause=0)
+
+    def test_the_untested_endpoints_are_all_tried(self, monkeypatch):
+        seen: list[str] = []
+        out = self._sweep(monkeypatch, lambda u: seen.append(u) or b"")
+        assert set(out) >= {"getjson_gdt", "getftr_int", "get_live_r",
+                            "get_menu", "getrs_control"}
+        assert any("getjson.php?gdt=2026-09-27" in u for u in seen)
+
+    def test_a_json_answer_is_flagged_and_sampled(self, monkeypatch):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        out = self._sweep(
+            monkeypatch,
+            lambda u: b'[[{"host":"Lakers","away":"Heat"}]]'
+            if "getjson.php" in u else b"<html>no</html>")
+        assert out["getjson_gdt"]["direct"]["json_like"]
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "api_sweep": out})
+        assert any("API RETURNS DATA: getjson_gdt [direct]" in l for l in lines)
+        assert any("Lakers" in l for l in lines)
+
+    def test_the_control_is_not_reported_as_a_discovery(self, monkeypatch):
+        """getrs.php answering proves the APIs are open, not that a blocked
+        sport was solved."""
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        out = self._sweep(monkeypatch,
+                          lambda u: b'[[{"x":1}]]' if "getrs.php" in u else b"")
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "api_sweep": out})
+        assert not any("API RETURNS DATA" in l for l in lines)
+        assert any("not behind the bot check" in l for l in lines)
+
+    def test_relay_is_only_used_when_direct_fails(self, monkeypatch):
+        out = self._sweep(monkeypatch, lambda u: b'[[{"x":1}]]')
+        assert all("relayed" not in e for e in out.values())
+
+    def test_a_challenged_api_is_labelled(self, monkeypatch):
+        out = self._sweep(monkeypatch,
+                          lambda u: b"<title>Just a moment...</title>")
+        assert out["get_menu"]["direct"]["challenge"] is True
+
+
+class TestSavePageNow:
+    """Archive.org crawls from its own infrastructure and the runner can
+    already read snapshots, so if their crawler is allowed through it is a
+    free rendering proxy."""
+
+    def test_a_fresh_snapshot_with_rows_is_declared_a_route(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        monkeypatch.setattr(probe, "direct_fetch",
+                            lambda url, *, timeout, attempts=3: b"saved")
+        monkeypatch.setattr(probe, "cdx_snapshots",
+                            lambda p, *, limit, timeout:
+                                [("20260927120000", "https://x/board")])
+        monkeypatch.setattr(probe, "archived_bytes",
+                            lambda ts, u, *, timeout, kind="id_":
+                                b'<div class="rcnt">A v B</div>' * 40)
+        out = probe.save_page_now("https://x/board", timeout=1)
+        assert out["rows"] == 40 and out["newest"] == "20260927120000"
+
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "save_page_now": out})
+        assert any("ARCHIVE CRAWLER GETS THE BOARD" in l for l in lines)
+
+    def test_an_archived_challenge_is_not_mistaken_for_success(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "direct_fetch",
+                            lambda url, *, timeout, attempts=3: b"saved")
+        monkeypatch.setattr(probe, "cdx_snapshots",
+                            lambda p, *, limit, timeout:
+                                [("20260927120000", "https://x/board")])
+        monkeypatch.setattr(probe, "archived_bytes",
+                            lambda ts, u, *, timeout, kind="id_":
+                                b"<title>Just a moment...</title>")
+        out = probe.save_page_now("https://x/board", timeout=1)
+        assert out["rows"] == 0 and out["challenge"] is True
+
+    def test_a_refused_save_still_reads_the_index(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "direct_fetch", _boom("429"))
+        monkeypatch.setattr(probe, "cdx_snapshots",
+                            lambda p, *, limit, timeout: [])
+        out = probe.save_page_now("https://x/board", timeout=1)
+        assert "429" in out["save"] and out["snapshots"] == 0
+
+    def test_the_answered_browser_probe_is_off_by_default(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "fetch", lambda *a, **k: b"")
+        monkeypatch.setattr(probe, "probe_routes", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "markdown_modes", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "api_endpoint_sweep", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "save_page_now", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "browser_probe", _boom("must not run"))
+        report = probe.run_probe("2026-09-27", sport="basketball",
+                                 timeout=1, pause=0)
+        assert "browser_probe" not in report
