@@ -1084,18 +1084,26 @@ class TestSavePageNow:
         out = probe.save_page_now("https://x/board", timeout=1)
         assert "429" in out["save"] and out["snapshots"] == 0
 
-    def test_the_answered_browser_probe_is_off_by_default(self, monkeypatch):
+    def test_the_answered_sweeps_are_off_by_default(self, monkeypatch):
+        """api_sweep, the getjson crack and Save Page Now are answered; the
+        browser attempt is the live question, so it runs by default."""
         import scripts.probe_kickoff_timezone as probe
 
         monkeypatch.setattr(probe, "fetch", lambda *a, **k: b"")
         monkeypatch.setattr(probe, "probe_routes", lambda *a, **k: {})
         monkeypatch.setattr(probe, "markdown_modes", lambda *a, **k: {})
-        monkeypatch.setattr(probe, "api_endpoint_sweep", lambda *a, **k: {})
-        monkeypatch.setattr(probe, "save_page_now", lambda *a, **k: {})
-        monkeypatch.setattr(probe, "browser_probe", _boom("must not run"))
+        monkeypatch.setattr(probe, "api_endpoint_sweep", _boom("must not run"))
+        monkeypatch.setattr(probe, "crack_getjson", _boom("must not run"))
+        monkeypatch.setattr(probe, "save_page_now", _boom("must not run"))
+        monkeypatch.setattr(probe, "browser_probe", lambda *a, **k: {"rows": 0})
         report = probe.run_probe("2026-09-27", sport="basketball",
                                  timeout=1, pause=0)
-        assert "browser_probe" not in report
+        assert "save_page_now" not in report
+        assert report["browser_probe"] == {"rows": 0}
+
+        skipped = probe.run_probe("2026-09-27", sport="basketball",
+                                  timeout=1, pause=0, run_browser=False)
+        assert "browser_probe" not in skipped
 
 
 class TestGetJsonCrack:
@@ -1169,3 +1177,64 @@ class TestJsCallSites:
                             lambda p, *, limit, timeout: [("2026", "u")])
         monkeypatch.setattr(probe, "archived_bytes", _boom("410"))
         assert "410" in probe.mine_js_contexts(timeout=1)["error"]
+
+
+class TestHeadedBrowser:
+    """Headless Chrome is the most heavily fingerprinted signal there is, and
+    the relay's own renderer clears this check from a datacenter address — so
+    the block is unlikely to be purely about the IP. Run headed under Xvfb
+    with the automation tells removed."""
+
+    def test_xvfb_is_installed_before_the_browser(self):
+        from scripts.probe_kickoff_timezone import install_playwright
+
+        calls: list[list[str]] = []
+
+        class _Done:
+            returncode = 0
+            stderr = b""
+
+        install_playwright(runner=lambda a, **k: calls.append(a) or _Done())
+        assert any("xvfb" in " ".join(a) for a in calls)
+        assert any("playwright" in " ".join(a) for a in calls)
+
+    def test_a_display_makes_the_browser_headed(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        seen: dict = {}
+
+        def _fetch(url, *, headless=True, **kw):
+            seen["headless"] = headless
+            return {"rows": 0}
+
+        monkeypatch.setattr(probe, "install_playwright", lambda: "ok")
+        monkeypatch.setattr(probe, "start_virtual_display", lambda: ":99")
+        monkeypatch.setattr(probe, "playwright_fetch", _fetch)
+        probe.browser_probe("2026-09-27", "basketball")
+        assert seen["headless"] is False
+
+    def test_a_failed_display_falls_back_to_headless(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        seen: dict = {}
+        monkeypatch.setattr(probe, "install_playwright", lambda: "ok")
+        monkeypatch.setattr(probe, "start_virtual_display",
+                            lambda: "FileNotFoundError: Xvfb")
+        monkeypatch.setattr(
+            probe, "playwright_fetch",
+            lambda url, *, headless=True, **kw: seen.update(headless=headless)
+            or {"rows": 0})
+        out = probe.browser_probe("2026-09-27", "basketball")
+        assert seen["headless"] is True
+        assert "Xvfb" in out["display"]
+
+    def test_the_automation_tell_is_patched_out(self):
+        from scripts.probe_kickoff_timezone import playwright_fetch
+
+        scripts: list[str] = []
+        page = TestBrowserProbe._Page('<div class="rcnt">x</div>', [])
+        page.add_init_script = scripts.append
+        playwright_fetch("https://x.invalid",
+                         launcher=TestBrowserProbe()._launcher(page))
+        assert scripts and "navigator" in scripts[0]
+        assert "webdriver" in scripts[0]
