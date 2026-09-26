@@ -301,7 +301,7 @@ class TestRouteDiagnostic:
 
         def _fake(url, headers, *, timeout):
             seen.append(headers)
-            if headers.get("X-Respond-With") == "html":
+            if headers.get("X-Respond-With") == "html" and headers.get("X-Engine"):
                 return b'<div class="rcnt">real board</div>'
             return b"<html><title>Just a moment...</title></html>"
 
@@ -309,10 +309,15 @@ class TestRouteDiagnostic:
         out = probe.probe_routes("https://x.invalid", timeout=1, pause=0)
 
         assert set(out) == {
-            "return_format_html", "respond_with_html", "markdown_reader"}
-        assert out["respond_with_html"]["has_rcnt"] is True
+            "return_format_html", "html_browser_engine", "html_cf_engine",
+            "respond_with_html_browser", "markdown_reader"}
+        assert out["respond_with_html_browser"]["has_rcnt"] is True
         assert out["return_format_html"]["looks_like"] == "challenge_page"
-        assert len(seen) == 3
+        assert len(seen) == 5
+        # The engine variants must actually differ from the failing baseline,
+        # or the comparison proves nothing.
+        engines = {h.get("X-Engine") for h in seen}
+        assert {"browser", "cf-browser-rendering"} <= engines
 
     def test_a_failing_mode_is_recorded_not_raised(self, monkeypatch):
         import scripts.probe_kickoff_timezone as probe

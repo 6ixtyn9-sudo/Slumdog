@@ -289,23 +289,45 @@ def probe_routes(board_url: str, *, timeout: int, pause: float) -> dict[str, Any
     timezone question.
     """
     relay = RELAY_BASE + board_url
+    base = {"User-Agent": "Slumdog", "Accept": "text/plain", "X-No-Cache": "true"}
+
+    def _headers(**extra: str) -> dict[str, str]:
+        return {**base, **extra}
+
+    # The default (Markdown reader) engine already gets past the bot check —
+    # it returned 15KB of content where both html modes got the 5.9KB
+    # interstitial. So the question is not "can the relay fetch this page"
+    # but "can it hand the fetched page back as HTML". These combinations
+    # ask the relay for HTML while keeping the engine that works.
     attempts = {
-        "return_format_html": lambda: relay_request(relay, {
-            "User-Agent": "Slumdog", "Accept": "text/plain",
-            "X-No-Cache": "true", "X-Return-Format": "html"}, timeout=timeout),
-        "respond_with_html": lambda: relay_request(relay, {
-            "User-Agent": "Slumdog", "Accept": "text/plain",
-            "X-No-Cache": "true", "X-Respond-With": "html"}, timeout=timeout),
-        "markdown_reader": lambda: relay_request(relay, {
-            "User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
-            "X-No-Cache": "true"}, timeout=timeout),
+        "return_format_html": lambda: relay_request(
+            relay, _headers(**{"X-Return-Format": "html"}), timeout=timeout),
+        "html_browser_engine": lambda: relay_request(
+            relay, _headers(**{"X-Return-Format": "html",
+                               "X-Engine": "browser"}), timeout=timeout),
+        "html_cf_engine": lambda: relay_request(
+            relay, _headers(**{"X-Return-Format": "html",
+                               "X-Engine": "cf-browser-rendering"}),
+            timeout=timeout),
+        "respond_with_html_browser": lambda: relay_request(
+            relay, _headers(**{"X-Respond-With": "html",
+                               "X-Engine": "browser"}), timeout=timeout),
+        "markdown_reader": lambda: relay_request(
+            relay, {"User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
+                    "X-No-Cache": "true"}, timeout=timeout),
     }
     out: dict[str, Any] = {}
     for i, (name, call) in enumerate(attempts.items()):
         if i:
             time.sleep(pause)
         try:
-            out[name] = body_fingerprint(call())
+            body = call()
+            sample = 1200 if name == "markdown_reader" else 320
+            out[name] = body_fingerprint(body, sample=sample)
+            lowered = (body or b"").lower()
+            out[name]["has_date_bah"] = b"date_bah" in lowered
+            out[name]["has_time_pattern"] = bool(
+                re.search(rb"\d{2}/\d{2}/\d{4}", body or b""))
         except Exception as exc:
             out[name] = {"error": f"{type(exc).__name__}: {exc}"[:200]}
     return out
