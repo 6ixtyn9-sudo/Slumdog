@@ -231,7 +231,7 @@ class TestAnnotations:
         emitted = emit_annotations(
             {"target_date": "2026-09-27", "offset_samples": ["dropped"]},
             ["line one", "line two"])
-        assert len(emitted) == 2
+        assert len(emitted) == 3
         assert emitted[0].startswith("::notice title=Kickoff timezone verdict::")
         # Newlines must be escaped or the annotation is truncated at line one.
         assert "%0A" in emitted[0]
@@ -390,3 +390,75 @@ class TestChallengePageRejection:
 
         assert looks_like_challenge_page(b"<title>Just a moment...</title>")
         assert not looks_like_challenge_page(b'<div class="rcnt">ok</div>')
+
+
+class TestEndpointHunt:
+    """Football still captures because it uses a JSON endpoint that is not
+    bot-checked. The hunt asks whether the blocked sports have one too."""
+
+    ARCHIVED = (
+        b'<html><head><script src="/js/bsk.js"></script></head><body>'
+        b'<div class="rcnt" id="r1"><span class="date_bah">27/09/2026 '
+        b'18:00</span></div><div class="rcnt" id="r2"></div>'
+        b'<script>xmlhttp.open("GET","/scripts/getrs_bsk.php?ln=en&in="+d);'
+        b'</script></body></html>'
+    )
+
+    def test_php_endpoints_are_recovered_from_markup(self):
+        from scripts.probe_kickoff_timezone import endpoint_candidates
+
+        found = endpoint_candidates(
+            self.ARCHIVED, "https://www.forebet.com/en/basketball/predictions")
+        assert found
+        assert found[0].startswith("https://www.forebet.com/scripts/getrs_bsk.php")
+
+    def test_offsite_references_are_ignored(self):
+        from scripts.probe_kickoff_timezone import endpoint_candidates
+
+        found = endpoint_candidates(
+            b'<script src="https://ads.example.com/x.php"></script>',
+            "https://www.forebet.com/en/basketball/predictions")
+        assert found == []
+
+    def test_hunt_reports_rows_and_markup_samples(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "archived_html",
+                            lambda url, *, timeout: ("snap", self.ARCHIVED))
+        out = probe.hunt_endpoints("https://www.forebet.com/en/basketball/"
+                                   "predictions", timeout=1, pause=0)
+        assert out["rcnt_rows"] == 2
+        assert "date_bah" in out["markup_samples"]
+        assert any("getrs_bsk.php" in u for u in out["php_refs"])
+
+    def test_hunt_failure_is_recorded_not_raised(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "archived_html", _boom("no snapshot"))
+        out = probe.hunt_endpoints("https://x.invalid", timeout=1, pause=0)
+        assert "error" in out and "no snapshot" in out["error"]
+
+    def test_a_json_returning_candidate_is_called_out(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout: b'[[{"id":1}]]')
+        tests = probe.test_candidates(
+            ["https://www.forebet.com/scripts/getrs_bsk.php"],
+            timeout=1, pause=0)
+        assert all(fp["json_like"] for fp in tests.values())
+
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "endpoint_tests": tests})
+        assert any("JSON ENDPOINT WORKS FOR THIS SPORT" in l for l in lines)
+
+    def test_a_challenged_candidate_is_not_called_a_win(self):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        _, lines = verdict({
+            "fetch_errors": [], "offset": summarise_offsets([]),
+            "endpoint_tests": {"https://x/getrs_bsk.php": {
+                "bytes": 5931, "looks_like": "challenge_page",
+                "json_like": False}}})
+        assert not any("JSON ENDPOINT WORKS" in l for l in lines)

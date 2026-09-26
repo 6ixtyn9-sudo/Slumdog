@@ -271,6 +271,113 @@ def html_board_rows(body: bytes) -> list[dict[str, str]]:
     return rows
 
 
+# --- endpoint hunt ---------------------------------------------------------
+# Football is the only sport that still captures, and the only one fetched
+# through a JSON endpoint (/scripts/getrs.php) rather than an HTML board.
+# That endpoint is not bot-checked. If the other sports have an equivalent,
+# it fixes coverage without any key or credential. The live boards cannot be
+# read to find out -- they return the interstitial -- but archived copies of
+# the same pages are served by the Wayback Machine as raw HTML, scripts and
+# all. So: recover the markup from the archive, read the endpoints out of it,
+# then test those endpoints live.
+WAYBACK_AVAILABLE = "https://archive.org/wayback/available?url="
+BROWSER_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0 Safari/537.36"
+)
+PHP_REF = re.compile(rb"""[\"'(=]\s*([^\"'()\s]*?/?[a-z0-9_\-]+\.php[^\"'()\s]*)""", re.I)
+SCRIPT_SRC = re.compile(rb"""<script[^>]+src=[\"']([^\"']+)[\"']""", re.I)
+
+
+def direct_fetch(url: str, *, timeout: int) -> bytes:
+    import urllib.request
+
+    request = urllib.request.Request(url, headers={
+        "User-Agent": BROWSER_UA,
+        "Accept": "text/html,application/xhtml+xml,*/*",
+    })
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def archived_html(page_url: str, *, timeout: int) -> tuple[str, bytes]:
+    """Raw archived markup for a page, with the archive's own rewriting off."""
+    meta = json.loads(direct_fetch(WAYBACK_AVAILABLE + page_url, timeout=timeout))
+    snap = ((meta.get("archived_snapshots") or {}).get("closest") or {})
+    if not snap.get("available"):
+        raise RuntimeError(f"no archived snapshot for {page_url}")
+    # `id_` asks for the original bytes rather than the archive's rewritten
+    # copy, so script src values and inline JS survive intact.
+    raw_url = snap["url"].replace("/http", "id_/http", 1)
+    return raw_url, direct_fetch(raw_url, timeout=timeout)
+
+
+def endpoint_candidates(html: bytes, page_url: str) -> list[str]:
+    """Absolute .php URLs referenced by a page, most specific first."""
+    from urllib.parse import urljoin
+
+    found: list[str] = []
+    for match in PHP_REF.findall(html) + SCRIPT_SRC.findall(html):
+        ref = match.decode("utf-8", "replace").strip()
+        if not ref or ref.endswith(".js") and "getrs" not in ref:
+            continue
+        if ".php" not in ref.lower():
+            continue
+        absolute = urljoin(page_url, ref)
+        if "forebet.com" in absolute and absolute not in found:
+            found.append(absolute)
+    found.sort(key=lambda u: (0 if "getrs" in u else 1, len(u)))
+    return found
+
+
+def hunt_endpoints(sport_page: str, *, timeout: int, pause: float) -> dict[str, Any]:
+    """Recover a sport board's markup from the archive and mine it."""
+    out: dict[str, Any] = {"page": sport_page}
+    try:
+        raw_url, html = archived_html(sport_page, timeout=timeout)
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"[:200]
+        return out
+
+    out["snapshot"] = raw_url
+    out["bytes"] = len(html)
+    out["rcnt_rows"] = html.lower().count(b'class="rcnt')
+    out["php_refs"] = endpoint_candidates(html, sport_page)[:12]
+    out["script_srcs"] = [
+        s.decode("utf-8", "replace") for s in SCRIPT_SRC.findall(html)[:8]]
+
+    # Question 1 of the original hold: does a listing row carry a
+    # machine-readable start instant, or only rendered local text?
+    for needle in (b"date_bah", b"data-time", b"datetime", b"data-ts"):
+        idx = html.lower().find(needle)
+        if idx != -1:
+            out.setdefault("markup_samples", {})[needle.decode()] = (
+                html[max(0, idx - 160): idx + 200].decode("utf-8", "replace"))
+    return out
+
+
+def test_candidates(candidates: list[str], *, timeout: int,
+                    pause: float) -> dict[str, Any]:
+    """Fetch each candidate endpoint live and say whether it returns data."""
+    results: dict[str, Any] = {}
+    for i, url in enumerate(candidates):
+        if i:
+            time.sleep(pause)
+        try:
+            body = relay_request(RELAY_BASE + url, {
+                "User-Agent": "Slumdog", "Accept": "text/plain",
+                "X-No-Cache": "true", "X-Return-Format": "html"}, timeout=timeout)
+        except Exception as exc:
+            results[url] = {"error": f"{type(exc).__name__}: {exc}"[:120]}
+            continue
+        stripped = body.lstrip()
+        fingerprint = body_fingerprint(body, sample=160)
+        fingerprint["json_like"] = (
+            stripped[:1] in (b"[", b"{") or b"<body>[[{" in body.lower())
+        results[url] = fingerprint
+    return results
+
+
 def relay_request(url: str, headers: dict[str, str], *, timeout: int) -> bytes:
     """Raw relay GET with explicit headers, for route comparison."""
     import urllib.request
@@ -392,6 +499,18 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float) -> dict[str,
     report["route_diagnostic"] = probe_routes(
         routes_url, timeout=timeout, pause=pause)
 
+    # Hunt for a JSON endpoint for the blocked sports.
+    time.sleep(pause)
+    page = f"https://www.forebet.com/en/{SPORTS[sport].path}/predictions" \
+        if sport in SPORTS else board_url
+    hunt = hunt_endpoints(page, timeout=timeout, pause=pause)
+    report["endpoint_hunt"] = hunt
+    refs = [u for u in hunt.get("php_refs", []) if "getrs" in u.lower()][:3]
+    if refs:
+        time.sleep(pause)
+        report["endpoint_tests"] = test_candidates(
+            refs, timeout=timeout, pause=pause)
+
     report["fetch_errors"] = list(FETCH_ERRORS)
     return report
 
@@ -459,6 +578,29 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
                 "from a runner right now; that, not publishing lag, is why "
                 "non-football sports have no picks.")
 
+    hunt = report.get("endpoint_hunt") or {}
+    if hunt:
+        if hunt.get("error"):
+            lines.append(f"ENDPOINT HUNT FAILED: {hunt['error']}")
+        else:
+            lines.append(
+                f"Archived markup for {hunt.get('page')} "
+                f"({hunt.get('bytes')} bytes, {hunt.get('rcnt_rows')} rows) "
+                f"via {hunt.get('snapshot')}")
+            lines.append("  php refs: " + (", ".join(hunt.get("php_refs", []))
+                                           or "none found"))
+            for needle, sample in (hunt.get("markup_samples") or {}).items():
+                lines.append(f"  markup[{needle}]: {sample[:280]}")
+    tested = report.get("endpoint_tests") or {}
+    for url, fp in tested.items():
+        if fp.get("json_like"):
+            lines.append(f"JSON ENDPOINT WORKS FOR THIS SPORT: {url} "
+                         f"({fp.get('bytes')} bytes) — this is the capture "
+                         f"route that unblocks it.")
+        else:
+            lines.append(f"  candidate {url}: "
+                         f"{fp.get('error') or fp.get('looks_like')}")
+
     off = report.get("offset") or {}
     joined = off.get("joined", 0)
     modal = off.get("modal_offset_minutes")
@@ -509,6 +651,11 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
         f"::notice title=Kickoff timezone verdict::{_annotation_escape(chr(10).join(lines))}",
         f"::notice title=Kickoff timezone report::{_annotation_escape(compact)}",
     ]
+    hunt_blob = json.dumps({k: report.get(k) for k in
+                            ("endpoint_hunt", "endpoint_tests")},
+                           sort_keys=True)[:3000]
+    emitted.append(
+        f"::notice title=Endpoint hunt::{_annotation_escape(hunt_blob)}")
     for line in emitted:
         print(line)
     return emitted
