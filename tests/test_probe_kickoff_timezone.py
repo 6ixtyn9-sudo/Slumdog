@@ -782,6 +782,24 @@ class TestMarkdownModes:
         assert out["plain"]["match_links"] == 1
         assert out["plain"]["link_sample"][0].endswith("1234567")
 
+    def test_match_pages_live_under_matches_not_predictions(self, monkeypatch):
+        """The original regex demanded /predictions/, so it scored 124 real
+        match links as 1 and produced a false 'no identity' verdict."""
+        link = (b"https://www.forebet.com/en/football/matches/"
+                b"real-salt-lake-new-england-revolution-2426911")
+        out = self._run(monkeypatch, lambda h: b"pad" * 200 + link)
+        assert out["plain"]["match_links"] == 1
+        sport, slug, mid = out["plain"]["link_sample"][0].split("|")
+        assert sport == "football"
+        assert slug == "real-salt-lake-new-england-revolution"
+        assert mid == "2426911"
+
+    def test_the_row_text_around_a_kickoff_is_kept(self, monkeypatch):
+        out = self._run(monkeypatch,
+                        lambda h: b"x" * 300 + b"Lakers Heat 19:30 done")
+        assert "19:30" in out["plain"]["row_context"]
+        assert "Lakers" in out["plain"]["row_context"]
+
     def test_kickoff_clocks_are_counted(self, monkeypatch):
         out = self._run(monkeypatch, lambda h: b"x" * 400 + b" 14:00 19:30 ")
         assert out["plain"]["clocks"] == 2
@@ -1358,3 +1376,47 @@ class TestLiveDomSelectors:
         out = probe.live_dom_selectors("2026-09-27", "basketball",
                                        timeout=1, pause=0)
         assert all(fp["found"] is None for fp in out.values())
+
+
+class TestHarvestedIdentity:
+    """A match slug names both teams and the id keys the per-match endpoint,
+    so a link is a complete identity — no HTML board required."""
+
+    def test_a_link_feeds_the_per_match_endpoint(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        called: dict = {}
+        monkeypatch.setattr(probe, "fetch", lambda *a, **k: b"")
+        monkeypatch.setattr(probe, "probe_routes", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "markdown_modes", lambda *a, **k: {
+            "links_summary": {"link_sample": [
+                "football|a-vs-b-old|111111",
+                "basketball|lakers-vs-heat|2476264"]}})
+        monkeypatch.setattr(probe, "discover_sitemaps", lambda **k: {})
+        monkeypatch.setattr(probe, "live_dom_selectors", lambda *a, **k: {})
+
+        def _match_json(slug, mid, *, timeout):
+            called.update(slug=slug, mid=mid)
+            return {"empty": False}
+
+        monkeypatch.setattr(probe, "test_match_json", _match_json)
+        report = probe.run_probe("2026-09-27", sport="basketball",
+                                 timeout=1, pause=0)
+        # The blocked sport is the one worth testing, not football.
+        assert called == {"slug": "lakers-vs-heat", "mid": "2476264"}
+        assert len(report["harvested_links"]) == 2
+
+    def test_no_links_means_no_call(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "fetch", lambda *a, **k: b"")
+        monkeypatch.setattr(probe, "probe_routes", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "markdown_modes", lambda *a, **k: {
+            "plain": {"link_sample": []}})
+        monkeypatch.setattr(probe, "discover_sitemaps", lambda **k: {})
+        monkeypatch.setattr(probe, "live_dom_selectors", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "test_match_json", _boom("must not run"))
+        report = probe.run_probe("2026-09-27", sport="basketball",
+                                 timeout=1, pause=0)
+        assert report["harvested_links"] == []
+        assert "match_json" not in report

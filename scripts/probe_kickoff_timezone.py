@@ -524,8 +524,8 @@ def relay_request(url: str, headers: dict[str, str], *, timeout: int) -> bytes:
 
 
 MATCH_LINK = re.compile(
-    rb"https?://(?:www\.|m\.)?forebet\.com/en/[a-z\-]+/predictions?/[^\s)\"']*\d{4,}",
-    re.I)
+    rb"https?://(?:www\.|m\.)?forebet\.com/en/([a-z_\-]+)/"
+    rb"(?:matches|predictions)/([a-z0-9\-]*?)-(\d{5,})\b", re.I)
 CLOCK = re.compile(rb"\b([01]?\d|2[0-3]):[0-5]\d\b")
 
 
@@ -959,6 +959,15 @@ def browser_probe(date: str, sport_path: str) -> dict[str, Any]:
     return out
 
 
+def _clock_context(body: bytes) -> str:
+    """Text around the first kickoff time, to see what a row actually says."""
+    match = CLOCK.search(body)
+    if not match:
+        return ""
+    start = max(0, match.start() - 220)
+    return body[start: match.end() + 160].decode("utf-8", "replace")
+
+
 def markdown_modes(date: str, sport_path: str, *, timeout: int,
                    pause: float) -> dict[str, Any]:
     """The Markdown engine is the only route that clears the bot check, so
@@ -989,12 +998,17 @@ def markdown_modes(date: str, sport_path: str, *, timeout: int,
         except Exception as exc:
             out[name] = {"error": f"{type(exc).__name__}: {exc}"[:110]}
             continue
-        links = [m.decode() for m in dict.fromkeys(MATCH_LINK.findall(body))]
+        pairs = list(dict.fromkeys(MATCH_LINK.findall(body)))
+        links = [f"{s.decode()}|{slug.decode()}|{mid.decode()}"
+                 for s, slug, mid in pairs]
+        clocks = CLOCK.findall(body)
         out[name] = {
             "bytes": len(body),
             "match_links": len(links),
-            "clocks": len(CLOCK.findall(body)),
-            "link_sample": links[:3],
+            "clocks": len(clocks),
+            "link_sample": links[:4],
+            # A row's text is what a parser would have to read.
+            "row_context": _clock_context(body),
             "sample": body[400:900].decode("utf-8", "replace"),
         }
     return out
@@ -1183,6 +1197,22 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
             f"{SPORTS[sport].path if sport in SPORTS else sport}"
             f"/predictions/{date}", timeout=timeout)
 
+    # If any Markdown variant exposed match links, that is identity: the
+    # slug names both teams and the id keys the per-match endpoint.
+    harvested: list[tuple[str, str, str]] = []
+    for fingerprint in (report.get("markdown_modes") or {}).values():
+        for entry in (fingerprint.get("link_sample") or []):
+            parts = entry.split("|")
+            if len(parts) == 3 and tuple(parts) not in harvested:
+                harvested.append(tuple(parts))
+    report["harvested_links"] = harvested[:6]
+    if harvested:
+        sport_first = sorted(
+            harvested, key=lambda p: 0 if "football" not in p[0] else 1)
+        _, slug, mid = sport_first[0]
+        time.sleep(pause)
+        report["match_json"] = test_match_json(slug, mid, timeout=timeout)
+
     time.sleep(pause)
     report["sitemaps"] = discover_sitemaps(timeout=timeout, pause=pause)
 
@@ -1363,6 +1393,10 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
                          "runner — the APIs are not behind the bot check, so "
                          "an API route would need no relay at all.")
 
+    got = report.get("harvested_links") or []
+    if got:
+        lines.append(f"Harvested identities ({len(got)}): {got[:4]}")
+
     maps = report.get("sitemaps") or {}
     if maps:
         lines.append(f"robots.txt: {maps.get('robots_bytes')}B "
@@ -1472,6 +1506,9 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
             lines.append(f"  {name}: " + (fp.get("error") or
                          f"{fp.get('bytes')}B links={fp.get('match_links')} "
                          f"clocks={fp.get('clocks')}"))
+        for name, fp in modes.items():
+            if fp.get("row_context"):
+                lines.append(f"  {name} row: {fp['row_context'][:320]}")
         usable = [n for n, fp in modes.items()
                   if (fp.get("match_links") or 0) > 5]
         if usable:
@@ -1607,7 +1644,8 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
                              "browser_probe", "api_sweep",
                              "save_page_now", "getjson_crack",
                              "js_call_sites", "sitemaps",
-                             "match_ids", "match_json", "dom_selectors")},
+                             "match_ids", "match_json", "dom_selectors",
+                             "harvested_links")},
                            sort_keys=True)[:3000]
     emitted.append(
         f"::notice title=Endpoint hunt::{_annotation_escape(hunt_blob)}")
