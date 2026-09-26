@@ -1,5 +1,7 @@
 # Slumdog Living Handoff
 
+**2026-09-26 (final hunt):** every capture route for the non-football boards has now been tested and the site is closed to datacenter IPs entirely — headless Chromium on the runner is served the interstitial even on the homepage. No JSON twin exists for those sports (the archived board ships its rows server-rendered, and every candidate getrs.php sport code returns empty). The relay's Markdown engine is the only thing that gets through and it carries neither team names nor kickoff times. See the route table at the top of docs/STATE.md. Unblocking needs a paid service, a residential runner, or an explicit decision to stay football-only.
+
 **Last updated:** 2026-09-26 (UTC, later session) — **BOT-CHECK BLOCK FOUND; IT, NOT PUBLISHING LAG, IS WHY NON-FOOTBALL SPORTS HAVE NO PICKS.**
 
 - **Evidence.** Four read-only probe runs on a GitHub runner. Football JSON: 864 matches for 2026-09-27. Every HTML board: ~5.9KB `Just a moment...` interstitial. Committed receipts agree — real boards are 40–350KB and the ~5KB signature takes over from 2026-09-22, the exact date coverage collapsed.

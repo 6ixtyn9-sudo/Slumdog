@@ -1,3 +1,36 @@
+
+## Capture routes for non-football boards — exhaustively tested 2026-09-26
+
+Measured from a GitHub runner, read-only probe runs 36242850508 → 36253357842.
+
+| Route | Result |
+|---|---|
+| `getrs.php` JSON (football's route) | **works** — 864 matches |
+| `getrs.php` with other sport codes (`bas`, `basketball`, `bsk`, `bk`, `bb`) | ~520B, no rows — no JSON twin exists |
+| Relay, `X-Return-Format: html` (current capture path) | 5.9KB interstitial |
+| Relay, `X-Respond-With: html` | 5.9KB interstitial |
+| Relay, `X-Engine: browser` / `cf-browser-rendering` | HTTP 401 — paid key |
+| Relay, Markdown engine | **clears the check**, 15KB — but 1 match link and 0 clocks: names no teams, gives no kickoff |
+| Direct from runner, `www` and `m.forebet.com` | HTTP 403 |
+| allorigins proxy (unrelated IP) | 5.8KB interstitial |
+| codetabs proxy | HTTP 503 |
+| Headless Chromium on the runner, 45s wait | 28KB interstitial, never resolves |
+| Headless Chromium, warm up on site root first | **the homepage itself is challenged** |
+
+The last row is the decisive one: the block is not on the boards, it is on the
+whole site for datacenter addresses. `getrs.php` survives because it is an
+API endpoint that was never put behind the check — which is the only reason
+football still captures.
+
+**This cannot be solved from GitHub Actions by trying harder.** It needs one of:
+a paid unblocking service (relay API key, scraping API), a residential/self-hosted
+runner, or accepting football-only coverage.
+
+**Timezone question, answered by archived markup:** rows carry
+`<time itemprop="startDate" datetime="2024-05-22"><span class="date_bah">22/05/2024 14:00</span></time>`
+— a date-only attribute, no offset. There is no machine-readable start instant,
+so the 24h hold stands on its merits rather than for want of evidence. Note that
+`getrs.php` takes a `tz=` parameter and capture pins `tz=0`.
 # Slumdog State — Canonical Current Truth
 
 **Last verified:** 2026-09-26 (UTC, later session) — **THE DOCUMENTED ROOT CAUSE OF THE NON-FOOTBALL COVERAGE COLLAPSE IS WRONG. IT IS A BOT-CHECK BLOCK, NOT PUBLISHING LAG.** Measured from a GitHub runner (probe workflow runs 36242850508 / 36243059526 / 36243322782 / 36243519958, read-only): the football JSON endpoint returns 864 matches for 2026-09-27, while EVERY HTML listing board comes back as a ~5.9KB Cloudflare `Just a moment...` interstitial. Committed capture receipts carry the same signature — a real board is 40–350KB, and from **2026-09-22** almost every non-football capture is ~5KB, with only sporadic real successes (basketball 273KB on 09-25, handball 117KB). That date is exactly when R1 coverage collapsed to football-only, so the prior explanation ("Forebet does not publish those boards more than a day ahead") does not hold: the boards are not being published late, they are not being fetched at all. **Worse: `esoccer` and `afl` are `current_only`, so only the lenient sport-label check applied and the interstitial was being stored as a genuine capture** (5832 / 5798 bytes on 09-28). Fixed this session: `forebet.looks_like_challenge_page()` + a hard reject in `validate_html_body`, so a bot-check page can never again be frozen as evidence. Relay route comparison on one board: `X-Return-Format: html` → challenge page; `X-Engine: browser` and `X-Engine: cf-browser-rendering` → **HTTP 401** (those modes need a paid relay key); Markdown reader → 15258 bytes of real board content, but for basketball it carries neither team names nor per-match kickoff times, so it is not a drop-in substitute. **Consequences:** (1) the EVENT_DAY timezone hold is currently moot for non-football sports — they cannot be fetched from CI at all, let alone timed; (2) no calibration work should start until a capture route exists; (3) the open decision is a relay API key (owner-held secret) vs. discovering per-sport JSON endpoints vs. accepting football-only. Gates this session: **1223 passed**, pyflakes clean, `py_compile` ok, `git diff --check` ok. The prior header line follows verbatim for history:
