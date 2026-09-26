@@ -1420,3 +1420,44 @@ class TestHarvestedIdentity:
                                  timeout=1, pause=0)
         assert report["harvested_links"] == []
         assert "match_json" not in report
+
+
+class TestListingSlice:
+    """Sampling around the first clock kept landing in the navigation, which
+    says nothing about whether a row names its teams."""
+
+    def test_the_slice_starts_at_the_listing(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        body = (b"nav nav nav " * 40 + b"Basketball predictions for 27/09/2026"
+                b" Home team Away team Lakers Heat 19:30 71 29")
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout: body)
+        out = probe.markdown_modes("2026-09-27", "basketball",
+                                   timeout=1, pause=0)
+        slice_ = out["plain"]["table_slice"]
+        assert slice_.startswith("predictions for")
+        assert "Lakers Heat" in slice_
+
+    def test_a_tiny_payload_is_not_called_data(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout: b'[{"a":1}]')
+        out = probe.test_match_json("slug", "123", timeout=1)
+        assert out["empty"] is True
+
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "match_json": out})
+        assert not any("PER-MATCH JSON WORKS" in l for l in lines)
+
+    def test_a_real_payload_still_counts(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        payload = b'[{"id":"2476264","DATE_BAH":"2026-09-27 19:30:00",' \
+                  b'"host":"Lakers","guest":"Heat","Pred_1":"71"}]'
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout: payload)
+        out = probe.test_match_json("slug", "123", timeout=1)
+        assert out["empty"] is False and out["has_date_bah"]

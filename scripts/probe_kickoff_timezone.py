@@ -707,7 +707,10 @@ def test_match_json(slug: str, mid: str, *, timeout: int) -> dict[str, Any]:
     marker = b"Markdown Content:"
     payload = body.split(marker, 1)[1].strip() if marker in body else body
     out["bytes"] = len(payload)
-    out["empty"] = payload[:2] in (b"[]", b"")
+    # 14 bytes is not data. Require a plausible JSON body, not merely
+    # something that is not literally "[]".
+    out["empty"] = (payload[:2] in (b"[]", b"") or len(payload) < 60
+                    or payload.lstrip()[:1] not in (b"[", b"{"))
     out["has_date_bah"] = b"DATE_BAH" in payload or b"date_bah" in payload
     out["sample"] = payload[:300].decode("utf-8", "replace")
     return out
@@ -959,6 +962,20 @@ def browser_probe(date: str, sport_path: str) -> dict[str, Any]:
     return out
 
 
+def _table_slice(body: bytes) -> str:
+    """The listing itself, from the board heading onward.
+
+    Sampling around the first clock kept landing in the navigation and the
+    table header, which says nothing about whether a ROW names its teams.
+    """
+    lowered = body.lower()
+    for marker in (b"predictions for", b"home team", b"prob. %"):
+        idx = lowered.find(marker)
+        if idx != -1:
+            return body[idx: idx + 1400].decode("utf-8", "replace")
+    return ""
+
+
 def _clock_context(body: bytes) -> str:
     """Text around the first kickoff time, to see what a row actually says."""
     match = CLOCK.search(body)
@@ -1009,6 +1026,7 @@ def markdown_modes(date: str, sport_path: str, *, timeout: int,
             "link_sample": links[:4],
             # A row's text is what a parser would have to read.
             "row_context": _clock_context(body),
+            "table_slice": _table_slice(body),
             "sample": body[400:900].decode("utf-8", "replace"),
         }
     return out
@@ -1420,7 +1438,8 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
         lines.append("getjson.php with a real match id: " +
                      (mjson.get("error") or
                       f"{mjson.get('bytes')}B empty={mjson.get('empty')} "
-                      f"date_bah={mjson.get('has_date_bah')}"))
+                      f"date_bah={mjson.get('has_date_bah')} "
+                      f"body={mjson.get('sample', '')[:200]!r}"))
         if not mjson.get("empty") and not mjson.get("error"):
             lines.append("PER-MATCH JSON WORKS — sitemap gives the ids, this "
                          "endpoint gives the data, and neither is behind the "
@@ -1507,8 +1526,8 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
                          f"{fp.get('bytes')}B links={fp.get('match_links')} "
                          f"clocks={fp.get('clocks')}"))
         for name, fp in modes.items():
-            if fp.get("row_context"):
-                lines.append(f"  {name} row: {fp['row_context'][:320]}")
+            if fp.get("table_slice"):
+                lines.append(f"  {name} listing: {fp['table_slice'][:900]}")
         usable = [n for n, fp in modes.items()
                   if (fp.get("match_links") or 0) > 5]
         if usable:
