@@ -1463,3 +1463,59 @@ class TestListingSlice:
                             lambda url, headers, *, timeout: payload)
         out = probe.test_match_json("slug", "123", timeout=1)
         assert out["empty"] is False and out["has_date_bah"]
+
+
+class TestRenderWaits:
+    """The listing header has Home/Away columns but the cells hold only a
+    league code and numbers, so the names are probably written in by
+    JavaScript after the snapshot was taken."""
+
+    def _run(self, monkeypatch, responder):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout:
+                                responder(url, headers))
+        return probe.render_wait_modes("2026-09-27", "basketball",
+                                       timeout=1, pause=0)
+
+    def test_a_wait_and_the_mobile_host_are_both_tried(self, monkeypatch):
+        seen: list[tuple[str, dict]] = []
+        out = self._run(monkeypatch, lambda u, h: seen.append((u, h)) or b"")
+        assert any(h.get("X-Wait-For-Selector") == "div.rcnt a"
+                   for _, h in seen)
+        assert any("m.forebet.com" in u for u, _ in seen)
+        assert all(h.get("X-Timeout") for _, h in seen)
+        assert set(out) == {"wait_timeout_25", "wait_for_selector",
+                            "selector_after_wait", "mobile_host"}
+
+    def test_names_appearing_after_a_wait_is_the_headline(self, monkeypatch):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        hydrated = (b"Home team Away team " + b" ".join(
+            b"Lakers Heat Celtics Nuggets Magic Pacers" for _ in range(8)))
+        out = self._run(
+            monkeypatch,
+            lambda u, h: hydrated if h.get("X-Wait-For-Selector") else b"Home team LBP 71 29")
+        assert out["wait_for_selector"]["name_tokens"] > 20
+        assert out["wait_timeout_25"]["name_tokens"] < 5
+
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "render_waits": out})
+        assert any("TEAM NAMES ARRIVE WITH A WAIT: wait_for_selector" in l
+                   for l in lines)
+
+    def test_a_league_code_row_is_not_mistaken_for_names(self, monkeypatch):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        out = self._run(monkeypatch,
+                        lambda u, h: b"Home team Away team 27/09/2026 LBP "
+                                     b"71 29 1 92-78 167.4")
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "render_waits": out})
+        assert not any("TEAM NAMES ARRIVE WITH A WAIT" in l for l in lines)
+
+    def test_a_failing_variant_is_isolated(self, monkeypatch):
+        out = self._run(monkeypatch, lambda u, h: (_ for _ in ()).throw(
+            RuntimeError("gateway")))
+        assert len(out) == 4 and all("error" in fp for fp in out.values())

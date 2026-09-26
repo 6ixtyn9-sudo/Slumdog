@@ -988,6 +988,56 @@ def _clock_context(body: bytes) -> str:
     return body[start: match.end() + 160].decode("utf-8", "replace")
 
 
+NAME_TOKEN = re.compile(rb"[A-Z][a-z]{3,}(?:\s+[A-Z][a-z]{2,})?")
+
+
+def render_wait_modes(date: str, sport_path: str, *, timeout: int,
+                      pause: float) -> dict[str, Any]:
+    """Give the renderer time to hydrate before it snapshots.
+
+    The listing's header carries "Home team / Away team" but the cells come
+    back holding only a league code and numbers. The columns exist, so the
+    names are most likely written in by JavaScript after first paint and the
+    snapshot is simply too early. Ask the renderer to wait — and try the
+    mobile host, whose layout may put the names in the markup.
+    """
+    www = f"https://www.forebet.com/en/{sport_path}/predictions/{date}"
+    mob = f"https://m.forebet.com/en/{sport_path}/predictions/{date}"
+    base = {"User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
+            "X-No-Cache": "true"}
+    attempts = {
+        "wait_timeout_25": (www, {"X-Timeout": "25"}),
+        "wait_for_selector": (www, {"X-Timeout": "25",
+                                    "X-Wait-For-Selector": "div.rcnt a"}),
+        "selector_after_wait": (www, {"X-Timeout": "25",
+                                      "X-Target-Selector": "div.rcnt"}),
+        "mobile_host": (mob, {"X-Timeout": "20"}),
+    }
+    out: dict[str, Any] = {}
+    for i, (name, (url, extra)) in enumerate(attempts.items()):
+        if i:
+            time.sleep(min(pause, 8))
+        try:
+            body = relay_request(RELAY_BASE + url, {**base, **extra},
+                                 timeout=timeout + 30)
+        except Exception as exc:
+            out[name] = {"error": f"{type(exc).__name__}: {exc}"[:110]}
+            continue
+        listing = _table_slice(body)
+        pairs = list(dict.fromkeys(MATCH_LINK.findall(body)))
+        # Words that look like names, counted inside the listing only.
+        names = [m.decode("utf-8", "replace")
+                 for m in NAME_TOKEN.findall(listing.encode())]
+        out[name] = {
+            "bytes": len(body),
+            "match_links": len(pairs),
+            "name_tokens": len(names),
+            "name_sample": names[:6],
+            "listing": listing[:500],
+        }
+    return out
+
+
 def markdown_modes(date: str, sport_path: str, *, timeout: int,
                    pause: float) -> dict[str, Any]:
     """The Markdown engine is the only route that clears the bot check, so
@@ -1218,6 +1268,11 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
             f"{SPORTS[sport].path if sport in SPORTS else sport}"
             f"/predictions/{date}", timeout=timeout)
 
+    time.sleep(pause)
+    report["render_waits"] = render_wait_modes(
+        date, SPORTS[sport].path if sport in SPORTS else sport,
+        timeout=timeout, pause=pause)
+
     # If any Markdown variant exposed match links, that is identity: the
     # slug names both teams and the id keys the per-match endpoint.
     harvested: list[tuple[str, str, str]] = []
@@ -1413,6 +1468,23 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
             lines.append("  control: getrs.php answers DIRECTLY from the "
                          "runner — the APIs are not behind the bot check, so "
                          "an API route would need no relay at all.")
+
+    waits = report.get("render_waits") or {}
+    if waits:
+        lines.append("Render-wait variants (do the team names arrive late?):")
+        for name, fp in waits.items():
+            lines.append(f"  {name}: " + (fp.get("error") or
+                         f"{fp.get('bytes')}B links={fp.get('match_links')} "
+                         f"names={fp.get('name_tokens')} "
+                         f"{fp.get('name_sample')}"))
+        winners = [n for n, fp in waits.items()
+                   if (fp.get("match_links") or 0) > 5
+                   or (fp.get("name_tokens") or 0) > 20]
+        if winners:
+            lines.append("TEAM NAMES ARRIVE WITH A WAIT: " + ", ".join(winners)
+                         + " — the board is capturable through the renderer.")
+            for n in winners[:1]:
+                lines.append(f"  {n} listing: {waits[n].get('listing', '')[:500]}")
 
     got = report.get("harvested_links") or []
     if got:
@@ -1667,7 +1739,7 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
                              "save_page_now", "getjson_crack",
                              "js_call_sites", "sitemaps",
                              "match_ids", "match_json", "dom_selectors",
-                             "harvested_links")},
+                             "harvested_links", "render_waits")},
                            sort_keys=True)[:3000]
     emitted.append(
         f"::notice title=Endpoint hunt::{_annotation_escape(hunt_blob)}")
