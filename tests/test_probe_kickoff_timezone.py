@@ -1096,3 +1096,76 @@ class TestSavePageNow:
         report = probe.run_probe("2026-09-27", sport="basketball",
                                  timeout=1, pause=0)
         assert "browser_probe" not in report
+
+
+class TestGetJsonCrack:
+    """getjson.php answers [] rather than 404 or an interstitial, so the
+    endpoint is live and unchallenged and only the arguments are wrong."""
+
+    def _crack(self, monkeypatch, responder):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout: responder(url))
+        return probe.crack_getjson("2026-09-27", timeout=1, pause=0)
+
+    def test_date_formats_and_extra_params_are_varied(self, monkeypatch):
+        seen: list[str] = []
+        out = self._crack(monkeypatch, lambda u: seen.append(u) or b"[]")
+        joined = " ".join(seen)
+        assert "gdt=27-09-2026" in joined and "gdt=20260927" in joined
+        assert "gdt=2026-09-26" in joined  # a past date, in case future is empty
+        assert all(fp["empty"] for fp in out.values())
+
+    def test_the_relay_wrapper_is_stripped_before_judging(self, monkeypatch):
+        """A wrapped [] must still read as empty, not as 90 bytes of data."""
+        out = self._crack(
+            monkeypatch,
+            lambda u: b"Title: \n\nURL Source: x\n\nMarkdown Content:\n[]\n")
+        assert all(fp["empty"] for fp in out.values())
+        assert all(fp["bytes"] <= 4 for fp in out.values())
+
+    def test_rows_are_reported_as_a_hit(self, monkeypatch):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        out = self._crack(
+            monkeypatch,
+            lambda u: b"Markdown Content:\n" + b'[{"id":"1","DATE_BAH":"x"}]'
+            if "sp=2" in u else b"[]")
+        assert out["with_sport"]["empty"] is False
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "getjson_crack": out})
+        assert any("GETJSON RETURNS DATA FOR: with_sport" in l for l in lines)
+
+
+class TestJsCallSites:
+    """The call site in the bundle names the parameters the endpoint wants."""
+
+    def test_contexts_are_extracted_for_each_endpoint(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        js = (b"x" * 300 + b'u="/scripts/getjson.php?gdt="+d+"&sp="+s;'
+              + b"y" * 300 + b'v="/scripts/getjson_t.php?mid="+m;')
+        monkeypatch.setattr(probe, "cdx_snapshots",
+                            lambda p, *, limit, timeout: [("2026", "u")])
+        monkeypatch.setattr(probe, "archived_bytes",
+                            lambda ts, u, *, timeout, kind="id_": js)
+        out = probe.mine_js_contexts(timeout=1)
+        assert "&sp=" in out["getjson.php"][0]
+        assert "getjson_t" in out
+        assert out["bytes"] == len(js)
+
+    def test_a_missing_bundle_is_reported_not_raised(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "cdx_snapshots",
+                            lambda p, *, limit, timeout: [])
+        assert "not archived" in probe.mine_js_contexts(timeout=1)["error"]
+
+    def test_a_fetch_failure_is_reported_not_raised(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "cdx_snapshots",
+                            lambda p, *, limit, timeout: [("2026", "u")])
+        monkeypatch.setattr(probe, "archived_bytes", _boom("410"))
+        assert "410" in probe.mine_js_contexts(timeout=1)["error"]

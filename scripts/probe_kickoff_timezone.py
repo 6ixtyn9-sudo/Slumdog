@@ -529,6 +529,85 @@ MATCH_LINK = re.compile(
 CLOCK = re.compile(rb"\b([01]?\d|2[0-3]):[0-5]\d\b")
 
 
+ALL_JS = "https://www.forebet.com/includes/js/all.js"
+
+
+def mine_js_contexts(*, timeout: int) -> dict[str, Any]:
+    """Pull the bundle and show how each JSON endpoint is actually called.
+
+    getjson.php answers with [] rather than a 404 or an interstitial, so the
+    endpoint is live and unchallenged and only the parameters are wrong.
+    The call site names them.
+    """
+    out: dict[str, Any] = {}
+    try:
+        snaps = cdx_snapshots("www.forebet.com/includes/js/all.js",
+                              limit=8, timeout=timeout)
+        if not snaps:
+            out["error"] = "all.js not archived"
+            return out
+        timestamp, original = snaps[-1]
+        out["snapshot"] = timestamp
+        body = archived_bytes(timestamp, original, timeout=timeout, kind="js_")
+        out["bytes"] = len(body)
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"[:140]
+        return out
+
+    for needle in (b"getjson.php", b"getjson_y", b"getjson_t", b"getftr.php"):
+        start = 0
+        hits: list[str] = []
+        while len(hits) < 2:
+            idx = body.find(needle, start)
+            if idx == -1:
+                break
+            hits.append(body[max(0, idx - 260): idx + 260].decode(
+                "utf-8", "replace"))
+            start = idx + 1
+        if hits:
+            out[needle.decode()] = hits
+    return out
+
+
+def crack_getjson(date: str, *, timeout: int, pause: float) -> dict[str, Any]:
+    """Vary getjson.php's parameters until something returns rows."""
+    base = "https://www.forebet.com/scripts/getjson.php"
+    from datetime import datetime, timedelta
+
+    day = datetime.fromisoformat(date)
+    yesterday = (day - timedelta(days=1)).strftime("%Y-%m-%d")
+    variants = {
+        "iso": f"{base}?gdt={date}",
+        "dmy_dash": f"{base}?gdt={day.strftime('%d-%m-%Y')}",
+        "dmy_slash": f"{base}?gdt={day.strftime('%d/%m/%Y')}",
+        "compact": f"{base}?gdt={day.strftime('%Y%m%d')}",
+        "with_sport": f"{base}?gdt={date}&sp=2",
+        "with_tp": f"{base}?ln=en&gdt={date}&tp=bsk",
+        "with_league": f"{base}?ln=en&gdt={date}&lg=0",
+        # If future dates are simply empty, a past date proves the shape.
+        "yesterday": f"{base}?gdt={yesterday}",
+    }
+    out: dict[str, Any] = {}
+    for i, (name, url) in enumerate(variants.items()):
+        if i:
+            time.sleep(min(pause, 5))
+        try:
+            body = relay_request(RELAY_BASE + url, {
+                "User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
+                "X-No-Cache": "true"}, timeout=timeout)
+        except Exception as exc:
+            out[name] = {"error": f"{type(exc).__name__}: {exc}"[:90]}
+            continue
+        marker = b"Markdown Content:"
+        payload = body.split(marker, 1)[1].strip() if marker in body else body
+        out[name] = {
+            "bytes": len(payload),
+            "empty": payload[:2] in (b"[]", b""),
+            "sample": payload[:200].decode("utf-8", "replace"),
+        }
+    return out
+
+
 def api_endpoint_sweep(date: str, *, timeout: int,
                        pause: float) -> dict[str, Any]:
     """Test the sibling API endpoints mined from the bundle, direct and relayed.
@@ -917,6 +996,12 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
     report["api_sweep"] = api_endpoint_sweep(date, timeout=timeout, pause=pause)
 
     time.sleep(pause)
+    report["getjson_crack"] = crack_getjson(date, timeout=timeout, pause=pause)
+
+    time.sleep(pause)
+    report["js_call_sites"] = mine_js_contexts(timeout=timeout)
+
+    time.sleep(pause)
     report["save_page_now"] = save_page_now(
         f"https://www.forebet.com/en/"
         f"{SPORTS[sport].path if sport in SPORTS else sport}/predictions/{date}",
@@ -1064,6 +1149,31 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
             lines.append("  control: getrs.php answers DIRECTLY from the "
                          "runner — the APIs are not behind the bot check, so "
                          "an API route would need no relay at all.")
+
+    crack = report.get("getjson_crack") or {}
+    if crack:
+        lines.append("getjson.php parameter sweep (endpoint is live and "
+                     "unchallenged, only the arguments were wrong):")
+        hits = []
+        for name, fp in crack.items():
+            lines.append(f"  {name}: " + (fp.get("error") or
+                         f"{fp.get('bytes')}B empty={fp.get('empty')} "
+                         f"{fp.get('sample', '')[:90]}"))
+            if not fp.get("error") and not fp.get("empty"):
+                hits.append(name)
+        if hits:
+            lines.append("GETJSON RETURNS DATA FOR: " + ", ".join(hits))
+            for name in hits[:2]:
+                lines.append(f"  {name} sample: "
+                             f"{crack[name].get('sample', '')[:300]}")
+
+    sites = report.get("js_call_sites") or {}
+    for key, value in sites.items():
+        if key in ("snapshot", "bytes", "error"):
+            lines.append(f"  js {key}: {value}")
+            continue
+        for hit in value[:2]:
+            lines.append(f"  call site {key}: {hit[:360]}")
 
     spn = report.get("save_page_now") or {}
     if spn:
@@ -1240,7 +1350,8 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
                              "endpoint_tests", "tp_candidates",
                              "fetch_matrix", "markdown_modes",
                              "browser_probe", "api_sweep",
-                             "save_page_now")},
+                             "save_page_now", "getjson_crack",
+                             "js_call_sites")},
                            sort_keys=True)[:3000]
     emitted.append(
         f"::notice title=Endpoint hunt::{_annotation_escape(hunt_blob)}")
