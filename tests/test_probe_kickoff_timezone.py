@@ -821,3 +821,125 @@ class TestMarkdownModes:
                                  timeout=1, pause=0)
         assert "fetch_matrix" not in report
         assert report["markdown_modes"] == {"ok": {}}
+
+
+class TestBrowserProbe:
+    """Last route standing: every HTTP fetcher is either refused or fed the
+    interstitial, and Markdown drops the teams and the clock. A real browser
+    is the only thing left that can satisfy the check like a visitor."""
+
+    class _Element:
+        def __init__(self, text):
+            self._text = text
+
+        def inner_text(self):
+            return self._text
+
+        def inner_html(self):
+            return f"<span>{self._text}</span>"
+
+    class _Page:
+        def __init__(self, html, rows, raises=False):
+            self._html, self._rows, self._raises = html, rows, raises
+            self.waited = False
+
+        def goto(self, url, **kw):
+            self.url = url
+
+        def wait_for_selector(self, selector, **kw):
+            self.waited = True
+            if self._raises:
+                raise TimeoutError("no rows")
+
+        def content(self):
+            return self._html
+
+        def title(self):
+            return "Basketball predictions"
+
+        def query_selector_all(self, selector):
+            return self._rows
+
+    def _launcher(self, page):
+        class _Browser:
+            def new_page(self, **kw):
+                return page
+
+            def close(self):
+                page.closed = True
+
+        class _Chromium:
+            def launch(self, **kw):
+                return _Browser()
+
+        class _Play:
+            chromium = _Chromium()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        return lambda: _Play()
+
+    def test_rendered_rows_are_reported(self):
+        from scripts.probe_kickoff_timezone import playwright_fetch
+
+        page = self._Page(
+            '<div class="rcnt">x</div><div class="rcnt">y</div>',
+            [self._Element("Lakers Heat 27/09/2026 19:30")])
+        out = playwright_fetch("https://x.invalid",
+                               launcher=self._launcher(page))
+        assert out["rows"] == 2
+        assert "Lakers Heat" in out["first_row_text"]
+        assert page.waited
+
+    def test_a_timeout_still_returns_what_rendered(self):
+        from scripts.probe_kickoff_timezone import playwright_fetch
+
+        page = self._Page("<html><title>Just a moment...</title></html>", [],
+                          raises=True)
+        out = playwright_fetch("https://x.invalid",
+                               launcher=self._launcher(page))
+        assert out["rows"] == 0
+        assert out["looks_like"] == "challenge_page"
+        assert "wait_error" in out
+
+    def test_a_failed_install_short_circuits(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "install_playwright",
+                            lambda: "install failed: chromium: boom")
+        monkeypatch.setattr(probe, "playwright_fetch", _boom("must not run"))
+        out = probe.browser_probe("2026-09-27", "basketball")
+        assert out["install"].startswith("install failed")
+        assert "rows" not in out
+
+    def test_install_reports_a_nonzero_exit(self):
+        from scripts.probe_kickoff_timezone import install_playwright
+
+        class _Done:
+            returncode = 1
+            stderr = b"no space left on device"
+
+        assert "no space left" in install_playwright(runner=lambda *a, **k: _Done())
+
+    def test_a_browser_crash_is_recorded_not_raised(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "install_playwright", lambda: "ok")
+        monkeypatch.setattr(probe, "playwright_fetch", _boom("browser died"))
+        out = probe.browser_probe("2026-09-27", "basketball")
+        assert "browser died" in out["error"]
+
+    def test_the_verdict_calls_a_working_browser_the_fix(self):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        _, lines = verdict({
+            "fetch_errors": [], "offset": summarise_offsets([]),
+            "browser_probe": {"rows": 82, "bytes": 231543,
+                              "title": "Basketball predictions",
+                              "first_row_text": "Lakers Heat 19:30"}})
+        assert any("REAL BROWSER GETS THE BOARD: 82 rows" in l for l in lines)
+        assert any("Lakers Heat" in l for l in lines)

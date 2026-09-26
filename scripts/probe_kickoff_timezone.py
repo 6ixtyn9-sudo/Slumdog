@@ -529,6 +529,77 @@ MATCH_LINK = re.compile(
 CLOCK = re.compile(rb"\b([01]?\d|2[0-3]):[0-5]\d\b")
 
 
+def install_playwright(*, runner: Any = None) -> str:
+    """Install Playwright + Chromium on the runner, returning a status."""
+    import subprocess
+    import sys
+
+    run = runner or subprocess.run
+    for args in (
+        [sys.executable, "-m", "pip", "install", "--quiet", "playwright"],
+        [sys.executable, "-m", "playwright", "install", "chromium"],
+    ):
+        done = run(args, capture_output=True, timeout=420)
+        if getattr(done, "returncode", 1) != 0:
+            tail = (getattr(done, "stderr", b"") or b"")[-160:]
+            return f"install failed: {args[-1]}: {tail.decode('utf-8', 'replace')}"
+    return "ok"
+
+
+def playwright_fetch(url: str, *, wait_ms: int = 45000,
+                     launcher: Any = None) -> dict[str, Any]:
+    """Load the board in a real browser and return what the DOM holds.
+
+    Every other route is exhausted: direct fetches are refused outright, an
+    unrelated proxy's IP was challenged too, the relay's html modes return
+    the interstitial, and its Markdown engine drops team names and clocks.
+    A genuine browser is the one thing that can satisfy the bot check the
+    way a visitor's would.
+    """
+    if launcher is None:
+        from playwright.sync_api import sync_playwright  # noqa: PLC0415
+
+        launcher = sync_playwright
+
+    out: dict[str, Any] = {}
+    with launcher() as play:
+        browser = play.chromium.launch(args=["--disable-blink-features="
+                                             "AutomationControlled"])
+        page = browser.new_page(
+            user_agent=BROWSER_UA, locale="en-GB",
+            viewport={"width": 1280, "height": 900})
+        page.goto(url, wait_until="domcontentloaded", timeout=wait_ms)
+        try:
+            # The interstitial resolves itself and then the board renders.
+            page.wait_for_selector("div.rcnt", timeout=wait_ms)
+        except Exception as exc:
+            out["wait_error"] = f"{type(exc).__name__}"[:60]
+        html = page.content().encode("utf-8", "replace")
+        out.update(body_fingerprint(html, sample=200))
+        out["rows"] = html.lower().count(b'class="rcnt')
+        out["title"] = (page.title() or "")[:120]
+        rows = page.query_selector_all("div.rcnt")
+        if rows:
+            out["first_row_text"] = " ".join(
+                (rows[0].inner_text() or "").split())[:240]
+            out["first_row_html"] = (rows[0].inner_html() or "")[:400]
+        browser.close()
+    return out
+
+
+def browser_probe(date: str, sport_path: str) -> dict[str, Any]:
+    url = f"https://www.forebet.com/en/{sport_path}/predictions/{date}"
+    out: dict[str, Any] = {"url": url}
+    try:
+        out["install"] = install_playwright()
+        if out["install"] != "ok":
+            return out
+        out.update(playwright_fetch(url))
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"[:220]
+    return out
+
+
 def markdown_modes(date: str, sport_path: str, *, timeout: int,
                    pause: float) -> dict[str, Any]:
     """The Markdown engine is the only route that clears the bot check, so
@@ -735,6 +806,9 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
         date, SPORTS[sport].path if sport in SPORTS else sport,
         timeout=timeout, pause=pause)
 
+    report["browser_probe"] = browser_probe(
+        date, SPORTS[sport].path if sport in SPORTS else sport)
+
     if not run_hunt:
         report["fetch_errors"] = list(FETCH_ERRORS)
         return report
@@ -843,6 +917,26 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
                 "NO RELAY MODE RETURNED A BOARD — the boards are unreachable "
                 "from a runner right now; that, not publishing lag, is why "
                 "non-football sports have no picks.")
+
+    browser = report.get("browser_probe") or {}
+    if browser:
+        if browser.get("rows"):
+            lines.append(
+                f"REAL BROWSER GETS THE BOARD: {browser['rows']} rows, "
+                f"{browser.get('bytes')} bytes, title={browser.get('title')!r} "
+                "— headless Chromium on the runner clears the bot check, so "
+                "the blocked sports are capturable again.")
+            if browser.get("first_row_text"):
+                lines.append(f"  first row: {browser['first_row_text']}")
+            if browser.get("first_row_html"):
+                lines.append(f"  first row html: {browser['first_row_html']}")
+        else:
+            lines.append(
+                "BROWSER PROBE FOUND NO ROWS: " +
+                str(browser.get("error") or browser.get("install") or
+                    f"{browser.get('bytes')}B {browser.get('looks_like')} "
+                    f"title={browser.get('title')!r} "
+                    f"{browser.get('wait_error', '')}"))
 
     modes = report.get("markdown_modes") or {}
     if modes:
@@ -982,7 +1076,8 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     hunt_blob = json.dumps({k: report.get(k) for k in
                             ("endpoint_hunt", "endpoint_hunt_control",
                              "endpoint_tests", "tp_candidates",
-                             "fetch_matrix", "markdown_modes")},
+                             "fetch_matrix", "markdown_modes",
+                             "browser_probe")},
                            sort_keys=True)[:3000]
     emitted.append(
         f"::notice title=Endpoint hunt::{_annotation_escape(hunt_blob)}")
