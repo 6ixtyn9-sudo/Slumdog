@@ -234,6 +234,14 @@ python scripts/probe_kickoff_timezone.py --date 2026-09-27 --sport basketball --
    joins them on the match id in each row's href, and reports the offset
    distribution.
 
+No terminal? Run it on a GitHub runner instead — that is also better
+evidence, because a runner is the exact relay and IP combination production
+captures from. An agent token cannot push workflow files, so the job is staged
+as `docs/owner_paste/probe_kickoff_timezone.yml`; copy it to
+`.github/workflows/` in the GitHub web UI on this branch and the commit
+triggers it (`docs/owner_paste/README.md` has the click-by-click). It is
+`permissions: contents: read`, commits nothing, and writes only an artifact.
+
 It exits 0 only when the answer is definite — a machine-readable field exists,
 or the offset is unanimous across at least 20 joined matches. An ambiguous
 probe exits 1 and must not be read as permission to trust the timestamps. A
