@@ -1437,7 +1437,8 @@ class TestListingSlice:
         out = probe.markdown_modes("2026-09-27", "basketball",
                                    timeout=1, pause=0)
         slice_ = out["plain"]["table_slice"]
-        assert slice_.startswith("predictions for")
+        # Anchored on the table header, not the navigation.
+        assert slice_.startswith("Home team")
         assert "Lakers Heat" in slice_
 
     def test_a_tiny_payload_is_not_called_data(self, monkeypatch):
