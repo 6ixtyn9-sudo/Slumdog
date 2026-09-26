@@ -523,6 +523,53 @@ def relay_request(url: str, headers: dict[str, str], *, timeout: int) -> bytes:
         return response.read()
 
 
+def fetch_matrix(date: str, sport_path: str, *, timeout: int,
+                 pause: float) -> dict[str, Any]:
+    """Try every host and fetcher we know of against one board.
+
+    Two leads drive this. First, the scripts reference a second host,
+    m.forebet.com, which may not sit behind the same bot check. Second, the
+    relay's Markdown engine clears the check while its html mode does not,
+    so an ordinary open proxy is worth one request each to see whether the
+    block is about the IP or about the request.
+    """
+    www = f"https://www.forebet.com/en/{sport_path}/predictions/{date}"
+    mob = f"https://m.forebet.com/en/{sport_path}/predictions/{date}"
+    plain = {"User-Agent": BROWSER_UA, "Accept": "text/html,*/*"}
+    relay_html = {"User-Agent": "Slumdog", "Accept": "text/plain",
+                  "X-No-Cache": "true", "X-Return-Format": "html"}
+    attempts: dict[str, Any] = {
+        "www_direct": lambda: direct_fetch(www, timeout=timeout, attempts=1),
+        "mobile_direct": lambda: direct_fetch(mob, timeout=timeout, attempts=1),
+        "mobile_relay_html": lambda: relay_request(
+            RELAY_BASE + mob, relay_html, timeout=timeout),
+        "mobile_relay_markdown": lambda: relay_request(
+            RELAY_BASE + mob, {"User-Agent": "EdgeFactory/1.0",
+                               "Accept": "text/plain", "X-No-Cache": "true"},
+            timeout=timeout),
+        "codetabs_proxy": lambda: relay_request(
+            "https://api.codetabs.com/v1/proxy?quest=" + www, plain,
+            timeout=timeout),
+        "allorigins_raw": lambda: relay_request(
+            "https://api.allorigins.win/raw?url=" + www, plain, timeout=timeout),
+    }
+    out: dict[str, Any] = {}
+    for i, (name, call) in enumerate(attempts.items()):
+        if i:
+            time.sleep(min(pause, 8))
+        try:
+            body = call()
+        except Exception as exc:
+            out[name] = {"error": f"{type(exc).__name__}: {exc}"[:110]}
+            continue
+        fingerprint = body_fingerprint(body, sample=180)
+        lowered = body.lower()
+        fingerprint["rows"] = lowered.count(b'class="rcnt')
+        fingerprint["has_team_markup"] = b"itemprop" in lowered
+        out[name] = fingerprint
+    return out
+
+
 def probe_routes(board_url: str, *, timeout: int, pause: float) -> dict[str, Any]:
     """Fingerprint every way we know of asking the relay for one board.
 
@@ -635,6 +682,11 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float) -> dict[str,
     report["route_diagnostic"] = probe_routes(
         routes_url, timeout=timeout, pause=pause)
 
+    time.sleep(pause)
+    report["fetch_matrix"] = fetch_matrix(
+        date, SPORTS[sport].path if sport in SPORTS else sport,
+        timeout=timeout, pause=pause)
+
     # Hunt for a JSON endpoint for the blocked sports.
     time.sleep(pause)
     page = f"https://www.forebet.com/en/{SPORTS[sport].path}/predictions" \
@@ -734,6 +786,19 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
                 "NO RELAY MODE RETURNED A BOARD — the boards are unreachable "
                 "from a runner right now; that, not publishing lag, is why "
                 "non-football sports have no picks.")
+
+    matrix = report.get("fetch_matrix") or {}
+    if matrix:
+        lines.append("Host/fetcher matrix:")
+        for name, fp in matrix.items():
+            lines.append(f"  {name}: " + (fp.get("error") or
+                         f"{fp.get('bytes')}B {fp.get('looks_like')} "
+                         f"rows={fp.get('rows')} "
+                         f"teams={'yes' if fp.get('has_team_markup') else 'no'}"))
+        wins = [n for n, fp in matrix.items() if (fp.get("rows") or 0) > 0]
+        if wins:
+            lines.append("BOARD HTML RECOVERED VIA: " + ", ".join(wins) +
+                         " — this is the capture route for the blocked sports.")
 
     hunt = report.get("endpoint_hunt") or {}
     if hunt:
@@ -836,7 +901,8 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     ]
     hunt_blob = json.dumps({k: report.get(k) for k in
                             ("endpoint_hunt", "endpoint_hunt_control",
-                             "endpoint_tests", "tp_candidates")},
+                             "endpoint_tests", "tp_candidates",
+                             "fetch_matrix")},
                            sort_keys=True)[:3000]
     emitted.append(
         f"::notice title=Endpoint hunt::{_annotation_escape(hunt_blob)}")

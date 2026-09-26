@@ -701,3 +701,50 @@ class TestSportCodeHunt:
                                  timeout=1, pause=0)
         assert "1x2" not in report["tp_candidates"]["_values"]
         assert "bsk" in report["tp_candidates"]["_values"]
+
+
+class TestFetchMatrix:
+    """No JSON twin exists for the blocked sports, so the remaining question
+    is whether any host or fetcher returns their board HTML at all."""
+
+    def _matrix(self, monkeypatch, responder):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "direct_fetch",
+                            lambda url, *, timeout, attempts=3: responder(url))
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout: responder(url))
+        return probe.fetch_matrix("2026-09-27", "basketball",
+                                  timeout=1, pause=0)
+
+    def test_the_mobile_host_is_tried(self, monkeypatch):
+        seen: list[str] = []
+
+        def _respond(url):
+            seen.append(url)
+            return b"<html></html>"
+
+        out = self._matrix(monkeypatch, _respond)
+        assert any("m.forebet.com" in u for u in seen)
+        assert set(out) >= {"www_direct", "mobile_direct",
+                            "mobile_relay_markdown", "codetabs_proxy"}
+
+    def test_a_route_with_rows_is_named_as_the_capture_route(self, monkeypatch):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        def _respond(url):
+            if "m.forebet.com" in url and "r.jina" not in url:
+                return (b'<div class="rcnt" itemprop="x">A v B</div>' * 3)
+            return b"<html><title>Just a moment...</title></html>"
+
+        out = self._matrix(monkeypatch, _respond)
+        assert out["mobile_direct"]["rows"] == 3
+        assert out["www_direct"]["looks_like"] == "challenge_page"
+
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "fetch_matrix": out})
+        assert any("BOARD HTML RECOVERED VIA: mobile_direct" in l for l in lines)
+
+    def test_every_failure_is_isolated(self, monkeypatch):
+        out = self._matrix(monkeypatch, _boom("blocked"))
+        assert len(out) == 6 and all("error" in fp for fp in out.values())
