@@ -608,6 +608,140 @@ def crack_getjson(date: str, *, timeout: int, pause: float) -> dict[str, Any]:
     return out
 
 
+SITEMAP_URL = re.compile(rb"<loc>\s*([^<\s]+)\s*</loc>", re.I)
+MATCH_SLUG = re.compile(
+    rb"forebet\.com/en/([a-z\-]+)/[^\s<\"']*?([a-z0-9\-]+)-(\d{5,})\b", re.I)
+
+
+def discover_sitemaps(*, timeout: int, pause: float) -> dict[str, Any]:
+    """Find the sitemaps, which are static XML served for crawlers.
+
+    getjson.php wants a match id, and I called that circular because ids
+    live on the board. That is only true if the board is the only place
+    they live. Sitemaps list match pages by design.
+    """
+    out: dict[str, Any] = {}
+
+    def _get(url: str) -> bytes:
+        try:
+            return direct_fetch(url, timeout=timeout, attempts=1)
+        except Exception as exc:
+            out.setdefault("direct_errors", []).append(
+                f"{url.rsplit('/', 1)[-1]}: {type(exc).__name__}"[:60])
+            return relay_request(RELAY_BASE + url, {
+                "User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
+                "X-No-Cache": "true", "X-Return-Format": "text"},
+                timeout=timeout)
+
+    try:
+        robots = _get("https://www.forebet.com/robots.txt")
+        out["robots_bytes"] = len(robots)
+        out["robots_sample"] = robots[:300].decode("utf-8", "replace")
+        listed = re.findall(rb"(?im)^\s*sitemap:\s*(\S+)", robots)
+        out["sitemaps_listed"] = [s.decode() for s in listed][:8]
+    except Exception as exc:
+        out["robots_error"] = f"{type(exc).__name__}: {exc}"[:120]
+
+    candidates = out.get("sitemaps_listed") or [
+        "https://www.forebet.com/sitemap.xml"]
+    out["children"] = {}
+    for i, sitemap in enumerate(candidates[:2]):
+        if i:
+            time.sleep(min(pause, 5))
+        try:
+            body = _get(sitemap)
+        except Exception as exc:
+            out["children"][sitemap] = {
+                "error": f"{type(exc).__name__}: {exc}"[:90]}
+            continue
+        locs = [m.decode("utf-8", "replace")
+                for m in SITEMAP_URL.findall(body)]
+        out["children"][sitemap] = {
+            "bytes": len(body),
+            "locs": len(locs),
+            "sample": locs[:5],
+            "is_index": any(loc.endswith((".xml", ".xml.gz")) for loc in locs),
+        }
+    return out
+
+
+def harvest_match_ids(sitemap_url: str, *, timeout: int) -> dict[str, Any]:
+    """Pull (sport, slug, match id) triples out of a sitemap."""
+    out: dict[str, Any] = {"sitemap": sitemap_url}
+    try:
+        try:
+            body = direct_fetch(sitemap_url, timeout=timeout, attempts=1)
+        except Exception:
+            body = relay_request(RELAY_BASE + sitemap_url, {
+                "User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
+                "X-No-Cache": "true", "X-Return-Format": "text"},
+                timeout=timeout)
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"[:120]
+        return out
+
+    out["bytes"] = len(body)
+    found: dict[str, list[tuple[str, str]]] = {}
+    for sport, slug, mid in MATCH_SLUG.findall(body):
+        key = sport.decode().lower()
+        entry = (slug.decode(), mid.decode())
+        bucket = found.setdefault(key, [])
+        if entry not in bucket and len(bucket) < 4:
+            bucket.append(entry)
+    out["by_sport"] = {k: v for k, v in list(found.items())[:10]}
+    return out
+
+
+def test_match_json(slug: str, mid: str, *, timeout: int) -> dict[str, Any]:
+    """The call site wants gdt=<slug>&mid=<id>. Give it exactly that."""
+    url = ("https://www.forebet.com/scripts/getjson.php?"
+           f"gdt={slug}&mid={mid}")
+    out: dict[str, Any] = {"url": url}
+    try:
+        body = relay_request(RELAY_BASE + url, {
+            "User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
+            "X-No-Cache": "true"}, timeout=timeout)
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"[:110]
+        return out
+    marker = b"Markdown Content:"
+    payload = body.split(marker, 1)[1].strip() if marker in body else body
+    out["bytes"] = len(payload)
+    out["empty"] = payload[:2] in (b"[]", b"")
+    out["has_date_bah"] = b"DATE_BAH" in payload or b"date_bah" in payload
+    out["sample"] = payload[:300].decode("utf-8", "replace")
+    return out
+
+
+def live_dom_selectors(date: str, sport_path: str, *,
+                       timeout: int, pause: float) -> dict[str, Any]:
+    """Ask the renderer which selectors exist on the live board.
+
+    A target-selector request answers 422 when the selector matches
+    nothing, so this reads the live DOM's shape without ever seeing it.
+    `.rcnt` — what our parser is built on and what the 2024 archive used —
+    returned 422, which would mean the board has been rebuilt.
+    """
+    url = f"https://www.forebet.com/en/{sport_path}/predictions/{date}"
+    out: dict[str, Any] = {}
+    for i, selector in enumerate(
+            (".rcnt", "div.rcnt", "table", ".schema", "tbody", ".moduletable")):
+        if i:
+            time.sleep(min(pause, 4))
+        try:
+            body = relay_request(RELAY_BASE + url, {
+                "User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
+                "X-No-Cache": "true", "X-Target-Selector": selector},
+                timeout=timeout)
+            out[selector] = {"bytes": len(body), "found": True,
+                             "sample": body[-200:].decode("utf-8", "replace")}
+        except Exception as exc:
+            code = getattr(exc, "code", None)
+            out[selector] = {"found": False if code == 422 else None,
+                             "error": f"{type(exc).__name__}:{code}"[:40]}
+    return out
+
+
 def api_endpoint_sweep(date: str, *, timeout: int,
                        pause: float) -> dict[str, Any]:
     """Test the sibling API endpoints mined from the bundle, direct and relayed.
@@ -967,7 +1101,7 @@ def probe_routes(board_url: str, *, timeout: int, pause: float) -> dict[str, Any
 
 
 def run_probe(date: str, *, sport: str, timeout: int, pause: float,
-              run_hunt: bool = False, run_browser: bool = True) -> dict[str, Any]:
+              run_hunt: bool = False, run_browser: bool = False) -> dict[str, Any]:
     report: dict[str, Any] = {
         "probed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "target_date": date,
@@ -1048,6 +1182,45 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
             f"https://www.forebet.com/en/"
             f"{SPORTS[sport].path if sport in SPORTS else sport}"
             f"/predictions/{date}", timeout=timeout)
+
+    time.sleep(pause)
+    report["sitemaps"] = discover_sitemaps(timeout=timeout, pause=pause)
+
+    # If a sitemap lists match pages, harvest ids and feed one to the
+    # per-match endpoint — the step that closes the circle.
+    children = (report["sitemaps"].get("children") or {})
+    target = None
+    for name, child in children.items():
+        if child.get("error"):
+            continue
+        if child.get("is_index"):
+            for loc in child.get("sample", []):
+                if any(k in loc.lower() for k in
+                       ("match", "pred", "sport", "event")):
+                    target = loc
+                    break
+        elif child.get("locs"):
+            target = name
+        if target:
+            break
+    if target:
+        time.sleep(pause)
+        report["match_ids"] = harvest_match_ids(target, timeout=timeout)
+        by_sport = report["match_ids"].get("by_sport") or {}
+        pick = next((entries[0] for key, entries in by_sport.items()
+                     if "football" not in key and entries), None)
+        if pick is None:
+            pick = next((entries[0] for entries in by_sport.values()
+                         if entries), None)
+        if pick:
+            time.sleep(pause)
+            report["match_json"] = test_match_json(
+                pick[0], pick[1], timeout=timeout)
+
+    time.sleep(pause)
+    report["dom_selectors"] = live_dom_selectors(
+        date, SPORTS[sport].path if sport in SPORTS else sport,
+        timeout=timeout, pause=pause)
 
     # The browser attempt is the live question now, so it runs by default;
     # --no-browser skips it once it has been answered.
@@ -1189,6 +1362,48 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
             lines.append("  control: getrs.php answers DIRECTLY from the "
                          "runner — the APIs are not behind the bot check, so "
                          "an API route would need no relay at all.")
+
+    maps = report.get("sitemaps") or {}
+    if maps:
+        lines.append(f"robots.txt: {maps.get('robots_bytes')}B "
+                     f"sitemaps={maps.get('sitemaps_listed')} "
+                     f"{maps.get('robots_error', '')}")
+        for name, child in (maps.get("children") or {}).items():
+            lines.append(f"  sitemap {name}: " + (child.get("error") or
+                         f"{child.get('bytes')}B locs={child.get('locs')} "
+                         f"index={child.get('is_index')} "
+                         f"{child.get('sample')}"))
+        if maps.get("direct_errors"):
+            lines.append(f"  direct failed, relayed instead: "
+                         f"{maps['direct_errors']}")
+
+    harvest = report.get("match_ids") or {}
+    if harvest:
+        lines.append(f"Match ids from sitemap ({harvest.get('bytes')}B): "
+                     f"{harvest.get('by_sport') or harvest.get('error')}")
+    mjson = report.get("match_json") or {}
+    if mjson:
+        lines.append("getjson.php with a real match id: " +
+                     (mjson.get("error") or
+                      f"{mjson.get('bytes')}B empty={mjson.get('empty')} "
+                      f"date_bah={mjson.get('has_date_bah')}"))
+        if not mjson.get("empty") and not mjson.get("error"):
+            lines.append("PER-MATCH JSON WORKS — sitemap gives the ids, this "
+                         "endpoint gives the data, and neither is behind the "
+                         "bot check. That is a capture route.")
+            lines.append(f"  sample: {mjson.get('sample', '')[:300]}")
+
+    dom = report.get("dom_selectors") or {}
+    if dom:
+        lines.append("Live DOM selectors (422 = selector matches nothing):")
+        for selector, fp in dom.items():
+            lines.append(f"  {selector}: " + (
+                f"FOUND {fp.get('bytes')}B" if fp.get("found")
+                else str(fp.get("error"))))
+        if dom.get(".rcnt", {}).get("found") is False:
+            lines.append("THE LIVE BOARD HAS NO .rcnt — the markup our parser "
+                         "targets is gone, so fetching alone would not have "
+                         "been enough.")
 
     crack = report.get("getjson_crack") or {}
     if crack:
@@ -1391,7 +1606,8 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
                              "fetch_matrix", "markdown_modes",
                              "browser_probe", "api_sweep",
                              "save_page_now", "getjson_crack",
-                             "js_call_sites")},
+                             "js_call_sites", "sitemaps",
+                             "match_ids", "match_json", "dom_selectors")},
                            sort_keys=True)[:3000]
     emitted.append(
         f"::notice title=Endpoint hunt::{_annotation_escape(hunt_blob)}")

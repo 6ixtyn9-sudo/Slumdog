@@ -1096,14 +1096,17 @@ class TestSavePageNow:
         monkeypatch.setattr(probe, "crack_getjson", _boom("must not run"))
         monkeypatch.setattr(probe, "save_page_now", _boom("must not run"))
         monkeypatch.setattr(probe, "browser_probe", lambda *a, **k: {"rows": 0})
+        monkeypatch.setattr(probe, "discover_sitemaps", lambda **k: {})
+        monkeypatch.setattr(probe, "live_dom_selectors", lambda *a, **k: {})
         report = probe.run_probe("2026-09-27", sport="basketball",
                                  timeout=1, pause=0)
         assert "save_page_now" not in report
-        assert report["browser_probe"] == {"rows": 0}
+        # The browser question is answered; it no longer runs unasked.
+        assert "browser_probe" not in report
 
-        skipped = probe.run_probe("2026-09-27", sport="basketball",
-                                  timeout=1, pause=0, run_browser=False)
-        assert "browser_probe" not in skipped
+        asked = probe.run_probe("2026-09-27", sport="basketball",
+                                timeout=1, pause=0, run_browser=True)
+        assert asked["browser_probe"] == {"rows": 0}
 
 
 class TestGetJsonCrack:
@@ -1238,3 +1241,120 @@ class TestHeadedBrowser:
                          launcher=TestBrowserProbe()._launcher(page))
         assert scripts and "navigator" in scripts[0]
         assert "webdriver" in scripts[0]
+
+
+class TestSitemapRoute:
+    """getjson.php wants a match id, which I called circular because ids live
+    on the board. Sitemaps are static XML published for crawlers — if they
+    list match pages, the circle opens."""
+
+    ROBOTS = (b"User-agent: *\nDisallow: /cgi-bin/\n"
+              b"Sitemap: https://www.forebet.com/sitemap_index.xml\n")
+    INDEX = (b"<sitemapindex><sitemap><loc>"
+             b"https://www.forebet.com/sitemap_matches.xml</loc></sitemap>"
+             b"</sitemapindex>")
+    MATCHES = (b"<urlset><url><loc>https://www.forebet.com/en/basketball/"
+               b"predictions/lakers-vs-heat-2476264</loc></url>"
+               b"<url><loc>https://www.forebet.com/en/tennis/predictions/"
+               b"alcaraz-vs-sinner-9911223</loc></url></urlset>")
+
+    def test_sitemaps_are_read_from_robots(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        def _fetch(url, *, timeout, attempts=3):
+            if url.endswith("robots.txt"):
+                return self.ROBOTS
+            return self.INDEX
+
+        monkeypatch.setattr(probe, "direct_fetch", _fetch)
+        out = probe.discover_sitemaps(timeout=1, pause=0)
+        assert out["sitemaps_listed"] == [
+            "https://www.forebet.com/sitemap_index.xml"]
+        child = out["children"]["https://www.forebet.com/sitemap_index.xml"]
+        assert child["is_index"] and child["locs"] == 1
+
+    def test_relay_is_used_when_a_direct_fetch_is_refused(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "direct_fetch", _boom("403"))
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout: self.ROBOTS)
+        out = probe.discover_sitemaps(timeout=1, pause=0)
+        assert out["sitemaps_listed"]
+        assert out["direct_errors"]
+
+    def test_match_ids_are_harvested_per_sport(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "direct_fetch",
+                            lambda url, *, timeout, attempts=3: self.MATCHES)
+        out = probe.harvest_match_ids("https://x/sitemap.xml", timeout=1)
+        assert out["by_sport"]["basketball"][0] == ("lakers-vs-heat", "2476264")
+        assert out["by_sport"]["tennis"][0][1] == "9911223"
+
+    def test_a_working_per_match_endpoint_is_declared_a_route(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        monkeypatch.setattr(
+            probe, "relay_request",
+            lambda url, headers, *, timeout:
+                b'Markdown Content:\n[{"id":"2476264",'
+                b'"DATE_BAH":"2026-09-27 19:30:00"}]')
+        out = probe.test_match_json("lakers-vs-heat", "2476264", timeout=1)
+        assert out["empty"] is False and out["has_date_bah"]
+
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "match_json": out})
+        assert any("PER-MATCH JSON WORKS" in l for l in lines)
+
+    def test_an_empty_per_match_answer_is_not_a_win(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout: b"[]")
+        out = probe.test_match_json("x", "1", timeout=1)
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "match_json": out})
+        assert out["empty"] and not any("PER-MATCH JSON WORKS" in l
+                                        for l in lines)
+
+
+class TestLiveDomSelectors:
+    """A target-selector request answers 422 when nothing matches, which
+    reads the live DOM's shape without ever seeing the page."""
+
+    def test_a_422_is_recorded_as_absent(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        class _Err(Exception):
+            code = 422
+
+        def _relay(url, headers, *, timeout):
+            if headers.get("X-Target-Selector") in (".rcnt", "div.rcnt"):
+                raise _Err("unprocessable")
+            return b"<table>rows</table>"
+
+        monkeypatch.setattr(probe, "relay_request", _relay)
+        out = probe.live_dom_selectors("2026-09-27", "basketball",
+                                       timeout=1, pause=0)
+        assert out[".rcnt"]["found"] is False
+        assert out["table"]["found"] is True
+
+    def test_a_missing_rcnt_is_called_out_as_a_parser_problem(self):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        _, lines = verdict({
+            "fetch_errors": [], "offset": summarise_offsets([]),
+            "dom_selectors": {".rcnt": {"found": False, "error": "HTTPError:422"},
+                              "table": {"found": True, "bytes": 900}}})
+        assert any("THE LIVE BOARD HAS NO .rcnt" in l for l in lines)
+
+    def test_an_unrelated_error_is_not_read_as_absence(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "relay_request", _boom("timeout"))
+        out = probe.live_dom_selectors("2026-09-27", "basketball",
+                                       timeout=1, pause=0)
+        assert all(fp["found"] is None for fp in out.values())
