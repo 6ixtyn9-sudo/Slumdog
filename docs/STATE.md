@@ -1,4 +1,38 @@
 
+## A WORKING CAPTURE ROUTE FOR THE BLOCKED SPORTS (2026-09-26)
+
+The boards are not unreachable. The relay's rendering engine clears the bot
+check and returns the listing — what fails is the *full-page* render, which
+collapses the table and drops the team-name column. A **selector-scoped**
+extraction keeps it.
+
+Two requests per board, both to `https://r.jina.ai/<board url>`, headers
+`User-Agent`, `Accept: text/plain`, `X-No-Cache: true`, plus:
+
+| Header | Returns |
+|---|---|
+| `X-Target-Selector: .rcnt .tnms` | one row per match: team names + kickoff, e.g. `[Abejas Santos 09/27/2026 2:00 AM](…/matches/…)` |
+| `X-Target-Selector: .rcnt` | the numbers for those rows: probabilities, predicted score, avg points, odds |
+
+Measured on the 2026-09-27 basketball board, twice: 16.8KB / 126 kickoffs /
+126 dates / 227 name tokens, against 12.6KB of numeric rows. `.homeTeam` also
+works when not throttled and returns a clean home-team list (92 names).
+
+**Why this was missed for so long.** Plain Markdown of the same page carries
+the numbers and no names, so the early read was "the renderer drops match
+identity". It does — at page scope. Scoping to the element recovers it.
+
+**Caveats before this becomes production capture:**
+1. The join is by row order across two requests. Verify counts match per
+   board and fail closed when they do not.
+2. The kickoff is rendered text (`09/27/2026 2:00 AM`), not an instant. The
+   EVENT_DAY timezone hold still applies to these sports. Football remains the
+   only sport with a machine-readable instant (`DATE_BAH` from `getrs.php`).
+3. The relay throttles: hammering it returns 422s, 591-byte stubs and
+   interstitials. Several earlier "dead ends" in this file were throttled
+   replies, not answers. Pace the captures and treat a short body as a
+   failure, never as an empty board.
+
 ## Capture routes for non-football boards — exhaustively tested 2026-09-26
 
 Measured from a GitHub runner, read-only probe runs 36242850508 → 36253357842.

@@ -1,5 +1,7 @@
 # Slumdog Living Handoff
 
+**2026-09-26 (resolved):** there IS a capture route for the blocked sports. Two selector-scoped requests through the relay — `X-Target-Selector: .rcnt .tnms` for team names and kickoffs, `.rcnt` for the numbers — return 126 rows each on the basketball board. The bot check never blocked the renderer; the full-page render was dropping the team-name column, and page-scope Markdown made it look like identity was unavailable. See the route table at the top of docs/STATE.md, including the three caveats: order-based joining, rendered-not-absolute kickoff times, and relay throttling that produced several false dead ends.
+
 **2026-09-26 (final hunt):** every capture route for the non-football boards has now been tested and the site is closed to datacenter IPs entirely — headless Chromium on the runner is served the interstitial even on the homepage. No JSON twin exists for those sports (the archived board ships its rows server-rendered, and every candidate getrs.php sport code returns empty). The relay's Markdown engine is the only thing that gets through and it carries neither team names nor kickoff times. See the route table at the top of docs/STATE.md. Unblocking needs a paid service, a residential runner, or an explicit decision to stay football-only.
 
 **Last updated:** 2026-09-26 (UTC, later session) — **BOT-CHECK BLOCK FOUND; IT, NOT PUBLISHING LAG, IS WHY NON-FOOTBALL SPORTS HAVE NO PICKS.**
