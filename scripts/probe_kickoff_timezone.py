@@ -63,7 +63,11 @@ from slumdog.forebet import (  # noqa: E402
     source_url,
 )
 from slumdog.parsers import BASE  # noqa: E402
-from slumdog.relay_columns import capture_board  # noqa: E402
+from slumdog.relay_columns import (  # noqa: E402
+    COLUMN_SELECTORS,
+    REQUIRED_COLUMNS,
+    capture_board,
+)
 from slumdog.relay_columns import (  # noqa: E402
     ROW_SCOPE,
     event_day_from_kickoff,
@@ -1680,6 +1684,15 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
 
     # Coverage runs first: it is the question the project is actually
     # blocked on, and a later stage overrunning must not cost its answer.
+    # The capture contract in force for this run. Annotations are read long
+    # after the fact, and "columns disagree" means nothing without knowing
+    # which columns were required and how rows were scoped.
+    report["capture_contract"] = {
+        "row_scope": ROW_SCOPE,
+        "required_columns": list(REQUIRED_COLUMNS),
+        "columns": dict(COLUMN_SELECTORS),
+    }
+
     report["coverage_sweep"] = coverage_sweep(date, timeout=timeout,
                                               pause=pause)
     if time_left() > 240:
@@ -2371,7 +2384,7 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     # One annotation per section: a single blob silently truncates at ~3000
     # characters and the interesting result is usually last.
     sections = (
-        "coverage_sweep", "row_blocks", "r1_coverage", "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",
+        "capture_contract", "coverage_sweep", "row_blocks", "r1_coverage", "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",
         "recent_markup", "render_waits", "markdown_modes", "api_sweep",
         "getjson_crack", "js_call_sites", "current_bundle", "sitemaps",
         "endpoint_hunt", "fetch_matrix", "browser_probe", "save_page_now",
