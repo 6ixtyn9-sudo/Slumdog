@@ -282,17 +282,59 @@ _EVENT_DAY = re.compile(r"(\d{2})/(\d{2})/(\d{4})")
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 
 
-def event_day_from_kickoff(value: str) -> str | None:
-    """ISO day from a rendered kickoff like ``09/27/2026 2:00 AM``.
+MONTH_FIRST = "MDY"
+DAY_FIRST = "DMY"
 
-    The board renders American order (month first). This reads the day only;
-    the clock is deliberately ignored, because the renderer emits it in a
-    timezone derived from the relay's egress IP, not UTC.
+
+def infer_date_order(cells: list[str]) -> str | None:
+    """Work out whether a board renders month-first or day-first.
+
+    Assuming month-first was a live bug waiting to happen. Basketball
+    renders ``09/27/2026``, which can only be month-first; the cricket
+    sweep on 2026-09-28 returned ``30/09/2026``, which can only be
+    day-first. A board read in the wrong order files matches under a day
+    they do not belong to, and the 24h timing proof is a claim about that
+    day — so the order is measured per board, never assumed.
+
+    Returns ``None`` when the board gives no disambiguating date (every
+    value has both components under 13) or when it contradicts itself.
+    Callers must refuse such a board rather than pick an order.
+    """
+    month_first = day_first = False
+    for cell in cells:
+        match = _EVENT_DAY.search(cell)
+        if not match:
+            continue
+        first, second = int(match.group(1)), int(match.group(2))
+        if first > 12:
+            day_first = True
+        if second > 12:
+            month_first = True
+    if month_first and day_first:
+        return None  # the board disagrees with itself; trust neither
+    if month_first:
+        return MONTH_FIRST
+    if day_first:
+        return DAY_FIRST
+    return None
+
+
+def event_day_from_kickoff(value: str, order: str = MONTH_FIRST) -> str | None:
+    """ISO day from a rendered kickoff such as ``09/27/2026 2:00 AM``.
+
+    ``order`` must come from :func:`infer_date_order` for the board being
+    read. Only the day is taken; the clock is deliberately ignored, because
+    the renderer emits it in a timezone derived from the relay's egress IP
+    rather than UTC.
     """
     match = _EVENT_DAY.search(value)
     if not match:
         return None
-    return f"{match.group(3)}-{match.group(1)}-{match.group(2)}"
+    first, second = match.group(1), match.group(2)
+    month, day = (first, second) if order == MONTH_FIRST else (second, first)
+    if not (1 <= int(month) <= 12 and 1 <= int(day) <= 31):
+        return None
+    return f"{match.group(3)}-{month}-{day}"
 
 
 def match_url(cell: str) -> str | None:
@@ -337,12 +379,18 @@ def rows_to_events(board: BoardColumns, *, captured_at: str,
     not trustworthy enough to reassign one.
     """
     spec = SPORTS[board.sport]
+    order = infer_date_order(board.columns.get("link", []))
+    if order is None:
+        raise ColumnAlignmentError(
+            f"{board.sport} {board.target_date}: cannot tell whether this "
+            f"board renders month-first or day-first; refusing rather than "
+            f"filing matches under a day they may not belong to")
     events: list[EventSnapshot] = []
     for row in board.rows():
         url = match_url(row.get("link", ""))
         if not url:
             continue
-        if event_day_from_kickoff(row.get("link", "")) != board.target_date:
+        if event_day_from_kickoff(row.get("link", ""), order) != board.target_date:
             continue
         home, away = row.get("home", "").strip(), row.get("away", "").strip()
         if not home or not away:
@@ -414,15 +462,19 @@ class BoardCapture:
         return self.status == CAPTURED and bool(self.events)
 
 
-def observed_dates(columns: dict[str, list[str]]) -> tuple[str, ...]:
+def observed_dates(columns: dict[str, list[str]],
+                   order: str | None = None) -> tuple[str, ...]:
     """Distinct dates the board rendered, earliest first.
 
     This is the measurement that tells us how far ahead each sport
     publishes — the thing the whole late-publishing problem turns on — so
     it is recorded even when it contains nothing for the requested date.
     """
-    seen = {day for cell in columns.get("link", [])
-            if (day := event_day_from_kickoff(cell))}
+    cells = columns.get("link", [])
+    order = order or infer_date_order(cells)
+    if order is None:
+        return ()
+    seen = {day for cell in cells if (day := event_day_from_kickoff(cell, order))}
     return tuple(sorted(seen))
 
 
@@ -474,8 +526,14 @@ def capture_board(board_url: str, sport: str, target_date: str, *,
                             reason=str(exc))
 
     days = observed_dates(board.columns)
-    events = rows_to_events(board, captured_at=captured_at,
-                            raw_sha256=raw_sha256)
+    try:
+        events = rows_to_events(board, captured_at=captured_at,
+                                raw_sha256=raw_sha256)
+    except ColumnAlignmentError as exc:
+        return BoardCapture(status=COVERAGE_GAP, sport=sport,
+                            target_date=target_date, source_url=board_url,
+                            observed_dates=days, row_count=board.row_count,
+                            reason=str(exc))
     suspect = bool(expected_rows) and board.row_count * 2 < (expected_rows or 0)
     if not events:
         return BoardCapture(

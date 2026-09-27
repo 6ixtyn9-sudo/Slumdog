@@ -75,6 +75,7 @@ from slumdog.relay_columns import (  # noqa: E402
     BoardColumns,
     ROW_SCOPE,
     event_day_from_kickoff,
+    infer_date_order,
     strip_wrapper,
 )
 from slumdog.sports import SPORTS  # noqa: E402
@@ -811,7 +812,8 @@ def test_match_json(slug: str, mid: str, *, timeout: int,
 # Sports whose boards the 24h forward capture cannot reach, in the order
 # worth spending a limited request budget on.
 COVERAGE_SPORTS: tuple[str, ...] = (
-    "basketball", "hockey", "baseball", "tennis",
+    # Proven through the column route, plus the two the sweep found ready.
+    "basketball", "hockey", "handball", "volleyball",
 )
 
 
@@ -862,14 +864,17 @@ def coverage_sweep(date: str, *, timeout: int, pause: float,
             continue
         text = strip_wrapper(body)
         links = re.findall(r"\[([^\]]{3,120})\]\((https?://[^)]+)\)", text)
+        labels = [label for label, _href in links]
+        order = infer_date_order(labels)
         days = Counter()
-        for label, _href in links:
-            day = event_day_from_kickoff(label)
+        for label in labels:
+            day = event_day_from_kickoff(label, order) if order else None
             if day:
                 days[day] += 1
         out[sport] = {
             "bytes": len(body),
             "links": len(links),
+            "date_order": order or "AMBIGUOUS",
             "dates": dict(days.most_common(5)),
             "on_target_date": days.get(date, 0),
             "sample": links[0][0][:90] if links else text[:120],
@@ -2032,6 +2037,7 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
         for sport, rec in sweep.items():
             lines.append(f"  {sport}: " + (rec.get("error") or
                          f"{rec.get('bytes')}B rows~{rec.get('links')} "
+                         f"order={rec.get('date_order')} "
                          f"on_target={rec.get('on_target_date')} "
                          f"dates={rec.get('dates')}"))
         reachable = [s for s, r in sweep.items() if (r.get("links") or 0) > 0]

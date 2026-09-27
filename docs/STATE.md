@@ -109,6 +109,37 @@ carries the corrected `forward_shadow.yml` byte-identical to the staged
 copy; the checker reports 24/24 covered, exit 0. The staged file is deleted
 and `tests/test_workflow_persist_contract.py` now guards the live file.
 
+### Sweep of the nine never-probed sports (2026-09-27, target 2026-09-28)
+
+One row-scoped request each, run 36335190579. Reachability and publication
+horizon are separate findings and are reported separately.
+
+| Sport | Rows | On target date | Dates the board showed |
+| --- | --- | --- | --- |
+| handball | 22 | **11** | 2026-09-28 only |
+| volleyball | 20 | **10** | 2026-09-28 only |
+| cricket | 20 | 1 | 09-28, 09-29, plus malformed values (see below) |
+| rugby | 20 | 0 | 10-01, 10-02 |
+| mma | 20 | 0 | 10-03, 10-04 |
+| american_football | 2 | 0 | 09-29 |
+| afl | 20 | 0 | 09-11 … 09-26 — all in the past; season over |
+| esoccer | — | — | HTTP 422: does not use this row markup |
+| esports | — | — | HTTP 422: does not use this row markup |
+
+So the column route reaches **seven of nine**. Only handball and volleyball
+have matches on the target date; rugby and mma publish 3–6 days ahead and
+are reachable whenever their own dates are targeted; afl is out of season,
+which is a fact about the calendar, not a capture failure.
+
+**Bug this sweep caught before it shipped: the date order is not fixed.**
+Cricket returned `30/09/2026` where basketball returns `09/27/2026`. The
+parser assumed month-first everywhere, so a day-first board would have had
+its matches filed under a day they do not belong to — and the 24h proof is a
+claim about that day. `infer_date_order()` now measures the order per board
+from values that can only be read one way (a component over 12). A board
+that gives no disambiguating date, or that contradicts itself, is REFUSED as
+a `COVERAGE_GAP`; no order is ever guessed.
+
 ## A WORKING CAPTURE ROUTE FOR THE BLOCKED SPORTS (2026-09-26)
 
 The boards are not unreachable. The relay's rendering engine clears the bot

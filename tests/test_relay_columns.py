@@ -16,7 +16,10 @@ from slumdog.relay_columns import (
     COLUMN_SELECTORS,
     COVERAGE_GAP,
     NO_ROWS_FOR_DATE,
+    DAY_FIRST,
+    MONTH_FIRST,
     capture_board,
+    infer_date_order,
     ROW_SCOPE,
     scoped,
     align_columns,
@@ -495,3 +498,56 @@ class TestCapturePolicy:
     def test_capture_does_not_raise_for_any_of_these(self):
         for bodies in ({}, _full_board(0), _full_board(3)):
             self._capture(bodies)  # must not raise
+
+
+class TestDateOrderIsMeasuredNotAssumed:
+    """Assuming month-first was a live bug waiting to happen. Basketball
+    renders 09/27/2026, which can only be month-first; the cricket sweep on
+    2026-09-28 returned 30/09/2026, which can only be day-first. Reading a
+    board in the wrong order files matches under a day they do not belong
+    to, and the 24h proof is a claim about that day."""
+
+    def test_a_day_over_twelve_proves_month_first(self):
+        assert infer_date_order(["[A B 09/27/2026 2:00 AM](u)"]) == MONTH_FIRST
+
+    def test_a_first_component_over_twelve_proves_day_first(self):
+        assert infer_date_order(["[A B 30/09/2026 2:00 PM](u)"]) == DAY_FIRST
+
+    def test_an_all_ambiguous_board_yields_no_order(self):
+        # Every date could be read either way; guessing is not allowed.
+        assert infer_date_order(["[A B 05/06/2026](u)",
+                                 "[C D 07/08/2026](u)"]) is None
+
+    def test_a_self_contradicting_board_yields_no_order(self):
+        assert infer_date_order(["[A B 09/27/2026](u)",
+                                 "[C D 30/09/2026](u)"]) is None
+
+    def test_the_day_is_read_in_the_boards_own_order(self):
+        assert event_day_from_kickoff("01/02/2026", MONTH_FIRST) == "2026-01-02"
+        assert event_day_from_kickoff("01/02/2026", DAY_FIRST) == "2026-02-01"
+
+    def test_an_impossible_date_is_rejected(self):
+        assert event_day_from_kickoff("30/09/2026", MONTH_FIRST) is None
+
+    def test_a_board_with_no_readable_order_is_refused(self):
+        bodies = _full_board(2)
+        bodies[scoped(".tnms")] = (
+            b"[A B 05/06/2026 2:00 AM](https://f/m/a-1)\n"
+            b"[C D 07/08/2026 2:00 AM](https://f/m/c-2)")
+        result = capture_board(BOARD, "basketball", "2026-05-06",
+                               captured_at="2026-05-05T04:00:00Z",
+                               opener=_opener(bodies))
+        assert result.status == COVERAGE_GAP
+        assert "month-first or day-first" in result.reason
+
+    def test_a_day_first_board_still_converts(self):
+        bodies = _full_board(2)
+        bodies[scoped(".tnms")] = (
+            b"[A B 28/09/2026 2:00 AM](https://f/m/a-1111)\n"
+            b"[C D 30/09/2026 2:00 AM](https://f/m/c-2222)")
+        result = capture_board(BOARD, "basketball", "2026-09-28",
+                               captured_at="2026-09-27T04:00:00Z",
+                               opener=_opener(bodies))
+        assert result.status == CAPTURED
+        assert [e.event_id for e in result.events] == ["1111"]
+        assert result.observed_dates == ("2026-09-28", "2026-09-30")
