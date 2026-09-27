@@ -359,3 +359,54 @@ class TestRowScope:
                                     opener=_opener(_full_board(2)))
         events = rows_to_events(board, captured_at="2026-09-27T04:00:00Z")
         assert [e.participant_1 for e in events] == ["Team0", "Team1"]
+
+
+class TestThrottleRetry:
+    """Throttling is the last obstacle to daily coverage. On 2026-09-27 a
+    board would return five clean columns and one 422, and that single
+    refusal discarded the whole board — tennis was lost while its other
+    five columns agreed on 43 rows."""
+
+    def test_a_refusal_is_retried(self):
+        calls = {"n": 0}
+
+        def flaky(request, timeout=None):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise urllib.error.HTTPError("u", 422, "no", {}, None)
+            return _Response(b"Lakers\nCeltics")
+
+        rows = fetch_column(BOARD, ".homeTeam", opener=flaky, column="home",
+                            sleep=lambda _s: None)
+        assert rows == ["Lakers", "Celtics"] and calls["n"] == 3
+
+    def test_retries_back_off_rather_than_hammer(self):
+        slept: list[float] = []
+
+        def always_422(request, timeout=None):
+            raise urllib.error.HTTPError("u", 422, "no", {}, None)
+
+        with pytest.raises(ColumnFetchError):
+            fetch_column(BOARD, ".homeTeam", opener=always_422,
+                         backoff=5.0, sleep=slept.append)
+        assert slept == [5.0, 10.0]
+
+    def test_it_gives_up_and_reports_rather_than_looping(self):
+        def always_down(request, timeout=None):
+            raise OSError("connection reset")
+
+        with pytest.raises(ColumnFetchError, match="OSError"):
+            fetch_column(BOARD, ".homeTeam", opener=always_down,
+                         sleep=lambda _s: None)
+
+    def test_a_bot_check_is_never_retried_into_data(self):
+        calls = {"n": 0}
+
+        def challenge(request, timeout=None):
+            calls["n"] += 1
+            return _Response(b"<title>Just a moment...</title>")
+
+        with pytest.raises(ColumnFetchError, match="bot-check"):
+            fetch_column(BOARD, ".homeTeam", opener=challenge,
+                         sleep=lambda _s: None)
+        assert calls["n"] == 1, "a challenge is an answer, not a transient"

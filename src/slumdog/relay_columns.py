@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -183,8 +184,19 @@ def align_columns(columns: dict[str, list[str]]) -> dict[str, list[str]]:
 
 
 def fetch_column(board_url: str, selector: str, *, timeout: int = 60,
-                 opener=None, column: str = "") -> list[str]:
-    """Fetch a single column through the renderer."""
+                 opener=None, column: str = "", attempts: int = 3,
+                 backoff: float = 8.0, sleep=time.sleep) -> list[str]:
+    """Fetch a single column through the renderer, retrying a refusal.
+
+    Throttling is the last thing standing between this route and daily
+    coverage. On 2026-09-27 a board would return five clean columns and one
+    422, and that single refusal discarded the whole board — tennis was lost
+    to a throttled probability column while its other five agreed on 43
+    rows. The refusals move around between runs, so a retry recovers them.
+
+    Only the transport is retried. A bot-check body is not a transient
+    failure and is never retried into looking like data.
+    """
     request = urllib.request.Request(
         RELAY_BASE + board_url,
         headers={
@@ -197,16 +209,23 @@ def fetch_column(board_url: str, selector: str, *, timeout: int = 60,
         },
     )
     open_url = opener or urllib.request.urlopen
-    try:
-        with open_url(request, timeout=timeout) as response:
-            body = response.read()
-    except urllib.error.HTTPError as exc:
-        # 422 is what the renderer answers when it matches nothing, which
-        # happens both for a genuinely absent selector and under throttling.
-        raise ColumnFetchError(f"{selector}: HTTP {exc.code}") from exc
-    except Exception as exc:  # noqa: BLE001 - surfaced as one failure type
-        raise ColumnFetchError(f"{selector}: {type(exc).__name__}") from exc
-    return parse_column(body, selector=selector, column=column)
+    last: ColumnFetchError | None = None
+    for attempt in range(max(1, attempts)):
+        if attempt:
+            sleep(backoff * attempt)
+        try:
+            with open_url(request, timeout=timeout) as response:
+                body = response.read()
+        except urllib.error.HTTPError as exc:
+            # 422 is what the renderer answers when it matches nothing:
+            # both a genuinely absent selector and a throttled request.
+            last = ColumnFetchError(f"{selector}: HTTP {exc.code}")
+            continue
+        except Exception as exc:  # noqa: BLE001 - one failure type out
+            last = ColumnFetchError(f"{selector}: {type(exc).__name__}")
+            continue
+        return parse_column(body, selector=selector, column=column)
+    raise last or ColumnFetchError(f"{selector}: no attempt was made")
 
 
 def fetch_board_columns(board_url: str, sport: str, target_date: str, *,

@@ -34,6 +34,43 @@ retry later; it may never record a short board as a complete one.
 Not yet wired into the collector — the flakiness means a retry and pacing
 policy has to be decided before this feeds the frozen evidence record.
 
+### Update 2026-09-27 (later): R1 PROVEN LIVE FOR TWO BLOCKED SPORTS
+
+Run 36300806681 ran the whole chain — capture, scope, align, convert — on
+live boards for the 2026-09-28 target date and produced **rankable fields
+for sports that have been unreachable since 2026-09-22**:
+
+| Sport | Rows | Rankable events | Strongest candidate |
+| --- | --- | --- | --- |
+| basketball | 18 | **17** | Maccabi Ramat Gan W vs Hapoel Jerusalem W, p1 0.84, id 289116 |
+| hockey | 28 | **28** | Sparta Prague U20 vs Kladno U20, p1 0.82, id 378390 |
+| baseball | 10 | 0 | columns all aligned; every row on the board is 09/29, so none belongs to the target date |
+| tennis | 43 | 0 | five columns agreed on 43 rows; the probability column was throttled (422) |
+
+**What made it work.** Two fixes, in order:
+
+1. *Row scoping.* Every board returned exactly one fewer `.fprc` than
+   `.homeTeam` — some rows carry no probability cell. One missing element
+   destroys an index join, and the extracts give no way to tell which row
+   vanished. `:has(.fprc):has(.tnms)` restricts the match set to complete
+   rows, so the columns are equal in length by construction and an
+   unpredicted match is never captured. This was initially misdiagnosed as a
+   heading-stripping bug; the heading allowlist was replaced with
+   shape-detection anyway, which is the right thing regardless.
+2. *Retry on refusal.* Throttling is now the only obstacle. The refusals move
+   between runs — the same selector returns 92 names in one run and 422 in
+   the next — so `fetch_column` retries the transport with backoff. A
+   bot-check body is not retried: it is an answer, not a transient.
+
+**Not yet decided, and blocking production use:** the retry budget per board
+per day, whether a board that never comes back clean is logged as a coverage
+gap or handed to the short-notice track, and whether each sport needs a
+`minimum_rows` floor. None of this is wired into the collector; nothing here
+has touched the frozen evidence record.
+
+Kickoff remains rendered text in the relay's timezone, so the 24h EVENT_DAY
+hold still applies to every sport except football.
+
 ## A WORKING CAPTURE ROUTE FOR THE BLOCKED SPORTS (2026-09-26)
 
 The boards are not unreachable. The relay's rendering engine clears the bot
