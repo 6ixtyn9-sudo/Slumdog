@@ -2307,6 +2307,25 @@ def _annotation_escape(text: str) -> str:
                 .replace("\n", "%0A").replace("::", "%3A%3A"))
 
 
+#: Annotations are the only channel out of a run: logs and artifacts live in
+#: blob storage, which the agent sandbox cannot reach. Run 36343604474
+#: emitted none at all while reporting success, and with the log unreadable
+#: there was no way to tell whether the probe had crashed, been throttled, or
+#: simply said nothing. Everything below exists to make that distinguishable.
+MAX_SECTION_ANNOTATIONS = 8
+
+
+def emit_heartbeat(date: str, sport: str) -> None:
+    """Announce that the script started, before anything can go wrong.
+
+    If this appears and the verdict does not, the probe died mid-run. If
+    neither appears, it never started.
+    """
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print(f"::notice title=probe:started::date={date} sport={sport} "
+              f"pid={os.getpid()}", flush=True)
+
+
 def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     """Print the verdict as Actions annotations and return what was printed.
 
@@ -2333,10 +2352,12 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
         "getjson_crack", "js_call_sites", "current_bundle", "sitemaps",
         "endpoint_hunt", "fetch_matrix", "browser_probe", "save_page_now",
     )
+    room = MAX_SECTION_ANNOTATIONS
     for key in sections:
         value = report.get(key)
-        if not value:
+        if not value or room <= 0:
             continue
+        room -= 1
         blob = json.dumps(value, sort_keys=True)[:2600]
         emitted.append(
             f"::notice title=probe:{key}::{_annotation_escape(blob)}")
@@ -2369,6 +2390,7 @@ def main(argv: list[str] | None = None) -> int:
 
     dt.date.fromisoformat(args.date)
     set_deadline(args.budget_seconds)
+    emit_heartbeat(args.date, args.sport)
     try:
         report = run_probe(args.date, sport=args.sport, timeout=args.timeout,
                               pause=args.pause, run_hunt=args.hunt,
@@ -2383,7 +2405,13 @@ def main(argv: list[str] | None = None) -> int:
             "fetch_errors": list(FETCH_ERRORS),
             "offset": summarise_offsets([]),
         }
-    resolved, lines = verdict(report)
+    try:
+        resolved, lines = verdict(report)
+    except Exception as exc:  # the verdict must never cost us the findings
+        import traceback
+        resolved = False
+        lines = [f"VERDICT CRASHED: {type(exc).__name__}: {exc}",
+                 traceback.format_exc()[-600:]]
     report["resolved"] = resolved
     report["verdict"] = lines
 
@@ -2398,7 +2426,11 @@ def main(argv: list[str] | None = None) -> int:
     for line in lines:
         print(line)
 
-    emit_annotations(report, lines)
+    try:
+        emit_annotations(report, lines)
+    except Exception as exc:  # noqa: BLE001
+        print(f"::notice title=probe:emit_failed::{type(exc).__name__}: "
+              f"{str(exc)[:300]}", flush=True)
     return 0 if resolved else 1
 
 

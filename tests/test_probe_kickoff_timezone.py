@@ -2140,3 +2140,53 @@ class TestCoverageSweep:
     def test_an_unknown_sport_is_named_not_skipped_silently(self, monkeypatch):
         out = self._run(monkeypatch, lambda url: b"", sports=("quidditch",))
         assert out["quidditch"]["error"] == "not a known sport"
+
+
+class TestAnnotationsAreTheOnlyChannel:
+    """Run logs and artifacts are served from blob storage, which the agent
+    sandbox cannot reach; annotations come from api.github.com. Run
+    36343604474 emitted none while reporting success, and there was no way
+    to tell a crash from silence."""
+
+    def test_a_heartbeat_is_emitted_before_any_work(self, monkeypatch, capsys):
+        from scripts.probe_kickoff_timezone import emit_heartbeat
+
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        emit_heartbeat("2026-09-27", "basketball")
+        out = capsys.readouterr().out
+        assert "probe:started" in out and "2026-09-27" in out
+
+    def test_nothing_is_emitted_off_the_runner(self, monkeypatch, capsys):
+        from scripts.probe_kickoff_timezone import emit_heartbeat
+
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+        emit_heartbeat("2026-09-27", "basketball")
+        assert capsys.readouterr().out == ""
+
+    def test_sections_are_capped(self, monkeypatch):
+        from scripts.probe_kickoff_timezone import (
+            MAX_SECTION_ANNOTATIONS,
+            emit_annotations,
+        )
+
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        report = {k: {"x": 1} for k in (
+            "capture_contract", "r1_coverage", "coverage_sweep", "match_json",
+            "columns", "selector_html", "dom_selectors", "harvested_links",
+            "recent_markup", "render_waits", "markdown_modes", "api_sweep")}
+        emitted = emit_annotations(report, ["line"])
+        sections = [e for e in emitted if "title=probe:" in e]
+        assert len(sections) == MAX_SECTION_ANNOTATIONS
+
+    def test_the_most_important_sections_survive_the_cap(self, monkeypatch):
+        from scripts.probe_kickoff_timezone import emit_annotations
+
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        report = {k: {"x": 1} for k in (
+            "capture_contract", "r1_coverage", "coverage_sweep", "match_json",
+            "columns", "selector_html", "dom_selectors", "harvested_links",
+            "recent_markup", "render_waits", "markdown_modes", "api_sweep")}
+        emitted = "\n".join(emit_annotations(report, ["line"]))
+        # Coverage is the question in hand; it must never be the one dropped.
+        assert "probe:r1_coverage" in emitted
+        assert "probe:api_sweep" not in emitted
