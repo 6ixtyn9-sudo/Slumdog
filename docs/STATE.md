@@ -71,6 +71,44 @@ has touched the frozen evidence record.
 Kickoff remains rendered text in the relay's timezone, so the 24h EVENT_DAY
 hold still applies to every sport except football.
 
+### Capture policy for the column route (settled 2026-09-27)
+
+Three questions gated wiring the route into the collector. Answered from
+invariants this project already holds, and pinned in
+`tests/test_relay_columns.py::TestCapturePolicy`.
+
+1. **A failed board is a `COVERAGE_GAP`, never a quiet day, and is never
+   handed to the short-notice track.** The two tracks are compared to each
+   other, so each one's record has to reflect its own timing discipline.
+   Routing 24h-track capture failures into the event-day track would make
+   the event-day hit rate a mixture of picks decided late by design and
+   picks decided late because a fetch failed. Each track captures for
+   itself. Transport refusals are retried three times with backoff first,
+   because the refusals move between runs.
+2. **No absolute row-count floor.** A floor is a guess about how busy a
+   sport is on an arbitrary date; on a genuinely quiet day it converts real
+   coverage into a false failure, and manufacturing absence is as wrong as
+   manufacturing data. Partial renders already fail closed as disagreeing
+   columns. A count far below what a board usually holds is recorded as
+   `suspect_short` for review and does not reject the capture.
+3. **A board is never walked forward to another date.** The capture is
+   anchored to a date and the 24h proof is a claim about that date.
+   Instead, the dates the board *did* render are recorded in
+   `observed_dates` — which measures each sport's publication horizon, the
+   real input to scheduling the late-publishing sports. Baseball on
+   2026-09-28 is the worked example: readable, aligned, and entirely 09/29.
+
+Corollary: **silence is not evidence of absence.** A board that renders
+nothing is a gap, not a day without fixtures — an empty render and a
+throttled blank are indistinguishable, and this route has already served
+short bodies that looked like data. `NO_ROWS_FOR_DATE` is claimed only on
+positive evidence of other dates.
+
+**Workflow persist gap CLOSED (owner paste applied 2026-09-27):** `main`
+carries the corrected `forward_shadow.yml` byte-identical to the staged
+copy; the checker reports 24/24 covered, exit 0. The staged file is deleted
+and `tests/test_workflow_persist_contract.py` now guards the live file.
+
 ## A WORKING CAPTURE ROUTE FOR THE BLOCKED SPORTS (2026-09-26)
 
 The boards are not unreachable. The relay's rendering engine clears the bot

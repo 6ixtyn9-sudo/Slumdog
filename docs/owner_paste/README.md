@@ -12,6 +12,19 @@ GitHub App tokens are refused when a push adds or edits anything under
 So workflow files that need to run are staged here as ordinary files and the
 owner copies them across in the GitHub web UI. No terminal, no Codespace.
 
+## `forward_shadow.yml` — APPLIED 2026-09-27, file removed
+
+The persist step never named `selections_delta_*` or `settlement_delta_*`, so
+the daily refresh was written on every dispatch from 2026-09-22 and discarded
+at job end, and the `shadow_event_day/` tree had no rule at all. The owner
+pasted the replacement; `main` now carries it byte-identical to what was
+staged here, and `python scripts/check_workflow_evidence_globs.py` reports
+24/24 declared artifacts covered, exit 0.
+
+The staged copy is deleted rather than kept as a record — git history is the
+record. `tests/test_workflow_persist_contract.py` now guards the live file
+directly, so the gap cannot silently reopen.
+
 ## `probe_kickoff_timezone.yml` — one-shot kickoff-timezone probe
 
 **Why:** the EVENT_DAY track currently refuses every sport except football

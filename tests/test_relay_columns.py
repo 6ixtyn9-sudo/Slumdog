@@ -12,7 +12,11 @@ import urllib.error
 import pytest
 
 from slumdog.relay_columns import (
+    CAPTURED,
     COLUMN_SELECTORS,
+    COVERAGE_GAP,
+    NO_ROWS_FOR_DATE,
+    capture_board,
     ROW_SCOPE,
     scoped,
     align_columns,
@@ -410,3 +414,84 @@ class TestThrottleRetry:
             fetch_column(BOARD, ".homeTeam", opener=challenge,
                          sleep=lambda _s: None)
         assert calls["n"] == 1, "a challenge is an answer, not a transient"
+
+
+class TestCapturePolicy:
+    """The three decisions that had to be settled before this route could
+    feed anything, each pinned so a later change has to argue with a test
+    rather than quietly reverse a policy."""
+
+    def _capture(self, bodies, **kwargs):
+        return capture_board(BOARD, "basketball", "2026-09-27",
+                             captured_at="2026-09-27T04:00:00Z",
+                             opener=_opener(bodies), **kwargs)
+
+    def test_a_clean_board_is_captured(self):
+        result = self._capture(_full_board(3))
+        assert result.status == CAPTURED and result.usable
+        assert len(result.events) == 3
+
+    def test_an_unreadable_board_is_a_gap_not_a_quiet_day(self):
+        bodies = _full_board(3)
+        del bodies[scoped(".date_bah")]
+        result = self._capture(bodies)
+        assert result.status == COVERAGE_GAP
+        assert result.events == [] and "kickoff" in result.reason
+        assert not result.usable
+
+    def test_a_gap_is_distinguishable_from_a_day_without_fixtures(self):
+        other_day = _full_board(2)
+        other_day[scoped(".tnms")] = (
+            b"[A B 09/28/2026 2:00 AM](https://f/m/a-1111)\n"
+            b"[C D 09/28/2026 4:00 AM](https://f/m/c-2222)")
+        assert self._capture(other_day).status == NO_ROWS_FOR_DATE
+        assert self._capture({}).status == COVERAGE_GAP
+
+    def test_silence_is_never_read_as_a_day_without_fixtures(self):
+        # An empty render and a throttled blank cannot be told apart from
+        # here, and this route has already served short bodies that looked
+        # like data. NO_ROWS_FOR_DATE needs positive evidence of other dates.
+        result = self._capture(_full_board(0))
+        assert result.status == COVERAGE_GAP
+
+    def test_a_board_is_never_walked_forward_to_another_date(self):
+        # Exactly the live baseball case: the board is readable and full,
+        # but every row belongs to the next day.
+        bodies = _full_board(2)
+        bodies[scoped(".tnms")] = (
+            b"[A B 09/28/2026 2:00 AM](https://f/m/a-1111)\n"
+            b"[C D 09/28/2026 4:00 AM](https://f/m/c-2222)")
+        result = self._capture(bodies)
+        assert result.status == NO_ROWS_FOR_DATE
+        assert result.events == []
+        assert result.target_date == "2026-09-27"
+
+    def test_the_dates_the_board_did_show_are_recorded(self):
+        bodies = _full_board(2)
+        bodies[scoped(".tnms")] = (
+            b"[A B 09/28/2026 2:00 AM](https://f/m/a-1111)\n"
+            b"[C D 09/29/2026 4:00 AM](https://f/m/c-2222)")
+        result = self._capture(bodies)
+        # This measures how far ahead the sport publishes, which is the
+        # real input to scheduling the late-publishing sports.
+        assert result.observed_dates == ("2026-09-28", "2026-09-29")
+
+    def test_a_quiet_day_is_not_rejected_for_being_small(self):
+        # No absolute floor: manufacturing absence is as wrong as
+        # manufacturing data.
+        result = self._capture(_full_board(1))
+        assert result.status == CAPTURED and len(result.events) == 1
+
+    def test_a_count_far_below_normal_is_flagged_not_rejected(self):
+        result = self._capture(_full_board(2), expected_rows=40)
+        assert result.status == CAPTURED
+        assert result.suspect_short is True
+        assert result.usable is True
+
+    def test_a_normal_count_is_not_flagged(self):
+        result = self._capture(_full_board(20), expected_rows=22)
+        assert result.suspect_short is False
+
+    def test_capture_does_not_raise_for_any_of_these(self):
+        for bodies in ({}, _full_board(0), _full_board(3)):
+            self._capture(bodies)  # must not raise

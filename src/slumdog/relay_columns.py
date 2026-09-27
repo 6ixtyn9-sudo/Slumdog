@@ -371,3 +371,121 @@ def rows_to_events(board: BoardColumns, *, captured_at: str,
             raw_sha256=raw_sha256,
         ))
     return events
+
+
+# --------------------------------------------------------------------------
+# Capture policy
+#
+# Three questions had to be settled before this route could feed anything.
+# All three are answered from invariants this project already holds, not
+# from convenience.
+# --------------------------------------------------------------------------
+
+#: A board that could not be read is a gap in the record, not a quiet day.
+COVERAGE_GAP = "COVERAGE_GAP"
+#: The board was read cleanly and holds no match on the requested date.
+NO_ROWS_FOR_DATE = "NO_ROWS_FOR_DATE"
+#: The board was read cleanly and produced rankable events.
+CAPTURED = "CAPTURED"
+
+
+@dataclass
+class BoardCapture:
+    """Outcome of one attempt at one board on one date.
+
+    Every field a receipt needs, including the reason for a failure and the
+    dates the board actually showed. A caller never has to distinguish "no
+    fixtures" from "we could not read it" by looking at a row count.
+    """
+
+    status: str
+    sport: str
+    target_date: str
+    source_url: str
+    events: list[EventSnapshot] = field(default_factory=list)
+    reason: str = ""
+    observed_dates: tuple[str, ...] = ()
+    row_count: int = 0
+    partial: bool = False
+    suspect_short: bool = False
+
+    @property
+    def usable(self) -> bool:
+        return self.status == CAPTURED and bool(self.events)
+
+
+def observed_dates(columns: dict[str, list[str]]) -> tuple[str, ...]:
+    """Distinct dates the board rendered, earliest first.
+
+    This is the measurement that tells us how far ahead each sport
+    publishes — the thing the whole late-publishing problem turns on — so
+    it is recorded even when it contains nothing for the requested date.
+    """
+    seen = {day for cell in columns.get("link", [])
+            if (day := event_day_from_kickoff(cell))}
+    return tuple(sorted(seen))
+
+
+def capture_board(board_url: str, sport: str, target_date: str, *,
+                  captured_at: str, timeout: int = 60, opener=None,
+                  expected_rows: int | None = None,
+                  raw_sha256: str = "") -> BoardCapture:
+    """Capture one board, returning an outcome instead of raising.
+
+    Policy decisions, and why:
+
+    **A board that will not read is never walked forward to another date.**
+    The capture is anchored to a date, and the 24h timing proof is a claim
+    about that date. Re-pointing a failed capture at the next day would
+    silently file evidence under a day it does not describe. When the board
+    is readable but holds nothing for the requested date, the dates it did
+    show are recorded instead — that measures the sport's publication
+    horizon, which is the real input to scheduling.
+
+    **A failure is never handed to the short-notice track.** The two tracks
+    are compared to each other, so each one's record has to reflect its own
+    timing discipline. Routing 24h-track capture failures into the event-day
+    track would make the event-day hit rate a mixture of picks decided late
+    by design and picks decided late because a fetch failed, and the
+    comparison would stop meaning anything. Each track captures for itself;
+    a gap is logged as a gap.
+
+    **Silence is not evidence of absence.** A board that renders nothing at
+    all is reported as a gap, not as a day without fixtures. An empty render
+    and a throttled blank are indistinguishable from here, and this route
+    has already served short bodies that looked like data. ``NO_ROWS_FOR_DATE``
+    is therefore only ever claimed on positive evidence: the board rendered
+    matches, and they belong to other dates.
+
+    **There is no absolute row-count floor.** A floor is a guess about how
+    busy a sport is on an arbitrary date, and on a genuinely quiet day it
+    converts real coverage into a false failure — manufacturing absence is
+    as wrong as manufacturing data. Partial renders show up as columns
+    disagreeing, which already fails closed. A count far below what this
+    board usually holds is recorded as ``suspect_short`` for review and
+    does not, by itself, reject the capture.
+    """
+    try:
+        board = fetch_board_columns(board_url, sport, target_date,
+                                    timeout=timeout, opener=opener)
+    except (ColumnFetchError, ColumnAlignmentError) as exc:
+        return BoardCapture(status=COVERAGE_GAP, sport=sport,
+                            target_date=target_date, source_url=board_url,
+                            reason=str(exc))
+
+    days = observed_dates(board.columns)
+    events = rows_to_events(board, captured_at=captured_at,
+                            raw_sha256=raw_sha256)
+    suspect = bool(expected_rows) and board.row_count * 2 < (expected_rows or 0)
+    if not events:
+        return BoardCapture(
+            status=NO_ROWS_FOR_DATE, sport=sport, target_date=target_date,
+            source_url=board_url, observed_dates=days,
+            row_count=board.row_count, partial=board.partial,
+            suspect_short=suspect,
+            reason=(f"board rendered {board.row_count} rows, none on "
+                    f"{target_date}; dates present: {', '.join(days) or 'none'}"))
+    return BoardCapture(status=CAPTURED, sport=sport, target_date=target_date,
+                        source_url=board_url, events=events,
+                        observed_dates=days, row_count=board.row_count,
+                        partial=board.partial, suspect_short=suspect)
