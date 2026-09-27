@@ -13,6 +13,7 @@ import pytest
 
 from slumdog.relay_columns import (
     COLUMN_SELECTORS,
+    align_columns,
     event_day_from_kickoff,
     event_id_from_url,
     match_url,
@@ -81,9 +82,13 @@ class TestWrapperAndHeadings:
                 b"Markdown Content:\nLakers\nCeltics\n")
         assert strip_wrapper(body) == "Lakers\nCeltics"
 
-    def test_the_heading_row_is_not_a_match(self):
+    def test_a_name_column_keeps_its_heading_until_alignment(self):
+        # A team-name column has no shape that distinguishes "Host" from a
+        # team, so its heading is removed later, against the row count the
+        # shaped columns agree on — never guessed at here.
         body = b"Home team\nLakers\nCeltics"
-        assert parse_column(body, selector=".homeTeam") == ["Lakers", "Celtics"]
+        assert parse_column(body, selector=".homeTeam", column="home") == [
+            "Home team", "Lakers", "Celtics"]
 
     def test_blank_lines_are_dropped(self):
         body = b"Lakers\n\n\nCeltics\n"
@@ -256,3 +261,71 @@ class TestEventConversion:
         # The renderer emits local-to-the-relay time; it is carried verbatim
         # so no downstream consumer can mistake it for UTC.
         assert events[0].kickoff == "27/09/2026 19:30"
+
+
+class TestHeadingsAreFoundByShape:
+    """Matching a list of known heading strings was tried first and silently
+    mis-aligned every board: on live data only '.fprc' matched its heading,
+    so probabilities came back exactly one row short and all four sports
+    were refused. Headings are shape-detected instead."""
+
+    def test_a_probability_heading_is_dropped_whatever_it_says(self):
+        rows = parse_column(b"Prob. %\n71 29\n64 36", selector=".fprc",
+                            column="probabilities")
+        assert rows == ["71 29", "64 36"]
+
+    def test_a_localised_heading_is_still_dropped(self):
+        rows = parse_column("Wahrscheinlichkeit\n71 29".encode(),
+                            selector=".fprc", column="probabilities")
+        assert rows == ["71 29"]
+
+    def test_a_kickoff_heading_is_dropped_by_shape(self):
+        rows = parse_column(b"Date\n27/09/2026 19:30", selector=".date_bah",
+                            column="kickoff")
+        assert rows == ["27/09/2026 19:30"]
+
+    def test_a_link_heading_is_dropped_by_shape(self):
+        rows = parse_column(b"Match\n[A B](https://f/m/a-1)", selector=".tnms",
+                            column="link")
+        assert rows == ["[A B](https://f/m/a-1)"]
+
+    def test_only_leading_lines_are_dropped(self):
+        # A blank value mid-board is a real row; dropping it would shift
+        # every later row against the other columns.
+        rows = parse_column(b"Prob. %\n71 29\n-\n64 36", selector=".fprc",
+                            column="probabilities")
+        assert rows == ["71 29", "-", "64 36"]
+
+    def test_a_name_column_heading_is_trimmed_to_the_consensus(self):
+        aligned = align_columns({
+            "probabilities": ["71 29", "64 36"],
+            "kickoff": ["27/09/2026", "27/09/2026"],
+            "home": ["Host", "Lakers", "Heat"],
+        })
+        assert aligned["home"] == ["Lakers", "Heat"]
+
+    def test_a_short_name_column_is_never_padded(self):
+        aligned = align_columns({
+            "probabilities": ["71 29", "64 36"],
+            "home": ["Lakers"],
+        })
+        assert aligned["home"] == ["Lakers"]  # left short, so alignment fails
+
+    def test_a_badly_wrong_name_column_is_not_trimmed_into_agreement(self):
+        aligned = align_columns({
+            "probabilities": ["71 29"],
+            "home": ["Host", "Lakers", "Heat", "Bulls"],
+        })
+        assert len(aligned["home"]) == 4
+
+    def test_the_off_by_one_board_now_converts(self):
+        # Exactly the live shape from run 36295483404: every column 20 rows,
+        # probabilities 19, because only that heading was recognised.
+        bodies = _full_board(3)
+        bodies[".homeTeam"] = b"Host\nTeam0\nTeam1\nTeam2"
+        bodies[".awayTeam"] = b"Guest\nRival0\nRival1\nRival2"
+        board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                                    opener=_opener(bodies))
+        assert board.row_count == 3
+        events = rows_to_events(board, captured_at="2026-09-27T04:00:00Z")
+        assert [e.participant_1 for e in events] == ["Team0", "Team1", "Team2"]

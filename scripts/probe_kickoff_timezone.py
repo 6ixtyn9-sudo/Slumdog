@@ -65,6 +65,7 @@ from slumdog.forebet import (  # noqa: E402
 from slumdog.parsers import BASE  # noqa: E402
 from slumdog.relay_columns import (  # noqa: E402
     COLUMN_SELECTORS,
+    align_columns,
     ColumnFetchError,
     parse_column,
     rows_to_events,
@@ -849,10 +850,12 @@ def r1_coverage(date: str, *, timeout: int, pause: float,
                     "X-Timeout": "25",
                     "X-Target-Selector": selector,
                 }, timeout=timeout + 20)
-                columns[selector_name] = parse_column(body, selector=selector)
+                columns[selector_name] = parse_column(
+                    body, selector=selector, column=selector_name)
             except (ColumnFetchError, Exception) as exc:  # noqa: BLE001
                 failures.append(f"{selector_name}:{type(exc).__name__}")
 
+        columns = align_columns(columns)
         counts = {name: len(rows) for name, rows in columns.items()}
         record: dict[str, Any] = {"counts": counts, "failures": failures}
         required = [n for n in ("link", "home", "away", "kickoff")

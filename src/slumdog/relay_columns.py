@@ -60,11 +60,27 @@ COLUMN_SELECTORS: dict[str, str] = {
 # Fields without which a row cannot be a pick: who is playing and when.
 REQUIRED_COLUMNS: tuple[str, ...] = ("link", "home", "away", "kickoff")
 
-# Column headings the renderer includes as the first line of an extract.
-_HEADINGS = {
-    "home team", "away team", "prob. %", "pred", "correct score",
-    "avg. points", "coef.", "score", "date",
+# Every column extract begins with the board's heading for that column, but
+# the heading text varies by sport and locale. Matching a list of known
+# heading strings was tried first and silently mis-aligned every board: only
+# ".fprc" ("Prob. %") matched, so probabilities came back exactly one row
+# shorter than every other column and all four sports were refused.
+#
+# So headings are identified by SHAPE instead. A heading is a leading line
+# that cannot be a value of its own column, which is locale-independent.
+_SHAPES: dict[str, "re.Pattern[str]"] = {
+    "link": re.compile(r"\]\("),                      # a Markdown link
+    "kickoff": re.compile(r"\d{1,2}[/.-]\d{1,2}"),     # a date
+    "probabilities": re.compile(r"\d"),                # at least one number
+    "pick": re.compile(r"^\**[12X]\**$"),              # 1, 2 or X
+    "predicted_score": re.compile(r"\d"),
+    "average": re.compile(r"\d"),
 }
+
+# Team-name columns have no distinguishing shape — a heading like "Host" is
+# as name-like as a team. At most this many leading lines may be trimmed from
+# them to reach the row count the shaped columns agree on.
+_MAX_HEADING_LINES = 1
 
 _WRAPPER_MARKER = "Markdown Content:"
 
@@ -104,8 +120,8 @@ def strip_wrapper(body: bytes) -> str:
     return text.strip()
 
 
-def parse_column(body: bytes, *, selector: str) -> list[str]:
-    """Lines of one column extract, without the heading row.
+def parse_column(body: bytes, *, selector: str, column: str = "") -> list[str]:
+    """Lines of one column extract, without its heading row.
 
     A bot-check page is a 200 with a body, so it is rejected here rather
     than counted as a zero-row board.
@@ -115,13 +131,40 @@ def parse_column(body: bytes, *, selector: str) -> list[str]:
             f"{selector}: relay returned a bot-check page ({len(body)} bytes)")
     rows = [line.strip() for line in strip_wrapper(body).splitlines()
             if line.strip()]
-    while rows and rows[0].strip().lower() in _HEADINGS:
-        rows.pop(0)
+    shape = _SHAPES.get(column)
+    if shape is not None:
+        # Only leading lines are dropped: a malformed row in the middle of a
+        # board is a real row with a missing value, and losing it would shift
+        # every column after it against the others.
+        while rows and not shape.search(rows[0]):
+            rows.pop(0)
     return rows
 
 
+def align_columns(columns: dict[str, list[str]]) -> dict[str, list[str]]:
+    """Trim heading lines the shape filter could not see, or raise.
+
+    The shaped columns agree on how many matches the board holds. A
+    name column that is longer by one still carries its heading; anything
+    further apart is a partial render, which must fail rather than be
+    trimmed into looking consistent.
+    """
+    shaped = {name: len(rows) for name, rows in columns.items()
+              if name in _SHAPES}
+    if not shaped or len(set(shaped.values())) != 1:
+        return columns
+    expected = next(iter(set(shaped.values())))
+    aligned: dict[str, list[str]] = {}
+    for name, rows in columns.items():
+        excess = len(rows) - expected
+        if name not in _SHAPES and 0 < excess <= _MAX_HEADING_LINES:
+            rows = rows[excess:]
+        aligned[name] = rows
+    return aligned
+
+
 def fetch_column(board_url: str, selector: str, *, timeout: int = 60,
-                 opener=None) -> list[str]:
+                 opener=None, column: str = "") -> list[str]:
     """Fetch a single column through the renderer."""
     request = urllib.request.Request(
         RELAY_BASE + board_url,
@@ -144,7 +187,7 @@ def fetch_column(board_url: str, selector: str, *, timeout: int = 60,
         raise ColumnFetchError(f"{selector}: HTTP {exc.code}") from exc
     except Exception as exc:  # noqa: BLE001 - surfaced as one failure type
         raise ColumnFetchError(f"{selector}: {type(exc).__name__}") from exc
-    return parse_column(body, selector=selector)
+    return parse_column(body, selector=selector, column=column)
 
 
 def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
@@ -161,7 +204,7 @@ def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
     for name, selector in COLUMN_SELECTORS.items():
         try:
             columns[name] = fetch_column(board_url, selector, timeout=timeout,
-                                         opener=opener)
+                                         opener=opener, column=name)
         except ColumnFetchError as exc:
             failures.append(str(exc))
 
@@ -171,6 +214,7 @@ def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
             f"{sport} {target_date}: missing required column(s) "
             f"{', '.join(missing)}; failures: {'; '.join(failures) or 'none'}")
 
+    columns = align_columns(columns)
     counts = {name: len(values) for name, values in columns.items()}
     distinct = set(counts.values())
     if len(distinct) != 1:
