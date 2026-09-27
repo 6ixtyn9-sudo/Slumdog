@@ -66,11 +66,12 @@ from slumdog.parsers import BASE  # noqa: E402
 from slumdog.relay_columns import (  # noqa: E402
     COLUMN_SELECTORS,
     align_columns,
+    scoped,
     ColumnFetchError,
     parse_column,
     rows_to_events,
 )
-from slumdog.relay_columns import BoardColumns  # noqa: E402
+from slumdog.relay_columns import BoardColumns, ROW_SCOPE  # noqa: E402
 from slumdog.sports import SPORTS  # noqa: E402
 
 
@@ -848,7 +849,7 @@ def r1_coverage(date: str, *, timeout: int, pause: float,
                     "Accept": "text/plain",
                     "X-No-Cache": "true",
                     "X-Timeout": "25",
-                    "X-Target-Selector": selector,
+                    "X-Target-Selector": scoped(selector),
                 }, timeout=timeout + 20)
                 columns[selector_name] = parse_column(
                     body, selector=selector, column=selector_name)
@@ -857,7 +858,8 @@ def r1_coverage(date: str, *, timeout: int, pause: float,
 
         columns = align_columns(columns)
         counts = {name: len(rows) for name, rows in columns.items()}
-        record: dict[str, Any] = {"counts": counts, "failures": failures}
+        record: dict[str, Any] = {"counts": counts, "failures": failures,
+                                  "scope": ROW_SCOPE}
         required = [n for n in ("link", "home", "away", "kickoff")
                     if n not in columns]
         if required:

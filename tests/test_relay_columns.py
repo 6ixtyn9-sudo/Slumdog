@@ -13,6 +13,8 @@ import pytest
 
 from slumdog.relay_columns import (
     COLUMN_SELECTORS,
+    ROW_SCOPE,
+    scoped,
     align_columns,
     event_day_from_kickoff,
     event_id_from_url,
@@ -61,8 +63,8 @@ def _opener(bodies: dict[str, bytes], seen: list[str] | None = None):
 
 def _full_board(rows: int = 3) -> dict[str, bytes]:
     teams = [f"Team{i}" for i in range(rows)]
-    return {
-        ".rcnt .tnms": "\n".join(
+    raw = {
+        ".tnms": "\n".join(
             f"[Team{i} Rival{i} 09/27/2026 2:00 AM]"
             f"(https://www.forebet.com/en/basketball/matches/t{i}-250000{i})"
             for i in range(rows)).encode(),
@@ -74,6 +76,7 @@ def _full_board(rows: int = 3) -> dict[str, bytes]:
         ".ex_sc": "\n".join("92-78" for _ in range(rows)).encode(),
         ".avg_sc": "\n".join("167.4" for _ in range(rows)).encode(),
     }
+    return {scoped(selector): body for selector, body in raw.items()}
 
 
 class TestWrapperAndHeadings:
@@ -107,7 +110,7 @@ class TestChallengeRejection:
 
     def test_a_challenge_during_capture_fails_the_board(self):
         bodies = _full_board()
-        bodies[".homeTeam"] = b"<title>Just a moment...</title>"
+        bodies[scoped(".homeTeam")] = b"<title>Just a moment...</title>"
         with pytest.raises(ColumnFetchError, match="missing required column"):
             fetch_board_columns(BOARD, "basketball", "2026-09-27",
                                 opener=_opener(bodies))
@@ -118,14 +121,14 @@ class TestAlignment:
 
     def test_columns_that_disagree_raise(self):
         bodies = _full_board(3)
-        bodies[".avg_sc"] = b"167.4\n168.9"  # 2 where the rest have 3
+        bodies[scoped(".avg_sc")] = b"167.4\n168.9"  # 2 where the rest have 3
         with pytest.raises(ColumnAlignmentError, match="disagree"):
             fetch_board_columns(BOARD, "basketball", "2026-09-27",
                                 opener=_opener(bodies))
 
     def test_the_error_names_the_counts(self):
         bodies = _full_board(3)
-        bodies[".fprc"] = b"71 29"
+        bodies[scoped(".fprc")] = b"71 29"
         with pytest.raises(ColumnAlignmentError) as caught:
             fetch_board_columns(BOARD, "basketball", "2026-09-27",
                                 opener=_opener(bodies))
@@ -141,14 +144,14 @@ class TestAlignment:
 class TestRequiredColumns:
     def test_identity_and_kickoff_are_mandatory(self):
         bodies = _full_board()
-        del bodies[".date_bah"]
+        del bodies[scoped(".date_bah")]
         with pytest.raises(ColumnFetchError, match="kickoff"):
             fetch_board_columns(BOARD, "basketball", "2026-09-27",
                                 opener=_opener(bodies))
 
     def test_an_optional_column_failing_marks_the_board_partial(self):
         bodies = _full_board()
-        del bodies[".avg_sc"]
+        del bodies[scoped(".avg_sc")]
         board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
                                     opener=_opener(bodies))
         # The board is still usable — identity and kickoff survived — but it
@@ -177,7 +180,7 @@ class TestRows:
         seen: list[str] = []
         fetch_board_columns(BOARD, "basketball", "2026-09-27",
                             opener=_opener(_full_board(), seen))
-        assert seen == list(COLUMN_SELECTORS.values())
+        assert seen == [scoped(sel) for sel in COLUMN_SELECTORS.values()]
 
     def test_a_clean_board_is_not_marked_partial(self):
         board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
@@ -213,7 +216,7 @@ class TestMatchIdentity:
 
     def test_missing_identity_is_required_before_a_board_is_accepted(self):
         bodies = _full_board()
-        del bodies[".rcnt .tnms"]
+        del bodies[scoped(".tnms")]
         with pytest.raises(ColumnFetchError, match="link"):
             fetch_board_columns(BOARD, "basketball", "2026-09-27",
                                 opener=_opener(bodies))
@@ -241,7 +244,7 @@ class TestEventConversion:
 
     def test_rows_for_a_neighbouring_day_are_dropped(self):
         bodies = _full_board(2)
-        bodies[".rcnt .tnms"] = (
+        bodies[scoped(".tnms")] = (
             b"[A B 09/27/2026 2:00 AM](https://f/m/a-1111)\n"
             b"[C D 09/28/2026 2:00 AM](https://f/m/c-2222)")
         board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
@@ -251,7 +254,7 @@ class TestEventConversion:
 
     def test_an_unreadable_probability_drops_the_row_rather_than_guessing(self):
         bodies = _full_board(2)
-        bodies[".fprc"] = b"71 29\n-"
+        bodies[scoped(".fprc")] = b"71 29\n-"
         board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
                                     opener=_opener(bodies))
         assert len(rows_to_events(board, captured_at="2026-09-27T04:00:00Z")) == 1
@@ -322,10 +325,37 @@ class TestHeadingsAreFoundByShape:
         # Exactly the live shape from run 36295483404: every column 20 rows,
         # probabilities 19, because only that heading was recognised.
         bodies = _full_board(3)
-        bodies[".homeTeam"] = b"Host\nTeam0\nTeam1\nTeam2"
-        bodies[".awayTeam"] = b"Guest\nRival0\nRival1\nRival2"
+        bodies[scoped(".homeTeam")] = b"Host\nTeam0\nTeam1\nTeam2"
+        bodies[scoped(".awayTeam")] = b"Guest\nRival0\nRival1\nRival2"
         board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
                                     opener=_opener(bodies))
         assert board.row_count == 3
         events = rows_to_events(board, captured_at="2026-09-27T04:00:00Z")
         assert [e.participant_1 for e in events] == ["Team0", "Team1", "Team2"]
+
+
+class TestRowScope:
+    """Measured on 2026-09-27 every blocked board returned one fewer .fprc
+    than .homeTeam — some rows carry no probability cell. A single missing
+    element silently pairs every later row with the wrong match, so the
+    scope removes those rows instead of detecting them afterwards."""
+
+    def test_columns_are_scoped_to_complete_rows(self):
+        assert scoped(".homeTeam") == ".rcnt:has(.fprc):has(.tnms) .homeTeam"
+
+    def test_the_scope_requires_both_identity_and_probability(self):
+        assert ":has(.fprc)" in ROW_SCOPE and ":has(.tnms)" in ROW_SCOPE
+
+    def test_every_request_carries_the_scope(self):
+        seen: list[str] = []
+        fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                            opener=_opener(_full_board(2), seen))
+        assert all(s.startswith(ROW_SCOPE) for s in seen)
+
+    def test_an_unpredicted_row_never_reaches_the_join(self):
+        # The board holds three matches; the renderer returns two because
+        # the third has no probability cell. Nothing is mis-paired.
+        board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                                    opener=_opener(_full_board(2)))
+        events = rows_to_events(board, captured_at="2026-09-27T04:00:00Z")
+        assert [e.participant_1 for e in events] == ["Team0", "Team1"]

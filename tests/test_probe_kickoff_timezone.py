@@ -1923,8 +1923,10 @@ class TestR1Coverage:
         return probe.r1_coverage("2026-09-27", timeout=1, pause=0, sports=sports)
 
     def _board(self, rows=2):
-        return {
-            ".rcnt .tnms": "\n".join(
+        from slumdog.relay_columns import scoped
+
+        raw = {
+            ".tnms": "\n".join(
                 f"[T{i} R{i} 09/27/2026 2:00 AM](https://f/en/b/matches/t{i}-99000{i})"
                 for i in range(rows)).encode(),
             ".homeTeam": "\n".join(f"T{i}" for i in range(rows)).encode(),
@@ -1935,6 +1937,8 @@ class TestR1Coverage:
             ".ex_sc": "\n".join("92-78" for _ in range(rows)).encode(),
             ".avg_sc": "\n".join("167.4" for _ in range(rows)).encode(),
         }
+        # Live columns are scoped to rows that carry every needed field.
+        return {scoped(selector): body for selector, body in raw.items()}
 
     def test_a_reachable_board_reports_rankable(self, monkeypatch):
         from scripts.probe_kickoff_timezone import summarise_offsets, verdict
@@ -1952,7 +1956,7 @@ class TestR1Coverage:
         board = self._board(2)
 
         def responder(selector):
-            if selector == ".homeTeam":
+            if selector.endswith(".homeTeam"):
                 raise urllib.error.HTTPError("u", 422, "no", {}, None)
             return board[selector]
 
@@ -1961,15 +1965,19 @@ class TestR1Coverage:
         assert out["basketball"].get("rankable_events") is None
 
     def test_a_partial_render_is_refused(self, monkeypatch):
+        from slumdog.relay_columns import scoped
+
         board = self._board(2)
         # A throttled render can return fewer rows than the board holds.
-        board[".forepr"] = b"1"
+        board[scoped(".forepr")] = b"1"
         out = self._run(monkeypatch, lambda sel: board[sel])
         assert out["basketball"]["verdict"] == "columns disagree on row count"
 
     def test_the_strongest_candidate_is_surfaced(self, monkeypatch):
+        from slumdog.relay_columns import scoped
+
         board = self._board(2)
-        board[".fprc"] = b"71 29\n88 12"
+        board[scoped(".fprc")] = b"71 29\n88 12"
         out = self._run(monkeypatch, lambda sel: board[sel])
         assert out["basketball"]["top_by_probability"]["p1"] == 0.88
 

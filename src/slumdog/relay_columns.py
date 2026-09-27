@@ -43,11 +43,30 @@ from .sports import SPORTS
 
 # One selector per field. The renderer returns each match's value on its own
 # line, in board order.
+# Every column is scoped to rows that actually carry the fields a decision
+# needs. Measured on 2026-09-27, each of the four blocked boards returned one
+# fewer ".fprc" than ".homeTeam" — basketball 19 against 20, tennis 44 against
+# 45 — because some rows (live, postponed, or simply unpredicted) have no
+# probability cell at all.
+#
+# That single missing element is fatal to an index join: every row after it
+# is silently paired with the wrong match. Rather than detect the gap after
+# the fact, the scope removes it — ":has()" restricts the match set to
+# complete rows, so the columns are equal in length by construction and the
+# row a board could not predict is never captured at all.
+ROW_SCOPE = ".rcnt:has(.fprc):has(.tnms)"
+
+
+def scoped(selector: str, scope: str = ROW_SCOPE) -> str:
+    """A field selector restricted to complete rows."""
+    return f"{scope} {selector}" if scope else selector
+
+
 COLUMN_SELECTORS: dict[str, str] = {
     # .tnms renders as a Markdown link, which is the only place the match
     # URL survives the render — and the URL is the only real match identity
     # available through this route.
-    "link": ".rcnt .tnms",
+    "link": ".tnms",
     "home": ".homeTeam",
     "away": ".awayTeam",
     "kickoff": ".date_bah",
@@ -203,8 +222,9 @@ def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
     failures: list[str] = []
     for name, selector in COLUMN_SELECTORS.items():
         try:
-            columns[name] = fetch_column(board_url, selector, timeout=timeout,
-                                         opener=opener, column=name)
+            columns[name] = fetch_column(board_url, scoped(selector),
+                                         timeout=timeout, opener=opener,
+                                         column=name)
         except ColumnFetchError as exc:
             failures.append(str(exc))
 
