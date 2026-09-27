@@ -74,6 +74,7 @@ from slumdog.relay_columns import (  # noqa: E402
 from slumdog.relay_columns import (  # noqa: E402
     BoardColumns,
     ROW_SCOPE,
+    event_day_from_kickoff,
     strip_wrapper,
 )
 from slumdog.sports import SPORTS  # noqa: E402
@@ -812,6 +813,68 @@ def test_match_json(slug: str, mid: str, *, timeout: int,
 COVERAGE_SPORTS: tuple[str, ...] = (
     "basketball", "hockey", "baseball", "tennis",
 )
+
+
+# Sports never probed through the column route. Football is excluded: it has
+# a JSON endpoint and does not need this.
+UNPROBED_SPORTS: tuple[str, ...] = (
+    "american_football", "rugby", "handball", "volleyball", "mma",
+    "cricket", "esports", "esoccer", "afl",
+)
+
+
+def coverage_sweep(date: str, *, timeout: int, pause: float,
+                   sports: tuple[str, ...] = UNPROBED_SPORTS) -> dict[str, Any]:
+    """One row-scoped request per sport: does this route reach it at all?
+
+    The scope ':has(.fprc):has(.tnms)' only matches if the board uses the
+    same row markup as basketball and hockey. A sport that answers with
+    rows is reachable and needs only a full column capture; a sport that
+    matches nothing needs its own markup investigated. One request each
+    keeps nine sports inside a single job's budget.
+
+    The dates found are as important as the count: a board full of matches
+    for the wrong day is the late-publishing problem, not a capture
+    failure, and the two must never be confused.
+    """
+    out: dict[str, Any] = {}
+    for sport in sports:
+        spec = SPORTS.get(sport)
+        if spec is None:
+            out[sport] = {"error": "not a known sport"}
+            continue
+        if time_left() < 45:
+            out[sport] = {"error": "skipped: out of time budget"}
+            continue
+        url = f"https://www.forebet.com/en/{spec.path}/predictions/{date}"
+        pace(min(pause, 3))
+        try:
+            body = relay_request(RELAY_BASE + url, {
+                "User-Agent": "EdgeFactory/1.0",
+                "Accept": "text/plain",
+                "X-No-Cache": "true",
+                "X-Timeout": "25",
+                "X-Target-Selector": ROW_SCOPE,
+            }, timeout=timeout + 20)
+        except Exception as exc:  # noqa: BLE001
+            code = getattr(exc, "code", "")
+            out[sport] = {"error": f"{type(exc).__name__}{code}", "url": url}
+            continue
+        text = strip_wrapper(body)
+        links = re.findall(r"\[([^\]]{3,120})\]\((https?://[^)]+)\)", text)
+        days = Counter()
+        for label, _href in links:
+            day = event_day_from_kickoff(label)
+            if day:
+                days[day] += 1
+        out[sport] = {
+            "bytes": len(body),
+            "links": len(links),
+            "dates": dict(days.most_common(5)),
+            "on_target_date": days.get(date, 0),
+            "sample": links[0][0][:90] if links else text[:120],
+        }
+    return out
 
 
 def row_blocks(date: str, *, timeout: int, pause: float,
@@ -1660,7 +1723,10 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
 
     # Coverage runs first: it is the question the project is actually
     # blocked on, and a later stage overrunning must not cost its answer.
-    report["row_blocks"] = row_blocks(date, timeout=timeout, pause=pause)
+    report["coverage_sweep"] = coverage_sweep(date, timeout=timeout,
+                                              pause=pause)
+    if time_left() > 240:
+        report["row_blocks"] = row_blocks(date, timeout=timeout, pause=pause)
     report["r1_coverage"] = r1_coverage(date, timeout=timeout, pause=pause)
 
     json_kickoffs = football_utc_kickoffs(date, timeout=timeout)
@@ -1959,6 +2025,21 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
             lines.append("  control: getrs.php answers DIRECTLY from the "
                          "runner — the APIs are not behind the bot check, so "
                          "an API route would need no relay at all.")
+
+    sweep = report.get("coverage_sweep") or {}
+    if sweep:
+        lines.append("Coverage sweep of never-probed sports:")
+        for sport, rec in sweep.items():
+            lines.append(f"  {sport}: " + (rec.get("error") or
+                         f"{rec.get('bytes')}B rows~{rec.get('links')} "
+                         f"on_target={rec.get('on_target_date')} "
+                         f"dates={rec.get('dates')}"))
+        reachable = [s for s, r in sweep.items() if (r.get("links") or 0) > 0]
+        ready = [s for s, r in sweep.items() if (r.get("on_target_date") or 0) > 0]
+        lines.append(f"REACHABLE VIA THE COLUMN ROUTE: {len(reachable)}/"
+                     f"{len(sweep)} — {', '.join(reachable) or 'none'}")
+        lines.append(f"WITH MATCHES ON THE TARGET DATE: "
+                     f"{', '.join(ready) or 'none'}")
 
     blocks = report.get("row_blocks") or {}
     if blocks:
@@ -2330,7 +2411,7 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     # One annotation per section: a single blob silently truncates at ~3000
     # characters and the interesting result is usually last.
     sections = (
-        "row_blocks", "r1_coverage", "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",
+        "coverage_sweep", "row_blocks", "r1_coverage", "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",
         "recent_markup", "render_waits", "markdown_modes", "api_sweep",
         "getjson_crack", "js_call_sites", "current_bundle", "sitemaps",
         "endpoint_hunt", "fetch_matrix", "browser_probe", "save_page_now",

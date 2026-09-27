@@ -2095,3 +2095,58 @@ class TestRowBlocks:
                                     sports=("basketball",)) == {}
         finally:
             probe.set_deadline(None)
+
+
+class TestCoverageSweep:
+    """Nine sports have never been probed through the column route. One
+    row-scoped request each answers whether their boards use the same
+    markup, and fits all nine inside one job's budget."""
+
+    def _run(self, monkeypatch, responder, sports=("rugby",)):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout: responder(url))
+        return probe.coverage_sweep("2026-09-27", timeout=1, pause=0,
+                                    sports=sports)
+
+    def test_one_request_per_sport(self, monkeypatch):
+        seen: list[str] = []
+        self._run(monkeypatch, lambda url: seen.append(url) or b"",
+                  sports=("rugby", "handball", "mma"))
+        assert len(seen) == 3
+        assert len({u for u in seen}) == 3
+
+    def test_a_reachable_board_reports_its_rows_and_dates(self, monkeypatch):
+        body = (b"[Bulls Sharks 09/27/2026 3:00 PM](https://f/en/rugby/m/a-1)\n"
+                b"[Lions Stormers 09/28/2026 1:00 PM](https://f/en/rugby/m/b-2)")
+        out = self._run(monkeypatch, lambda url: body)
+        assert out["rugby"]["links"] == 2
+        assert out["rugby"]["on_target_date"] == 1
+        assert out["rugby"]["dates"] == {"2026-09-27": 1, "2026-09-28": 1}
+
+    def test_a_sport_whose_markup_differs_is_reported_not_guessed(self,
+                                                                  monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "relay_request", _boom("422"))
+        out = probe.coverage_sweep("2026-09-27", timeout=1, pause=0,
+                                   sports=("cricket",))
+        assert "error" in out["cricket"] and "links" not in out["cricket"]
+
+    def test_wrong_day_boards_are_separated_from_capture_failures(self,
+                                                                  monkeypatch):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        body = b"[A B 09/29/2026 1:00 PM](https://f/en/mma/m/a-1)"
+        out = self._run(monkeypatch, lambda url: body, sports=("mma",))
+        assert out["mma"]["links"] == 1 and out["mma"]["on_target_date"] == 0
+
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "coverage_sweep": out})
+        assert any("REACHABLE VIA THE COLUMN ROUTE: 1/1" in l for l in lines)
+        assert any("WITH MATCHES ON THE TARGET DATE: none" in l for l in lines)
+
+    def test_an_unknown_sport_is_named_not_skipped_silently(self, monkeypatch):
+        out = self._run(monkeypatch, lambda url: b"", sports=("quidditch",))
+        assert out["quidditch"]["error"] == "not a known sport"
