@@ -120,7 +120,7 @@ class TestChallengeRejection:
         bodies[scoped(".homeTeam")] = b"<title>Just a moment...</title>"
         with pytest.raises(ColumnFetchError, match="missing required column"):
             fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                                opener=_opener(bodies))
+                                sleep=lambda _s: None, opener=_opener(bodies))
 
 
 class TestAlignment:
@@ -131,20 +131,20 @@ class TestAlignment:
         bodies[scoped(".avg_sc")] = b"167.4\n168.9"  # 2 where the rest have 3
         with pytest.raises(ColumnAlignmentError, match="disagree"):
             fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                                opener=_opener(bodies))
+                                sleep=lambda _s: None, opener=_opener(bodies))
 
     def test_the_error_names_the_counts(self):
         bodies = _full_board(3)
         bodies[scoped(".fprc")] = b"71 29"
         with pytest.raises(ColumnAlignmentError) as caught:
             fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                                opener=_opener(bodies))
+                                sleep=lambda _s: None, opener=_opener(bodies))
         assert "'probabilities': 1" in str(caught.value)
 
     def test_a_short_board_is_rejected_when_a_minimum_is_set(self):
         with pytest.raises(ColumnFetchError, match="expected at least"):
             fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                                opener=_opener(_full_board(3)),
+                                sleep=lambda _s: None, opener=_opener(_full_board(3)),
                                 minimum_rows=20)
 
 
@@ -154,13 +154,13 @@ class TestRequiredColumns:
         del bodies[scoped(".date_bah")]
         with pytest.raises(ColumnFetchError, match="kickoff"):
             fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                                opener=_opener(bodies))
+                                sleep=lambda _s: None, opener=_opener(bodies))
 
     def test_an_optional_column_failing_marks_the_board_partial(self):
         bodies = _full_board()
         del bodies[scoped(".avg_sc")]
         board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                                    opener=_opener(bodies))
+                                    sleep=lambda _s: None, opener=_opener(bodies))
         # The board is still usable — identity and kickoff survived — but it
         # must not pass as complete, because the missing average could equally
         # be a throttled response as an absent field.
@@ -170,13 +170,14 @@ class TestRequiredColumns:
 
     def test_a_422_is_reported_as_a_fetch_failure(self):
         with pytest.raises(ColumnFetchError, match="HTTP 422"):
-            fetch_column(BOARD, ".nope", opener=_opener({}))
+            fetch_column(BOARD, ".nope", opener=_opener({}),
+                         sleep=lambda _s: None)
 
 
 class TestRows:
     def test_columns_zip_back_into_matches(self):
         board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                                    opener=_opener(_full_board(3)))
+                                    sleep=lambda _s: None, opener=_opener(_full_board(3)))
         rows = board.rows()
         assert board.row_count == 3 and len(rows) == 3
         assert rows[0]["home"] == "Team0" and rows[0]["away"] == "Rival0"
@@ -186,12 +187,12 @@ class TestRows:
     def test_every_field_is_requested_once(self):
         seen: list[str] = []
         fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                            opener=_opener(_full_board(), seen))
+                            sleep=lambda _s: None, opener=_opener(_full_board(), seen))
         assert seen == [scoped(sel) for sel in COLUMN_SELECTORS.values()]
 
     def test_a_clean_board_is_not_marked_partial(self):
         board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                                    opener=_opener(_full_board(4)))
+                                    sleep=lambda _s: None, opener=_opener(_full_board(4)))
         assert board.partial is False
         assert isinstance(board, BoardColumns)
 
@@ -226,7 +227,7 @@ class TestMatchIdentity:
         del bodies[scoped(".tnms")]
         with pytest.raises(ColumnFetchError, match="link"):
             fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                                opener=_opener(bodies))
+                                sleep=lambda _s: None, opener=_opener(bodies))
 
 
 class TestEventConversion:
@@ -255,7 +256,7 @@ class TestEventConversion:
             b"[A B 09/27/2026 2:00 AM](https://f/m/a-1111)\n"
             b"[C D 09/28/2026 2:00 AM](https://f/m/c-2222)")
         board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                                    opener=_opener(bodies))
+                                    sleep=lambda _s: None, opener=_opener(bodies))
         events = rows_to_events(board, captured_at="2026-09-27T04:00:00Z")
         assert [e.event_id for e in events] == ["1111"]
 
@@ -263,7 +264,7 @@ class TestEventConversion:
         bodies = _full_board(2)
         bodies[scoped(".fprc")] = b"71 29\n-"
         board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                                    opener=_opener(bodies))
+                                    sleep=lambda _s: None, opener=_opener(bodies))
         assert len(rows_to_events(board, captured_at="2026-09-27T04:00:00Z")) == 1
 
     def test_the_rendered_clock_is_kept_as_text_not_as_an_instant(self):
@@ -335,7 +336,7 @@ class TestHeadingsAreFoundByShape:
         bodies[scoped(".homeTeam")] = b"Host\nTeam0\nTeam1\nTeam2"
         bodies[scoped(".awayTeam")] = b"Guest\nRival0\nRival1\nRival2"
         board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                                    opener=_opener(bodies))
+                                    sleep=lambda _s: None, opener=_opener(bodies))
         assert board.row_count == 3
         events = rows_to_events(board, captured_at="2026-09-27T04:00:00Z")
         assert [e.participant_1 for e in events] == ["Team0", "Team1", "Team2"]
@@ -356,14 +357,14 @@ class TestRowScope:
     def test_every_request_carries_the_scope(self):
         seen: list[str] = []
         fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                            opener=_opener(_full_board(2), seen))
+                            sleep=lambda _s: None, opener=_opener(_full_board(2), seen))
         assert all(s.startswith(ROW_SCOPE) for s in seen)
 
     def test_an_unpredicted_row_never_reaches_the_join(self):
         # The board holds three matches; the renderer returns two because
         # the third has no probability cell. Nothing is mis-paired.
         board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                                    opener=_opener(_full_board(2)))
+                                    sleep=lambda _s: None, opener=_opener(_full_board(2)))
         events = rows_to_events(board, captured_at="2026-09-27T04:00:00Z")
         assert [e.participant_1 for e in events] == ["Team0", "Team1"]
 
@@ -425,6 +426,8 @@ class TestCapturePolicy:
     rather than quietly reverse a policy."""
 
     def _capture(self, bodies, **kwargs):
+        # Retry backoff is real time; tests exercise the policy, not the wait.
+        kwargs.setdefault("sleep", lambda _s: None)
         return capture_board(BOARD, "basketball", "2026-09-27",
                              captured_at="2026-09-27T04:00:00Z",
                              opener=_opener(bodies), **kwargs)
@@ -536,7 +539,8 @@ class TestDateOrderIsMeasuredNotAssumed:
             b"[C D 07/08/2026 2:00 AM](https://f/m/c-2)")
         result = capture_board(BOARD, "basketball", "2026-05-06",
                                captured_at="2026-05-05T04:00:00Z",
-                               opener=_opener(bodies))
+                               opener=_opener(bodies),
+                               sleep=lambda _s: None)
         assert result.status == COVERAGE_GAP
         assert "month-first or day-first" in result.reason
 
@@ -547,7 +551,8 @@ class TestDateOrderIsMeasuredNotAssumed:
             b"[C D 30/09/2026 2:00 AM](https://f/m/c-2222)")
         result = capture_board(BOARD, "basketball", "2026-09-28",
                                captured_at="2026-09-27T04:00:00Z",
-                               opener=_opener(bodies))
+                               opener=_opener(bodies),
+                               sleep=lambda _s: None)
         assert result.status == CAPTURED
         assert [e.event_id for e in result.events] == ["1111"]
         assert result.observed_dates == ("2026-09-28", "2026-09-30")

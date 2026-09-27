@@ -78,7 +78,13 @@ COLUMN_SELECTORS: dict[str, str] = {
 }
 
 # Fields without which a row cannot be a pick: who is playing and when.
-REQUIRED_COLUMNS: tuple[str, ...] = ("link", "home", "away", "kickoff")
+# Without any one of these a row cannot become a ranked pick, so losing one
+# is a capture failure and must be reported as such. Probabilities belong
+# here: handball once returned eleven complete rows and a throttled
+# probability column, and the result read as "no events for this date" — a
+# fetch failure wearing the face of an empty board.
+REQUIRED_COLUMNS: tuple[str, ...] = (
+    "link", "home", "away", "kickoff", "probabilities")
 
 # Every column extract begins with the board's heading for that column, but
 # the heading text varies by sport and locale. Matching a list of known
@@ -229,8 +235,9 @@ def fetch_column(board_url: str, selector: str, *, timeout: int = 60,
 
 
 def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
-                        timeout: int = 60, opener=None,
-                        minimum_rows: int = 1) -> BoardColumns:
+                        timeout: int = 60, opener=None, minimum_rows: int = 1,
+                        attempts: int = 3, backoff: float = 8.0,
+                        sleep=time.sleep) -> BoardColumns:
     """Fetch every column for a board and validate that they agree.
 
     Raises rather than returning a half-built board: a throttled render can
@@ -243,7 +250,8 @@ def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
         try:
             columns[name] = fetch_column(board_url, scoped(selector),
                                          timeout=timeout, opener=opener,
-                                         column=name)
+                                         column=name, attempts=attempts,
+                                         backoff=backoff, sleep=sleep)
         except ColumnFetchError as exc:
             failures.append(str(exc))
 
@@ -480,8 +488,9 @@ def observed_dates(columns: dict[str, list[str]],
 
 def capture_board(board_url: str, sport: str, target_date: str, *,
                   captured_at: str, timeout: int = 60, opener=None,
-                  expected_rows: int | None = None,
-                  raw_sha256: str = "") -> BoardCapture:
+                  expected_rows: int | None = None, raw_sha256: str = "",
+                  attempts: int = 3, backoff: float = 8.0,
+                  sleep=time.sleep) -> BoardCapture:
     """Capture one board, returning an outcome instead of raising.
 
     Policy decisions, and why:
@@ -519,7 +528,9 @@ def capture_board(board_url: str, sport: str, target_date: str, *,
     """
     try:
         board = fetch_board_columns(board_url, sport, target_date,
-                                    timeout=timeout, opener=opener)
+                                    timeout=timeout, opener=opener,
+                                    attempts=attempts, backoff=backoff,
+                                    sleep=sleep)
     except (ColumnFetchError, ColumnAlignmentError) as exc:
         return BoardCapture(status=COVERAGE_GAP, sport=sport,
                             target_date=target_date, source_url=board_url,

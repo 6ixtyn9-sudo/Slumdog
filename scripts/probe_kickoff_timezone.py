@@ -63,16 +63,8 @@ from slumdog.forebet import (  # noqa: E402
     source_url,
 )
 from slumdog.parsers import BASE  # noqa: E402
+from slumdog.relay_columns import capture_board  # noqa: E402
 from slumdog.relay_columns import (  # noqa: E402
-    COLUMN_SELECTORS,
-    align_columns,
-    scoped,
-    ColumnFetchError,
-    parse_column,
-    rows_to_events,
-)
-from slumdog.relay_columns import (  # noqa: E402
-    BoardColumns,
     ROW_SCOPE,
     event_day_from_kickoff,
     infer_date_order,
@@ -929,77 +921,37 @@ def row_blocks(date: str, *, timeout: int, pause: float,
 
 def r1_coverage(date: str, *, timeout: int, pause: float,
                 sports: tuple[str, ...] = COVERAGE_SPORTS) -> dict[str, Any]:
-    """Can each blocked sport produce a rankable field for this date?
+    """Can each sport produce a rankable field for this date?
 
-    The mandate is a rank-1 pick per sport per day, and the blocker has
-    always been that these boards are unreachable from CI. This measures the
-    end of that chain on live data: fetch each column, zip, convert, and
-    count the events that survive. It writes nothing and freezes nothing —
-    it reports whether a capture *would* have a field to rank.
+    This calls the production capture path rather than a probe-local copy
+    of it. The earlier version re-implemented fetching and therefore missed
+    the retry that production has, which made throttling look like a
+    property of the site instead of a property of the probe. What is
+    measured here is now exactly what a capture would do.
     """
-    # Only the fields a rank-1 decision needs. Correct score and average
-    # points are informative but cost a request each, and the job's budget
-    # buys roughly twenty requests in total.
-    needed = {name: selector for name, selector in COLUMN_SELECTORS.items()
-              if name in ("link", "home", "away", "kickoff", "probabilities",
-                          "pick")}
     out: dict[str, Any] = {}
     for sport in sports:
         spec = SPORTS.get(sport)
         if spec is None:
             continue
         if time_left() < 90:
-            out[sport] = {"verdict": "skipped: out of time budget",
-                          "counts": {}, "failures": []}
+            out[sport] = {"verdict": "skipped: out of time budget"}
             continue
         url = f"https://www.forebet.com/en/{spec.path}/predictions/{date}"
-        columns: dict[str, list[str]] = {}
-        failures: list[str] = []
-        for selector_name, selector in needed.items():
-            if time_left() < 30:
-                failures.append(f"{selector_name}:out_of_time")
-                continue
-            pace(min(pause, 3))
-            try:
-                body = relay_request(RELAY_BASE + url, {
-                    "User-Agent": "EdgeFactory/1.0",
-                    "Accept": "text/plain",
-                    "X-No-Cache": "true",
-                    "X-Timeout": "25",
-                    "X-Target-Selector": scoped(selector),
-                }, timeout=timeout + 20)
-                columns[selector_name] = parse_column(
-                    body, selector=selector, column=selector_name)
-            except (ColumnFetchError, Exception) as exc:  # noqa: BLE001
-                failures.append(f"{selector_name}:{type(exc).__name__}")
-
-        columns = align_columns(columns)
-        counts = {name: len(rows) for name, rows in columns.items()}
-        record: dict[str, Any] = {"counts": counts, "failures": failures,
-                                  "scope": ROW_SCOPE}
-        required = [n for n in ("link", "home", "away", "kickoff")
-                    if n not in columns]
-        if required:
-            record["verdict"] = f"missing required {','.join(required)}"
-            out[sport] = record
-            continue
-        if len(set(counts.values())) != 1:
-            record["verdict"] = "columns disagree on row count"
-            out[sport] = record
-            continue
-        board = BoardColumns(sport=sport, target_date=date, source_url=url,
-                             columns=columns, row_count=next(iter(set(counts.values()))),
-                             partial=bool(failures))
-        try:
-            events = rows_to_events(board, captured_at=date + "T00:00:00Z")
-        except Exception as exc:  # noqa: BLE001
-            record["verdict"] = f"conversion failed: {type(exc).__name__}"
-            out[sport] = record
-            continue
-        record["rankable_events"] = len(events)
-        record["verdict"] = ("RANKABLE" if events else "no events for this date")
-        if events:
-            best = max(events, key=lambda e: max(
+        pace(min(pause, 3))
+        result = capture_board(
+            url, sport, date, captured_at=date + "T00:00:00Z",
+            timeout=timeout, attempts=2, backoff=6.0, sleep=pace)
+        record: dict[str, Any] = {
+            "status": result.status,
+            "rows": result.row_count,
+            "rankable_events": len(result.events),
+            "observed_dates": list(result.observed_dates),
+            "reason": result.reason[:200],
+            "suspect_short": result.suspect_short,
+        }
+        if result.events:
+            best = max(result.events, key=lambda e: max(
                 e.probability_1 or 0.0, e.probability_2 or 0.0))
             record["top_by_probability"] = {
                 "event_id": best.event_id,
@@ -2064,9 +2016,11 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
         lines.append("R1 coverage per sport (live, nothing frozen):")
         for sport, rec in coverage.items():
             lines.append(
-                f"  {sport}: {rec.get('verdict')} "
+                f"  {sport}: {rec.get('status', rec.get('verdict'))} "
+                f"rows={rec.get('rows')} "
                 f"events={rec.get('rankable_events', 0)} "
-                f"counts={rec.get('counts')} failures={rec.get('failures')}")
+                f"dates={rec.get('observed_dates')} "
+                f"{rec.get('reason', '')[:120]}")
             top = rec.get("top_by_probability")
             if top:
                 lines.append(f"    strongest: {top['match']} "

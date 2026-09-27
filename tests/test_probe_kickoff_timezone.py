@@ -113,6 +113,28 @@ class TestBoardRowExtraction:
             {"match_id": "2468143", "displayed": "09/25/2026 9:00 PM"}]
 
 
+@pytest.fixture(autouse=True)
+def _no_real_network_or_waiting(monkeypatch):
+    """Keep the probe suite off the network and out of real backoff.
+
+    The capture stage calls the production path, which retries with a
+    real sleep. A test that reaches it unpatched does not fail — it hangs,
+    which is worse. Tests that exercise these stages override the stub.
+    """
+    import scripts.probe_kickoff_timezone as probe
+    from slumdog import relay_columns
+
+    monkeypatch.setattr(relay_columns.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(probe.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(
+        probe, "capture_board",
+        lambda *a, **k: relay_columns.BoardCapture(
+            status=relay_columns.COVERAGE_GAP, sport=a[1] if len(a) > 1 else "",
+            target_date=a[2] if len(a) > 2 else "", source_url=a[0] if a else "",
+            reason="stubbed in tests"))
+    yield
+
+
 class TestVerdict:
     def _report(self, **over):
         report = {
@@ -196,7 +218,6 @@ class TestProbeSurvivesFetchFailure:
         monkeypatch.setattr(probe, "FETCH_ERRORS", [])
         monkeypatch.setattr(probe, "relay_get_markdown", _boom("relay down"))
         monkeypatch.setattr(probe, "fetch_with_fallback", _boom("403"))
-
         report = probe.run_probe(
             "2026-09-27", sport="basketball", timeout=1, pause=0)
         resolved, lines = probe.verdict(report)
@@ -1911,79 +1932,98 @@ class TestColumnExtracts:
 
 
 class TestR1Coverage:
-    """The mandate is a rank-1 pick per sport per day; this stage measures
-    whether each blocked sport can even produce a field to rank."""
+    """The mandate is a rank-1 pick per sport per day. This stage now calls
+    the production capture path rather than a probe-local copy: the earlier
+    version re-implemented fetching and missed production's retry, which
+    made throttling look like a property of the site."""
 
-    def _run(self, monkeypatch, responder, sports=("basketball",)):
+    def _stub(self, monkeypatch, result):
         import scripts.probe_kickoff_timezone as probe
 
-        monkeypatch.setattr(probe, "relay_request",
-                            lambda url, headers, *, timeout:
-                                responder(headers.get("X-Target-Selector")))
-        return probe.r1_coverage("2026-09-27", timeout=1, pause=0, sports=sports)
+        seen: list[tuple] = []
 
-    def _board(self, rows=2):
-        from slumdog.relay_columns import scoped
+        def fake_capture(url, sport, date, **kwargs):
+            seen.append((url, sport, date, kwargs))
+            return result(sport) if callable(result) else result
 
-        raw = {
-            ".tnms": "\n".join(
-                f"[T{i} R{i} 09/27/2026 2:00 AM](https://f/en/b/matches/t{i}-99000{i})"
-                for i in range(rows)).encode(),
-            ".homeTeam": "\n".join(f"T{i}" for i in range(rows)).encode(),
-            ".awayTeam": "\n".join(f"R{i}" for i in range(rows)).encode(),
-            ".date_bah": "\n".join("27/09/2026 19:30" for _ in range(rows)).encode(),
-            ".fprc": "\n".join("71 29" for _ in range(rows)).encode(),
-            ".forepr": "\n".join("1" for _ in range(rows)).encode(),
-            ".ex_sc": "\n".join("92-78" for _ in range(rows)).encode(),
-            ".avg_sc": "\n".join("167.4" for _ in range(rows)).encode(),
-        }
-        # Live columns are scoped to rows that carry every needed field.
-        return {scoped(selector): body for selector, body in raw.items()}
+        monkeypatch.setattr(probe, "capture_board", fake_capture)
+        return seen
 
-    def test_a_reachable_board_reports_rankable(self, monkeypatch):
-        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+    def _capture(self, sport="basketball", events=2, status=None):
+        from slumdog.contracts import EventSnapshot
+        from slumdog.relay_columns import CAPTURED, BoardCapture
 
-        board = self._board(2)
-        out = self._run(monkeypatch, lambda sel: board[sel])
-        assert out["basketball"]["verdict"] == "RANKABLE"
+        made = [EventSnapshot(
+            event_id=f"{i}", sport=sport, event_date="2026-09-27",
+            captured_at="2026-09-27T00:00:00Z", source_url="u",
+            participant_1=f"T{i}", participant_2=f"R{i}",
+            probability_1=0.6 + i / 10, probability_2=0.4 - i / 10,
+            forebet_pick=1) for i in range(events)]
+        return BoardCapture(status=status or CAPTURED, sport=sport,
+                            target_date="2026-09-27", source_url="u",
+                            events=made, row_count=events)
+
+    def test_it_uses_the_production_capture_path(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        seen = self._stub(monkeypatch, self._capture())
+        probe.r1_coverage("2026-09-27", timeout=1, pause=0,
+                          sports=("basketball",))
+        assert len(seen) == 1
+        url, sport, date, kwargs = seen[0]
+        assert sport == "basketball" and date == "2026-09-27"
+        # Retries are production behaviour and must be exercised here too.
+        assert kwargs["attempts"] >= 2
+
+    def test_a_captured_board_reports_its_strongest_candidate(self,
+                                                              monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        from slumdog.relay_columns import CAPTURED
+
+        self._stub(monkeypatch, self._capture(events=2))
+        out = probe.r1_coverage("2026-09-27", timeout=1, pause=0,
+                                sports=("basketball",))
+        assert out["basketball"]["status"] == CAPTURED
         assert out["basketball"]["rankable_events"] == 2
+        assert out["basketball"]["top_by_probability"]["p1"] == 0.7
 
-        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
-                            "r1_coverage": out})
-        assert any("SPORTS WITH A RANKABLE FIELD: 1/1" in l for l in lines)
+    def test_a_gap_is_reported_as_a_gap(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        from slumdog.relay_columns import COVERAGE_GAP, BoardCapture
 
-    def test_a_throttled_column_is_reported_not_swallowed(self, monkeypatch):
-        board = self._board(2)
+        self._stub(monkeypatch, BoardCapture(
+            status=COVERAGE_GAP, sport="handball", target_date="2026-09-27",
+            source_url="u", reason="probabilities: HTTP 422"))
+        out = probe.r1_coverage("2026-09-27", timeout=1, pause=0,
+                                sports=("handball",))
+        assert out["handball"]["status"] == COVERAGE_GAP
+        assert "422" in out["handball"]["reason"]
+        assert out["handball"]["rankable_events"] == 0
 
-        def responder(selector):
-            if selector.endswith(".homeTeam"):
-                raise urllib.error.HTTPError("u", 422, "no", {}, None)
-            return board[selector]
+    def test_a_wrong_day_board_is_not_called_a_gap(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        from slumdog.relay_columns import NO_ROWS_FOR_DATE, BoardCapture
 
-        out = self._run(monkeypatch, responder)
-        assert "missing required home" in out["basketball"]["verdict"]
-        assert out["basketball"].get("rankable_events") is None
+        self._stub(monkeypatch, BoardCapture(
+            status=NO_ROWS_FOR_DATE, sport="baseball",
+            target_date="2026-09-27", source_url="u", row_count=10,
+            observed_dates=("2026-09-28",)))
+        out = probe.r1_coverage("2026-09-27", timeout=1, pause=0,
+                                sports=("baseball",))
+        assert out["baseball"]["status"] == NO_ROWS_FOR_DATE
+        assert out["baseball"]["observed_dates"] == ["2026-09-28"]
 
-    def test_a_partial_render_is_refused(self, monkeypatch):
-        from slumdog.relay_columns import scoped
+    def test_it_stops_when_the_budget_is_gone(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
 
-        board = self._board(2)
-        # A throttled render can return fewer rows than the board holds.
-        board[scoped(".forepr")] = b"1"
-        out = self._run(monkeypatch, lambda sel: board[sel])
-        assert out["basketball"]["verdict"] == "columns disagree on row count"
-
-    def test_the_strongest_candidate_is_surfaced(self, monkeypatch):
-        from slumdog.relay_columns import scoped
-
-        board = self._board(2)
-        board[scoped(".fprc")] = b"71 29\n88 12"
-        out = self._run(monkeypatch, lambda sel: board[sel])
-        assert out["basketball"]["top_by_probability"]["p1"] == 0.88
-
-    def test_unknown_sports_are_skipped_not_invented(self, monkeypatch):
-        out = self._run(monkeypatch, lambda sel: b"", sports=("quidditch",))
-        assert out == {}
+        self._stub(monkeypatch, self._capture())
+        probe.set_deadline(0)
+        try:
+            out = probe.r1_coverage("2026-09-27", timeout=1, pause=0,
+                                    sports=("basketball", "hockey"))
+            assert all("out of time" in r["verdict"] for r in out.values())
+        finally:
+            probe.set_deadline(None)
 
 
 class TestWallClockBudget:
