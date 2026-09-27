@@ -234,7 +234,7 @@ class TestAnnotations:
         emitted = emit_annotations(
             {"target_date": "2026-09-27", "offset_samples": ["dropped"]},
             ["line one", "line two"])
-        assert len(emitted) == 3
+        assert len(emitted) == 2
         assert emitted[0].startswith("::notice title=Kickoff timezone verdict::")
         # Newlines must be escaped or the annotation is truncated at line one.
         assert "%0A" in emitted[0]
@@ -1817,3 +1817,31 @@ class TestSelectorHtmlModes:
         _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
                             "selector_html": out})
         assert not any("RENDERED BOARD MARKUP AVAILABLE" in l for l in lines)
+
+
+class TestSectionedAnnotations:
+    """A single blob truncates at ~3000 characters and the interesting
+    result is usually the last one written."""
+
+    def test_each_section_gets_its_own_annotation(self, monkeypatch):
+        from scripts.probe_kickoff_timezone import emit_annotations
+
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        emitted = emit_annotations(
+            {"target_date": "2026-09-27",
+             "match_json": {"form": "slug_with_id", "bytes": 900},
+             "selector_html": {"selector_plus_return_html": {"rcnt": 80}}},
+            ["verdict line"])
+        titles = [e.split("::")[1] for e in emitted]
+        assert "notice title=probe:match_json" in titles
+        assert "notice title=probe:selector_html" in titles
+
+    def test_empty_sections_are_not_emitted(self, monkeypatch):
+        from scripts.probe_kickoff_timezone import emit_annotations
+
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        emitted = emit_annotations(
+            {"target_date": "x", "match_json": {}, "dom_selectors": None},
+            ["v"])
+        assert not any("match_json" in e for e in emitted)
+        assert not any("dom_selectors" in e for e in emitted)

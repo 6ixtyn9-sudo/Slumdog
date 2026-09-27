@@ -2023,20 +2023,21 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
         f"::notice title=Kickoff timezone verdict::{_annotation_escape(chr(10).join(lines))}",
         f"::notice title=Kickoff timezone report::{_annotation_escape(compact)}",
     ]
-    hunt_blob = json.dumps({k: report.get(k) for k in
-                            ("endpoint_hunt", "endpoint_hunt_control",
-                             "endpoint_tests", "tp_candidates",
-                             "fetch_matrix", "markdown_modes",
-                             "browser_probe", "api_sweep",
-                             "save_page_now", "getjson_crack",
-                             "js_call_sites", "sitemaps",
-                             "match_ids", "match_json", "dom_selectors",
-                             "harvested_links", "render_waits",
-                             "current_bundle", "recent_markup",
-                             "selector_html")},
-                           sort_keys=True)[:3000]
-    emitted.append(
-        f"::notice title=Endpoint hunt::{_annotation_escape(hunt_blob)}")
+    # One annotation per section: a single blob silently truncates at ~3000
+    # characters and the interesting result is usually last.
+    sections = (
+        "match_json", "selector_html", "dom_selectors", "harvested_links",
+        "recent_markup", "render_waits", "markdown_modes", "api_sweep",
+        "getjson_crack", "js_call_sites", "current_bundle", "sitemaps",
+        "endpoint_hunt", "fetch_matrix", "browser_probe", "save_page_now",
+    )
+    for key in sections:
+        value = report.get(key)
+        if not value:
+            continue
+        blob = json.dumps(value, sort_keys=True)[:2600]
+        emitted.append(
+            f"::notice title=probe:{key}::{_annotation_escape(blob)}")
     for line in emitted:
         print(line)
     return emitted
