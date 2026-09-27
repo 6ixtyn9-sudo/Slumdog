@@ -1,0 +1,60 @@
+{
+  "captured": [
+    {
+      "body_format": "html",
+      "body_path": "data/raw/football/2026-10-03/20260927T043313.243932+0000_de3fe2d5c4ab.txt",
+      "bytes": 404237,
+      "captured_at": "2026-09-27T04:33:13.243932+00:00",
+      "metadata_path": "data/raw/football/2026-10-03/20260927T043313.243932+0000_de3fe2d5c4ab.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-10-03&ord=0&tz=0&tzs=&tze=",
+      "route": "relay_markdown",
+      "sha256": "de3fe2d5c4ab8ca115f10073382d1502eedd49189ad673e6b02d96aa6dd72e57",
+      "source_url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-10-03&ord=0&tz=0&tzs=&tze=",
+      "sport": "football",
+      "target_date": "2026-10-03"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/raw/esoccer/2026-10-03/20260927T043315.448552+0000_4b9e31076cb5.txt",
+      "bytes": 5832,
+      "captured_at": "2026-09-27T04:33:15.448552+00:00",
+      "metadata_path": "data/raw/esoccer/2026-10-03/20260927T043315.448552+0000_4b9e31076cb5.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/esoccer",
+      "route": "relay",
+      "sha256": "4b9e31076cb54f55852abe9d86b958604b328fb1569f164e052bd0d4021ad50f",
+      "source_url": "https://www.forebet.com/en/esoccer",
+      "sport": "esoccer",
+      "target_date": "2026-10-03"
+    },
+    {
+      "body_format": "html",
+      "body_path": "data/raw/afl/2026-10-03/20260927T043317.149372+0000_4bb0ccd8496e.txt",
+      "bytes": 44315,
+      "captured_at": "2026-09-27T04:33:17.149372+00:00",
+      "metadata_path": "data/raw/afl/2026-10-03/20260927T043317.149372+0000_4bb0ccd8496e.json",
+      "relay_url": "https://r.jina.ai/https://www.forebet.com/en/afl",
+      "route": "relay",
+      "sha256": "4bb0ccd8496e90b5ce3c21641ac0367a5fae140c54186b0a88bb3f308a536a59",
+      "source_url": "https://www.forebet.com/en/afl",
+      "sport": "afl",
+      "target_date": "2026-10-03"
+    }
+  ],
+  "failures": [
+    "basketball:ValueError:target date missing from HTML: 2026-10-03",
+    "tennis:ValueError:target date missing from HTML: 2026-10-03",
+    "hockey:ValueError:target date missing from HTML: 2026-10-03",
+    "baseball:ValueError:target date missing from HTML: 2026-10-03",
+    "american_football:ValueError:sport label missing from HTML: american_football",
+    "rugby:ValueError:target date missing from HTML: 2026-10-03",
+    "handball:ValueError:target date missing from HTML: 2026-10-03",
+    "volleyball:ValueError:target date missing from HTML: 2026-10-03",
+    "cricket:ValueError:target date missing from HTML: 2026-10-03",
+    "mma:ValueError:target date missing from HTML: 2026-10-03",
+    "esports:ValueError:target date missing from HTML: 2026-10-03"
+  ],
+  "football_markets": "data/raw/football/2026-10-03/markets.json",
+  "generated_at": "2026-09-27T04:34:03.162573+00:00",
+  "reused": -11,
+  "target_date": "2026-10-03"
+}
