@@ -1,4 +1,39 @@
 
+### Update 2026-09-27: two questions closed, and the capture module landed
+
+**The renderer will not hand back markup.** `X-Target-Selector` combined with
+either `X-Return-Format: html` or `X-Respond-With: html` returns 422, and
+`X-Return-Format: html` with a wait-for-selector returns the bot-check page
+(5,931 bytes). There is no route that feeds `parse_html_events` directly; a
+capture has to read the text extracts.
+
+**`getjson.php` is answered and closed.** The faithful call form is
+`gdt=<slug>-<mid>&mid=<mid>` — the call site reads the whole last path
+segment, which is why the slug-only probes returned 14 bytes. With the right
+form the endpoint replies `{"2552263":[]}`: a correct call, but empty for an
+upcoming match. It carries post-match data and cannot supply a kickoff
+instant. Football's `getrs.php` `DATE_BAH` remains the only machine-readable
+instant, so the 24h EVENT_DAY hold still stands for every other sport.
+
+**A `.tnms` row cannot be split into home and away.** It renders as
+`Abejas Santos 09/27/2026 2:00 AM` with no separator, and the match slug is
+ambiguous the same way. The fix is column-wise extraction — one selector per
+field (`.homeTeam`, `.awayTeam`, `.date_bah`, `.fprc`, `.forepr`, `.ex_sc`,
+`.avg_sc`) — zipped back into rows by index.
+
+**The channel is unreliable and the module treats it that way.**
+`src/slumdog/relay_columns.py` implements the capture and fails closed. In
+measurements on 2026-09-27 the same selectors that returned 92 clean names in
+one run returned 422 in the next, and `.avg_sc` came back with 18 rows for a
+board holding 126 — a partial render that would look entirely genuine to a
+lenient parser. So the module raises rather than returns whenever a required
+column is missing, the columns disagree on row count, the body is a bot-check
+page, or the board is shorter than a caller-supplied minimum. A caller may
+retry later; it may never record a short board as a complete one.
+
+Not yet wired into the collector — the flakiness means a retry and pacing
+policy has to be decided before this feeds the frozen evidence record.
+
 ## A WORKING CAPTURE ROUTE FOR THE BLOCKED SPORTS (2026-09-26)
 
 The boards are not unreachable. The relay's rendering engine clears the bot
