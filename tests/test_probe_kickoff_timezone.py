@@ -7,6 +7,7 @@ No test here touches the network.
 """
 from __future__ import annotations
 
+import time
 import urllib.error
 import datetime as dt
 import json
@@ -1961,7 +1962,8 @@ class TestR1Coverage:
 
     def test_a_partial_render_is_refused(self, monkeypatch):
         board = self._board(2)
-        board[".avg_sc"] = b"167.4"
+        # A throttled render can return fewer rows than the board holds.
+        board[".forepr"] = b"1"
         out = self._run(monkeypatch, lambda sel: board[sel])
         assert out["basketball"]["verdict"] == "columns disagree on row count"
 
@@ -1974,3 +1976,64 @@ class TestR1Coverage:
     def test_unknown_sports_are_skipped_not_invented(self, monkeypatch):
         out = self._run(monkeypatch, lambda sel: b"", sports=("quidditch",))
         assert out == {}
+
+
+class TestWallClockBudget:
+    """The workflow caps the job at 15 minutes and is owner-authored. A
+    stage that overruns does not just lose its own result: the runner is
+    killed before any annotation is emitted and the whole run reports
+    nothing, which is what happened to run 36294292356."""
+
+    def test_no_budget_means_no_limit(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        probe.set_deadline(None)
+        assert probe.time_left() > 1e6
+        probe.check_budget()  # must not raise
+
+    def test_a_spent_budget_refuses_further_requests(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        probe.set_deadline(0)
+        try:
+            with pytest.raises(probe.BudgetExhausted):
+                probe.check_budget()
+        finally:
+            probe.set_deadline(None)
+
+    def test_fetch_records_the_refusal_instead_of_raising(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        probe.set_deadline(0)
+        try:
+            before = len(probe.FETCH_ERRORS)
+            assert probe.fetch("https://example.invalid", timeout=1) is None
+            assert len(probe.FETCH_ERRORS) == before + 1
+            assert "budget" in probe.FETCH_ERRORS[-1]
+        finally:
+            probe.set_deadline(None)
+
+    def test_pacing_never_sleeps_past_the_budget(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        probe.set_deadline(5)
+        try:
+            started = time.monotonic()
+            probe.pace(300)
+            assert time.monotonic() - started < 2
+        finally:
+            probe.set_deadline(None)
+
+    def test_coverage_skips_remaining_sports_when_time_runs_out(self,
+                                                                monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout: b"x")
+        probe.set_deadline(0)
+        try:
+            out = probe.r1_coverage("2026-09-27", timeout=1, pause=0,
+                                    sports=("basketball", "hockey"))
+            assert all("out of time" in rec["verdict"] for rec in out.values())
+        finally:
+            probe.set_deadline(None)

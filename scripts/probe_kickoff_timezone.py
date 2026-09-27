@@ -72,6 +72,50 @@ from slumdog.relay_columns import (  # noqa: E402
 from slumdog.relay_columns import BoardColumns  # noqa: E402
 from slumdog.sports import SPORTS  # noqa: E402
 
+
+_DEADLINE: float | None = None
+
+
+def set_deadline(seconds: float | None) -> None:
+    """Arm a wall-clock budget for the whole probe.
+
+    The workflow caps the job at 15 minutes and is owner-authored, so a
+    stage that overruns does not merely lose its own result — the job is
+    killed before any annotation is emitted and the entire run reports
+    nothing. Stages therefore check the clock rather than assuming they
+    will be allowed to finish.
+    """
+    global _DEADLINE
+    _DEADLINE = None if seconds is None else time.monotonic() + seconds
+
+
+def time_left() -> float:
+    """Seconds remaining, or a large number when no budget is armed."""
+    return 1e9 if _DEADLINE is None else _DEADLINE - time.monotonic()
+
+
+class BudgetExhausted(RuntimeError):
+    """Raised in place of a request once the wall-clock budget is spent."""
+
+
+def check_budget() -> None:
+    """Refuse a network call that the job no longer has time to finish.
+
+    This is the chokepoint that keeps a long tail of stages from spending
+    the job's last minutes and getting the runner killed mid-stage. Once
+    the budget is gone every remaining stage fails fast, records its own
+    failure, and the probe still reaches the point where it reports.
+    """
+    if time_left() < 20:
+        raise BudgetExhausted(
+            f"probe budget exhausted ({time_left():.0f}s left)")
+
+
+def pace(seconds: float) -> None:
+    """Politeness sleep that never sleeps past the budget."""
+    time.sleep(max(0.0, min(seconds, time_left() - 20)))
+
+
 # A rendered listing time, e.g. "25/09/2026 21:00" or "09/25/2026 9:00 PM".
 _DISPLAY_FORMATS = (
     "%d/%m/%Y %H:%M",
@@ -178,6 +222,11 @@ def fetch(url: str, *, timeout: int, json_endpoint: bool = False) -> bytes | Non
     ``fetch_with_fallback`` first. Returns ``None`` when every route failed;
     the reason lands in :data:`FETCH_ERRORS`.
     """
+    try:
+        check_budget()
+    except BudgetExhausted as exc:
+        FETCH_ERRORS.append(f"{url}: {exc}")
+        return None
     relay = RELAY_BASE + url
     routes = (
         [("relay_markdown", lambda: relay_get_markdown(relay, url, timeout=timeout)),
@@ -429,7 +478,7 @@ def hunt_endpoints(sport_page: str, *, timeout: int, pause: float) -> dict[str, 
         path = absolute.split("?", 1)[0].split("#", 1)[0]
         if "forebet.com" not in absolute or not path.endswith(".js"):
             continue
-        time.sleep(pause)
+        pace(pause)
         try:
             body = archived_bytes(timestamp, absolute, timeout=timeout, kind="js_")
         except Exception as exc:
@@ -482,7 +531,7 @@ def test_tp_candidates(date: str, values: list[str], *, timeout: int,
     results: dict[str, Any] = {}
     for i, value in enumerate(values):
         if i:
-            time.sleep(pause)
+            pace(pause)
         url = ("https://www.forebet.com/scripts/getrs.php?"
                f"ln=en&tp={value}&in={date}&ord=0&tz=0&tzs=&tze=")
         try:
@@ -510,7 +559,7 @@ def test_candidates(candidates: list[str], *, timeout: int,
     results: dict[str, Any] = {}
     for i, url in enumerate(candidates):
         if i:
-            time.sleep(pause)
+            pace(pause)
         try:
             body = relay_request(RELAY_BASE + url, {
                 "User-Agent": "Slumdog", "Accept": "text/plain",
@@ -529,6 +578,8 @@ def test_candidates(candidates: list[str], *, timeout: int,
 def relay_request(url: str, headers: dict[str, str], *, timeout: int) -> bytes:
     """Raw relay GET with explicit headers, for route comparison."""
     import urllib.request
+
+    check_budget()
 
     request = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -602,7 +653,7 @@ def crack_getjson(date: str, *, timeout: int, pause: float) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for i, (name, url) in enumerate(variants.items()):
         if i:
-            time.sleep(min(pause, 5))
+            pace(min(pause, 5))
         try:
             body = relay_request(RELAY_BASE + url, {
                 "User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
@@ -659,7 +710,7 @@ def discover_sitemaps(*, timeout: int, pause: float) -> dict[str, Any]:
     out["children"] = {}
     for i, sitemap in enumerate(candidates[:2]):
         if i:
-            time.sleep(min(pause, 5))
+            pace(min(pause, 5))
         try:
             body = _get(sitemap)
         except Exception as exc:
@@ -723,7 +774,7 @@ def test_match_json(slug: str, mid: str, *, timeout: int,
     payload = b""
     for i, (name, query) in enumerate(forms.items()):
         if i:
-            time.sleep(min(pause, 4))
+            pace(min(pause, 4))
         url = f"https://www.forebet.com/scripts/getjson.php?{query}"
         try:
             body = relay_request(RELAY_BASE + url, {
@@ -767,16 +818,29 @@ def r1_coverage(date: str, *, timeout: int, pause: float,
     count the events that survive. It writes nothing and freezes nothing —
     it reports whether a capture *would* have a field to rank.
     """
+    # Only the fields a rank-1 decision needs. Correct score and average
+    # points are informative but cost a request each, and the job's budget
+    # buys roughly twenty requests in total.
+    needed = {name: selector for name, selector in COLUMN_SELECTORS.items()
+              if name in ("link", "home", "away", "kickoff", "probabilities",
+                          "pick")}
     out: dict[str, Any] = {}
     for sport in sports:
         spec = SPORTS.get(sport)
         if spec is None:
             continue
+        if time_left() < 90:
+            out[sport] = {"verdict": "skipped: out of time budget",
+                          "counts": {}, "failures": []}
+            continue
         url = f"https://www.forebet.com/en/{spec.path}/predictions/{date}"
         columns: dict[str, list[str]] = {}
         failures: list[str] = []
-        for selector_name, selector in COLUMN_SELECTORS.items():
-            time.sleep(min(pause, 8))
+        for selector_name, selector in needed.items():
+            if time_left() < 30:
+                failures.append(f"{selector_name}:out_of_time")
+                continue
+            pace(min(pause, 3))
             try:
                 body = relay_request(RELAY_BASE + url, {
                     "User-Agent": "EdgeFactory/1.0",
@@ -850,7 +914,7 @@ def column_extracts(date: str, sport_path: str, *, timeout: int,
     out: dict[str, Any] = {}
     for i, (name, selector) in enumerate(columns.items()):
         if i:
-            time.sleep(min(pause, 6))
+            pace(min(pause, 6))
         try:
             body = relay_request(RELAY_BASE + url, {
                 **base, "X-Target-Selector": selector}, timeout=timeout + 20)
@@ -901,7 +965,7 @@ def selector_html_modes(date: str, sport_path: str, *, timeout: int,
     out: dict[str, Any] = {}
     for i, (name, extra) in enumerate(attempts.items()):
         if i:
-            time.sleep(min(pause, 6))
+            pace(min(pause, 6))
         try:
             body = relay_request(RELAY_BASE + url, {**base, **extra},
                                  timeout=timeout + 20)
@@ -939,7 +1003,7 @@ def live_dom_selectors(date: str, sport_path: str, *,
             (".tnms", "div.tnms", ".rcnt .tnms", "[itemprop=name]",
              ".homeTeam", ".rcnt")):
         if i:
-            time.sleep(min(pause, 4))
+            pace(min(pause, 4))
         try:
             body = relay_request(RELAY_BASE + url, {
                 "User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
@@ -992,7 +1056,7 @@ def api_endpoint_sweep(date: str, *, timeout: int,
     out: dict[str, Any] = {}
     for i, (name, url) in enumerate(targets.items()):
         if i:
-            time.sleep(min(pause, 5))
+            pace(min(pause, 5))
         entry: dict[str, Any] = {"url": url}
         # Direct first: if the APIs are not behind the check, this is the
         # cheapest possible capture route — no relay, no rate limit.
@@ -1003,7 +1067,7 @@ def api_endpoint_sweep(date: str, *, timeout: int,
             entry["direct"] = {"error": f"{type(exc).__name__}: {exc}"[:90]}
         if not (entry["direct"].get("json_like") if
                 isinstance(entry["direct"], dict) else False):
-            time.sleep(min(pause, 5))
+            pace(min(pause, 5))
             try:
                 body = relay_request(RELAY_BASE + url, {
                     "User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
@@ -1264,7 +1328,7 @@ def recent_markup_check(sport_path: str, *, timeout: int,
         path = absolute.split("?", 1)[0]
         if "forebet.com" not in absolute or not path.endswith(".js"):
             continue
-        time.sleep(min(pause, 4))
+        pace(min(pause, 4))
         try:
             js = archived_bytes(timestamp, absolute, timeout=timeout,
                                 kind="js_")
@@ -1297,7 +1361,7 @@ def current_bundle_scan(*, timeout: int, pause: float) -> dict[str, Any]:
     body = b""
     for i, url in enumerate(urls):
         if i:
-            time.sleep(min(pause, 5))
+            pace(min(pause, 5))
         for mode in ("direct", "relay"):
             try:
                 if mode == "direct":
@@ -1363,7 +1427,7 @@ def render_wait_modes(date: str, sport_path: str, *, timeout: int,
     out: dict[str, Any] = {}
     for i, (name, (url, extra)) in enumerate(attempts.items()):
         if i:
-            time.sleep(min(pause, 8))
+            pace(min(pause, 8))
         try:
             body = relay_request(RELAY_BASE + url, {**base, **extra},
                                  timeout=timeout + 30)
@@ -1408,7 +1472,7 @@ def markdown_modes(date: str, sport_path: str, *, timeout: int,
     out: dict[str, Any] = {}
     for i, (name, extra) in enumerate(variants.items()):
         if i:
-            time.sleep(min(pause, 8))
+            pace(min(pause, 8))
         try:
             body = relay_request(RELAY_BASE + url, {**base, **extra},
                                  timeout=timeout)
@@ -1465,7 +1529,7 @@ def fetch_matrix(date: str, sport_path: str, *, timeout: int,
     out: dict[str, Any] = {}
     for i, (name, call) in enumerate(attempts.items()):
         if i:
-            time.sleep(min(pause, 8))
+            pace(min(pause, 8))
         try:
             body = call()
         except Exception as exc:
@@ -1518,7 +1582,7 @@ def probe_routes(board_url: str, *, timeout: int, pause: float) -> dict[str, Any
     out: dict[str, Any] = {}
     for i, (name, call) in enumerate(attempts.items()):
         if i:
-            time.sleep(pause)
+            pace(pause)
         try:
             body = call()
             sample = 1200 if name == "markdown_reader" else 320
@@ -1540,10 +1604,14 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
         "extra_sport": sport,
     }
 
+    # Coverage runs first: it is the question the project is actually
+    # blocked on, and a later stage overrunning must not cost its answer.
+    report["r1_coverage"] = r1_coverage(date, timeout=timeout, pause=pause)
+
     json_kickoffs = football_utc_kickoffs(date, timeout=timeout)
     report["football_json_matches"] = len(json_kickoffs)
 
-    time.sleep(pause)
+    pace(pause)
     board_url = f"{BASE}/en/football-predictions/predictions-1x2/{date}"
     board = fetch(board_url, timeout=timeout)
     report["football_board_url"] = board_url
@@ -1575,7 +1643,7 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
         machine_readable_candidates(board) if board else [])
 
     if sport and sport in SPORTS:
-        time.sleep(pause)
+        pace(pause)
         other_url = source_url(SPORTS[sport], date)
         other = fetch(other_url, timeout=timeout)
         report["extra_sport_url"] = other_url
@@ -1586,58 +1654,57 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
             machine_readable_candidates(other) if other else [])
 
     # Which relay mode, if any, returns a real board?
-    time.sleep(pause)
+    pace(pause)
     routes_url = source_url(SPORTS[sport], date) if sport in SPORTS else board_url
     report["route_diagnostic_url"] = routes_url
     report["route_diagnostic"] = probe_routes(
         routes_url, timeout=timeout, pause=pause)
 
-    time.sleep(pause)
+    pace(pause)
     report["markdown_modes"] = markdown_modes(
         date, SPORTS[sport].path if sport in SPORTS else sport,
         timeout=timeout, pause=pause)
 
     if run_hunt:
-        time.sleep(pause)
+        pace(pause)
         report["api_sweep"] = api_endpoint_sweep(
             date, timeout=timeout, pause=pause)
 
-        time.sleep(pause)
+        pace(pause)
         report["getjson_crack"] = crack_getjson(
             date, timeout=timeout, pause=pause)
 
-        time.sleep(pause)
+        pace(pause)
         report["js_call_sites"] = mine_js_contexts(timeout=timeout)
 
-        time.sleep(pause)
+        pace(pause)
         report["save_page_now"] = save_page_now(
             f"https://www.forebet.com/en/"
             f"{SPORTS[sport].path if sport in SPORTS else sport}"
             f"/predictions/{date}", timeout=timeout)
 
-    time.sleep(pause)
-    report["r1_coverage"] = r1_coverage(date, timeout=timeout, pause=pause)
+    if time_left() > 180:
+        pace(min(pause, 5))
+        report["columns"] = column_extracts(
+            date, SPORTS[sport].path if sport in SPORTS else sport,
+            timeout=timeout, pause=pause)
 
-    time.sleep(pause)
-    report["columns"] = column_extracts(
-        date, SPORTS[sport].path if sport in SPORTS else sport,
-        timeout=timeout, pause=pause)
+    if time_left() > 120:
+        pace(min(pause, 5))
+        report["selector_html"] = selector_html_modes(
+            date, SPORTS[sport].path if sport in SPORTS else sport,
+            timeout=timeout, pause=pause)
 
-    time.sleep(pause)
-    report["selector_html"] = selector_html_modes(
-        date, SPORTS[sport].path if sport in SPORTS else sport,
-        timeout=timeout, pause=pause)
-
-    time.sleep(pause)
+    pace(pause)
     report["recent_markup"] = recent_markup_check(
         SPORTS[sport].path if sport in SPORTS else sport,
         timeout=timeout, pause=pause)
 
-    time.sleep(pause)
+    pace(pause)
     report["current_bundle"] = current_bundle_scan(
         timeout=timeout, pause=pause)
 
-    time.sleep(pause)
+    pace(pause)
     report["render_waits"] = render_wait_modes(
         date, SPORTS[sport].path if sport in SPORTS else sport,
         timeout=timeout, pause=pause)
@@ -1655,10 +1722,10 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
         sport_first = sorted(
             harvested, key=lambda p: 0 if "football" not in p[0] else 1)
         _, slug, mid = sport_first[0]
-        time.sleep(pause)
+        pace(pause)
         report["match_json"] = test_match_json(slug, mid, timeout=timeout)
 
-    time.sleep(pause)
+    pace(pause)
     report["sitemaps"] = discover_sitemaps(timeout=timeout, pause=pause)
 
     # If a sitemap lists match pages, harvest ids and feed one to the
@@ -1679,7 +1746,7 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
         if target:
             break
     if target:
-        time.sleep(pause)
+        pace(pause)
         report["match_ids"] = harvest_match_ids(target, timeout=timeout)
         by_sport = report["match_ids"].get("by_sport") or {}
         pick = next((entries[0] for key, entries in by_sport.items()
@@ -1688,11 +1755,11 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
             pick = next((entries[0] for entries in by_sport.values()
                          if entries), None)
         if pick:
-            time.sleep(pause)
+            pace(pause)
             report["match_json"] = test_match_json(
                 pick[0], pick[1], timeout=timeout)
 
-    time.sleep(pause)
+    pace(pause)
     report["dom_selectors"] = live_dom_selectors(
         date, SPORTS[sport].path if sport in SPORTS else sport,
         timeout=timeout, pause=pause)
@@ -1707,13 +1774,13 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
         report["fetch_errors"] = list(FETCH_ERRORS)
         return report
 
-    time.sleep(pause)
+    pace(pause)
     report["fetch_matrix"] = fetch_matrix(
         date, SPORTS[sport].path if sport in SPORTS else sport,
         timeout=timeout, pause=pause)
 
     # Hunt for a JSON endpoint for the blocked sports.
-    time.sleep(pause)
+    pace(pause)
     page = f"https://www.forebet.com/en/{SPORTS[sport].path}/predictions" \
         if sport in SPORTS else board_url
     hunt = hunt_endpoints(page, timeout=timeout, pause=pause)
@@ -1721,7 +1788,7 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
     # Positive control: run the same miner over a football board, where we
     # already know a JSON endpoint exists. If it finds nothing there either,
     # the miner is at fault, not the sport.
-    time.sleep(pause)
+    pace(pause)
     report["endpoint_hunt_control"] = hunt_endpoints(
         "https://www.forebet.com/en/football-predictions/predictions-1x2",
         timeout=timeout, pause=pause)
@@ -1734,14 +1801,14 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
         if code and code not in codes and code != "1x2":
             codes.append(code)
     if codes:
-        time.sleep(pause)
+        pace(pause)
         report["tp_candidates"] = test_tp_candidates(
             date, codes[:8], timeout=timeout, pause=min(pause, 6))
 
     refs = [u for u in hunt.get("php_refs", [])
             if any(k in u.lower() for k in ("getrs", "get", "rs.php", "ajax"))][:4]
     if refs:
-        time.sleep(pause)
+        pace(pause)
         report["endpoint_tests"] = test_candidates(
             refs, timeout=timeout, pause=pause)
 
@@ -2228,11 +2295,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=int, default=45)
     parser.add_argument("--pause", type=float, default=62.0,
                         help="seconds between requests (politeness)")
+    parser.add_argument("--budget-seconds", type=float, default=660.0,
+                        help="wall-clock budget; stages stop rather than let "
+                             "the job be killed before it can report")
     parser.add_argument("--out", type=Path, default=None,
                         help="write the full JSON report here")
     args = parser.parse_args(argv)
 
     dt.date.fromisoformat(args.date)
+    set_deadline(args.budget_seconds)
     try:
         report = run_probe(args.date, sport=args.sport, timeout=args.timeout,
                               pause=args.pause, run_hunt=args.hunt,
