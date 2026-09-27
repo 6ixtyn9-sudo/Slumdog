@@ -13,6 +13,10 @@ import pytest
 
 from slumdog.relay_columns import (
     COLUMN_SELECTORS,
+    event_day_from_kickoff,
+    event_id_from_url,
+    match_url,
+    rows_to_events,
     BoardColumns,
     ColumnAlignmentError,
     ColumnFetchError,
@@ -57,6 +61,10 @@ def _opener(bodies: dict[str, bytes], seen: list[str] | None = None):
 def _full_board(rows: int = 3) -> dict[str, bytes]:
     teams = [f"Team{i}" for i in range(rows)]
     return {
+        ".rcnt .tnms": "\n".join(
+            f"[Team{i} Rival{i} 09/27/2026 2:00 AM]"
+            f"(https://www.forebet.com/en/basketball/matches/t{i}-250000{i})"
+            for i in range(rows)).encode(),
         ".homeTeam": "\n".join(teams).encode(),
         ".awayTeam": "\n".join(f"Rival{i}" for i in range(rows)).encode(),
         ".date_bah": "\n".join("27/09/2026 19:30" for _ in range(rows)).encode(),
@@ -171,3 +179,80 @@ class TestRows:
                                     opener=_opener(_full_board(4)))
         assert board.partial is False
         assert isinstance(board, BoardColumns)
+
+
+class TestMatchIdentity:
+    """Columns carry no id except inside the .tnms link, and an event
+    without identity cannot be settled later."""
+
+    def test_the_site_match_id_is_reused(self):
+        assert event_id_from_url(
+            "https://www.forebet.com/en/basketball/matches/lakers-heat-2500123"
+        ) == "2500123"
+
+    def test_an_id_less_url_still_yields_a_stable_identity(self):
+        url = "https://www.forebet.com/en/basketball/matches/lakers-heat"
+        first, second = event_id_from_url(url), event_id_from_url(url)
+        assert first == second and len(first) == 16
+
+    def test_the_url_is_read_out_of_the_markdown_link(self):
+        cell = "[Abejas Santos 09/27/2026 2:00 AM](https://x/m/abejas-9)"
+        assert match_url(cell) == "https://x/m/abejas-9"
+
+    def test_a_cell_without_a_link_has_no_url(self):
+        assert match_url("Abejas Santos 09/27/2026 2:00 AM") is None
+
+    def test_the_board_renders_the_month_first(self):
+        # 09/27/2026 is 27 September, not an invalid 9th of month 27.
+        assert event_day_from_kickoff("09/27/2026 2:00 AM") == "2026-09-27"
+
+    def test_missing_identity_is_required_before_a_board_is_accepted(self):
+        bodies = _full_board()
+        del bodies[".rcnt .tnms"]
+        with pytest.raises(ColumnFetchError, match="link"):
+            fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                                opener=_opener(bodies))
+
+
+class TestEventConversion:
+    def _board(self, rows: int = 3):
+        return fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                                   opener=_opener(_full_board(rows)))
+
+    def test_rows_become_rankable_events(self):
+        events = rows_to_events(self._board(3), captured_at="2026-09-27T04:00:00Z")
+        assert len(events) == 3
+        first = events[0]
+        assert first.event_id == "2500000"
+        assert (first.participant_1, first.participant_2) == ("Team0", "Rival0")
+        assert first.sport == "basketball" and first.event_date == "2026-09-27"
+        assert first.probability_1 == 0.71 and first.probability_2 == 0.29
+        assert first.forebet_pick == 1
+        assert first.predicted_total == 167.4
+
+    def test_a_sport_without_draws_gets_no_draw_probability(self):
+        events = rows_to_events(self._board(1), captured_at="2026-09-27T04:00:00Z")
+        assert events[0].draw_probability is None
+
+    def test_rows_for_a_neighbouring_day_are_dropped(self):
+        bodies = _full_board(2)
+        bodies[".rcnt .tnms"] = (
+            b"[A B 09/27/2026 2:00 AM](https://f/m/a-1111)\n"
+            b"[C D 09/28/2026 2:00 AM](https://f/m/c-2222)")
+        board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                                    opener=_opener(bodies))
+        events = rows_to_events(board, captured_at="2026-09-27T04:00:00Z")
+        assert [e.event_id for e in events] == ["1111"]
+
+    def test_an_unreadable_probability_drops_the_row_rather_than_guessing(self):
+        bodies = _full_board(2)
+        bodies[".fprc"] = b"71 29\n-"
+        board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                                    opener=_opener(bodies))
+        assert len(rows_to_events(board, captured_at="2026-09-27T04:00:00Z")) == 1
+
+    def test_the_rendered_clock_is_kept_as_text_not_as_an_instant(self):
+        events = rows_to_events(self._board(1), captured_at="2026-09-27T04:00:00Z")
+        # The renderer emits local-to-the-relay time; it is carried verbatim
+        # so no downstream consumer can mistake it for UTC.
+        assert events[0].kickoff == "27/09/2026 19:30"

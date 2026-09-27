@@ -31,15 +31,23 @@ never silently record a short board as a complete one.
 """
 from __future__ import annotations
 
+import hashlib
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 
+from .contracts import EventSnapshot
 from .forebet import RELAY_BASE, looks_like_challenge_page
+from .sports import SPORTS
 
 # One selector per field. The renderer returns each match's value on its own
 # line, in board order.
 COLUMN_SELECTORS: dict[str, str] = {
+    # .tnms renders as a Markdown link, which is the only place the match
+    # URL survives the render — and the URL is the only real match identity
+    # available through this route.
+    "link": ".rcnt .tnms",
     "home": ".homeTeam",
     "away": ".awayTeam",
     "kickoff": ".date_bah",
@@ -50,7 +58,7 @@ COLUMN_SELECTORS: dict[str, str] = {
 }
 
 # Fields without which a row cannot be a pick: who is playing and when.
-REQUIRED_COLUMNS: tuple[str, ...] = ("home", "away", "kickoff")
+REQUIRED_COLUMNS: tuple[str, ...] = ("link", "home", "away", "kickoff")
 
 # Column headings the renderer includes as the first line of an extract.
 _HEADINGS = {
@@ -184,3 +192,99 @@ def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
         # Optional columns that failed leave the row thinner than ideal.
         partial=bool(failures),
     )
+
+
+_MARKDOWN_LINK = re.compile(r"\[[^\]]*\]\((?P<url>[^)]+)\)")
+_EVENT_DAY = re.compile(r"(\d{2})/(\d{2})/(\d{4})")
+_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def event_day_from_kickoff(value: str) -> str | None:
+    """ISO day from a rendered kickoff like ``09/27/2026 2:00 AM``.
+
+    The board renders American order (month first). This reads the day only;
+    the clock is deliberately ignored, because the renderer emits it in a
+    timezone derived from the relay's egress IP, not UTC.
+    """
+    match = _EVENT_DAY.search(value)
+    if not match:
+        return None
+    return f"{match.group(3)}-{match.group(1)}-{match.group(2)}"
+
+
+def match_url(cell: str) -> str | None:
+    """The match URL from a rendered ``.tnms`` cell."""
+    found = _MARKDOWN_LINK.search(cell)
+    return found.group("url").strip() if found else None
+
+
+def event_id_from_url(url: str) -> str:
+    """Forebet's own match id, or a stable digest when the URL has none.
+
+    The trailing numeric segment of a match URL is the site's match id, and
+    reusing it keeps a pick joinable to the same match at settlement. When a
+    URL carries no id the digest is deterministic, so the same row yields the
+    same identity on a later capture.
+    """
+    tail = url.rstrip("/").split("/")[-1]
+    digits = re.search(r"(\d{4,})$", tail)
+    if digits:
+        return digits.group(1)
+    return hashlib.sha256(url.encode()).hexdigest()[:16]
+
+
+def _probabilities(cell: str, *, draw_possible: bool
+                   ) -> tuple[float | None, float | None, float | None]:
+    """Home / draw / away probabilities from a rendered ``.fprc`` cell."""
+    values = [float(token) for token in _NUMBER.findall(cell)]
+    if draw_possible and len(values) >= 3:
+        return values[0] / 100.0, values[1] / 100.0, values[2] / 100.0
+    if not draw_possible and len(values) >= 2:
+        return values[0] / 100.0, None, values[1] / 100.0
+    return None, None, None
+
+
+def rows_to_events(board: BoardColumns, *, captured_at: str,
+                   raw_sha256: str = "") -> list[EventSnapshot]:
+    """Turn validated columns into events the evaluator can already rank.
+
+    Rows are skipped, never guessed at, when identity or probabilities are
+    unreadable, and when the row's own rendered day is not the day being
+    captured — boards carry neighbouring days, and the renderer's clock is
+    not trustworthy enough to reassign one.
+    """
+    spec = SPORTS[board.sport]
+    events: list[EventSnapshot] = []
+    for row in board.rows():
+        url = match_url(row.get("link", ""))
+        if not url:
+            continue
+        if event_day_from_kickoff(row.get("link", "")) != board.target_date:
+            continue
+        home, away = row.get("home", "").strip(), row.get("away", "").strip()
+        if not home or not away:
+            continue
+        probability_1, draw_probability, probability_2 = _probabilities(
+            row.get("probabilities", ""), draw_possible=spec.draw_possible)
+        if probability_1 is None or probability_2 is None:
+            continue
+        pick = row.get("pick", "").strip()
+        totals = _NUMBER.findall(row.get("average", ""))
+        events.append(EventSnapshot(
+            event_id=event_id_from_url(url),
+            sport=board.sport,
+            event_date=board.target_date,
+            captured_at=captured_at,
+            source_url=board.source_url,
+            participant_1=home,
+            participant_2=away,
+            probability_1=probability_1,
+            probability_2=probability_2,
+            draw_probability=draw_probability,
+            forebet_pick=int(pick) if pick in {"1", "2"} else None,
+            kickoff=row.get("kickoff", "").strip(),
+            predicted_score=row.get("predicted_score", "").strip(),
+            predicted_total=float(totals[0]) if totals else None,
+            raw_sha256=raw_sha256,
+        ))
+    return events
