@@ -63,6 +63,13 @@ from slumdog.forebet import (  # noqa: E402
     source_url,
 )
 from slumdog.parsers import BASE  # noqa: E402
+from slumdog.relay_columns import (  # noqa: E402
+    COLUMN_SELECTORS,
+    ColumnFetchError,
+    parse_column,
+    rows_to_events,
+)
+from slumdog.relay_columns import BoardColumns  # noqa: E402
 from slumdog.sports import SPORTS  # noqa: E402
 
 # A rendered listing time, e.g. "25/09/2026 21:00" or "09/25/2026 9:00 PM".
@@ -740,6 +747,81 @@ def test_match_json(slug: str, mid: str, *, timeout: int,
                     or payload.lstrip()[:1] not in (b"[", b"{"))
     out["has_date_bah"] = b"DATE_BAH" in payload or b"date_bah" in payload
     out["sample"] = payload[:300].decode("utf-8", "replace")
+    return out
+
+
+# Sports whose boards the 24h forward capture cannot reach, in the order
+# worth spending a limited request budget on.
+COVERAGE_SPORTS: tuple[str, ...] = (
+    "basketball", "hockey", "baseball", "tennis",
+)
+
+
+def r1_coverage(date: str, *, timeout: int, pause: float,
+                sports: tuple[str, ...] = COVERAGE_SPORTS) -> dict[str, Any]:
+    """Can each blocked sport produce a rankable field for this date?
+
+    The mandate is a rank-1 pick per sport per day, and the blocker has
+    always been that these boards are unreachable from CI. This measures the
+    end of that chain on live data: fetch each column, zip, convert, and
+    count the events that survive. It writes nothing and freezes nothing —
+    it reports whether a capture *would* have a field to rank.
+    """
+    out: dict[str, Any] = {}
+    for sport in sports:
+        spec = SPORTS.get(sport)
+        if spec is None:
+            continue
+        url = f"https://www.forebet.com/en/{spec.path}/predictions/{date}"
+        columns: dict[str, list[str]] = {}
+        failures: list[str] = []
+        for selector_name, selector in COLUMN_SELECTORS.items():
+            time.sleep(min(pause, 8))
+            try:
+                body = relay_request(RELAY_BASE + url, {
+                    "User-Agent": "EdgeFactory/1.0",
+                    "Accept": "text/plain",
+                    "X-No-Cache": "true",
+                    "X-Timeout": "25",
+                    "X-Target-Selector": selector,
+                }, timeout=timeout + 20)
+                columns[selector_name] = parse_column(body, selector=selector)
+            except (ColumnFetchError, Exception) as exc:  # noqa: BLE001
+                failures.append(f"{selector_name}:{type(exc).__name__}")
+
+        counts = {name: len(rows) for name, rows in columns.items()}
+        record: dict[str, Any] = {"counts": counts, "failures": failures}
+        required = [n for n in ("link", "home", "away", "kickoff")
+                    if n not in columns]
+        if required:
+            record["verdict"] = f"missing required {','.join(required)}"
+            out[sport] = record
+            continue
+        if len(set(counts.values())) != 1:
+            record["verdict"] = "columns disagree on row count"
+            out[sport] = record
+            continue
+        board = BoardColumns(sport=sport, target_date=date, source_url=url,
+                             columns=columns, row_count=next(iter(set(counts.values()))),
+                             partial=bool(failures))
+        try:
+            events = rows_to_events(board, captured_at=date + "T00:00:00Z")
+        except Exception as exc:  # noqa: BLE001
+            record["verdict"] = f"conversion failed: {type(exc).__name__}"
+            out[sport] = record
+            continue
+        record["rankable_events"] = len(events)
+        record["verdict"] = ("RANKABLE" if events else "no events for this date")
+        if events:
+            best = max(events, key=lambda e: max(
+                e.probability_1 or 0.0, e.probability_2 or 0.0))
+            record["top_by_probability"] = {
+                "event_id": best.event_id,
+                "match": f"{best.participant_1} vs {best.participant_2}",
+                "p1": best.probability_1, "p2": best.probability_2,
+                "kickoff": best.kickoff,
+            }
+        out[sport] = record
     return out
 
 
@@ -1534,6 +1616,9 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
             f"/predictions/{date}", timeout=timeout)
 
     time.sleep(pause)
+    report["r1_coverage"] = r1_coverage(date, timeout=timeout, pause=pause)
+
+    time.sleep(pause)
     report["columns"] = column_extracts(
         date, SPORTS[sport].path if sport in SPORTS else sport,
         timeout=timeout, pause=pause)
@@ -1752,6 +1837,22 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
             lines.append("  control: getrs.php answers DIRECTLY from the "
                          "runner — the APIs are not behind the bot check, so "
                          "an API route would need no relay at all.")
+
+    coverage = report.get("r1_coverage") or {}
+    if coverage:
+        lines.append("R1 coverage per sport (live, nothing frozen):")
+        for sport, rec in coverage.items():
+            lines.append(
+                f"  {sport}: {rec.get('verdict')} "
+                f"events={rec.get('rankable_events', 0)} "
+                f"counts={rec.get('counts')} failures={rec.get('failures')}")
+            top = rec.get("top_by_probability")
+            if top:
+                lines.append(f"    strongest: {top['match']} "
+                             f"p1={top['p1']} p2={top['p2']} @ {top['kickoff']}")
+        rankable = [s for s, r in coverage.items() if r.get("rankable_events")]
+        lines.append(f"SPORTS WITH A RANKABLE FIELD: {len(rankable)}/"
+                     f"{len(coverage)} — {', '.join(rankable) or 'none'}")
 
     cols = report.get("columns") or {}
     if cols:
@@ -2095,7 +2196,7 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     # One annotation per section: a single blob silently truncates at ~3000
     # characters and the interesting result is usually last.
     sections = (
-        "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",
+        "r1_coverage", "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",
         "recent_markup", "render_waits", "markdown_modes", "api_sweep",
         "getjson_crack", "js_call_sites", "current_bundle", "sitemaps",
         "endpoint_hunt", "fetch_matrix", "browser_probe", "save_page_now",

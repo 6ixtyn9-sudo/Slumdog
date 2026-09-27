@@ -7,6 +7,7 @@ No test here touches the network.
 """
 from __future__ import annotations
 
+import urllib.error
 import datetime as dt
 import json
 
@@ -1906,3 +1907,70 @@ class TestColumnExtracts:
         out = probe.column_extracts("2026-09-27", "basketball",
                                     timeout=1, pause=0)
         assert out["_aligned"] is False and out["_counts"] == {}
+
+
+class TestR1Coverage:
+    """The mandate is a rank-1 pick per sport per day; this stage measures
+    whether each blocked sport can even produce a field to rank."""
+
+    def _run(self, monkeypatch, responder, sports=("basketball",)):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout:
+                                responder(headers.get("X-Target-Selector")))
+        return probe.r1_coverage("2026-09-27", timeout=1, pause=0, sports=sports)
+
+    def _board(self, rows=2):
+        return {
+            ".rcnt .tnms": "\n".join(
+                f"[T{i} R{i} 09/27/2026 2:00 AM](https://f/en/b/matches/t{i}-99000{i})"
+                for i in range(rows)).encode(),
+            ".homeTeam": "\n".join(f"T{i}" for i in range(rows)).encode(),
+            ".awayTeam": "\n".join(f"R{i}" for i in range(rows)).encode(),
+            ".date_bah": "\n".join("27/09/2026 19:30" for _ in range(rows)).encode(),
+            ".fprc": "\n".join("71 29" for _ in range(rows)).encode(),
+            ".forepr": "\n".join("1" for _ in range(rows)).encode(),
+            ".ex_sc": "\n".join("92-78" for _ in range(rows)).encode(),
+            ".avg_sc": "\n".join("167.4" for _ in range(rows)).encode(),
+        }
+
+    def test_a_reachable_board_reports_rankable(self, monkeypatch):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        board = self._board(2)
+        out = self._run(monkeypatch, lambda sel: board[sel])
+        assert out["basketball"]["verdict"] == "RANKABLE"
+        assert out["basketball"]["rankable_events"] == 2
+
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "r1_coverage": out})
+        assert any("SPORTS WITH A RANKABLE FIELD: 1/1" in l for l in lines)
+
+    def test_a_throttled_column_is_reported_not_swallowed(self, monkeypatch):
+        board = self._board(2)
+
+        def responder(selector):
+            if selector == ".homeTeam":
+                raise urllib.error.HTTPError("u", 422, "no", {}, None)
+            return board[selector]
+
+        out = self._run(monkeypatch, responder)
+        assert "missing required home" in out["basketball"]["verdict"]
+        assert out["basketball"].get("rankable_events") is None
+
+    def test_a_partial_render_is_refused(self, monkeypatch):
+        board = self._board(2)
+        board[".avg_sc"] = b"167.4"
+        out = self._run(monkeypatch, lambda sel: board[sel])
+        assert out["basketball"]["verdict"] == "columns disagree on row count"
+
+    def test_the_strongest_candidate_is_surfaced(self, monkeypatch):
+        board = self._board(2)
+        board[".fprc"] = b"71 29\n88 12"
+        out = self._run(monkeypatch, lambda sel: board[sel])
+        assert out["basketball"]["top_by_probability"]["p1"] == 0.88
+
+    def test_unknown_sports_are_skipped_not_invented(self, monkeypatch):
+        out = self._run(monkeypatch, lambda sel: b"", sports=("quidditch",))
+        assert out == {}
