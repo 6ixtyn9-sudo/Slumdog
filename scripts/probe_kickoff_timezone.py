@@ -743,6 +743,56 @@ def test_match_json(slug: str, mid: str, *, timeout: int,
     return out
 
 
+def column_extracts(date: str, sport_path: str, *, timeout: int,
+                     pause: float) -> dict[str, Any]:
+    """Pull each column separately and check the rows line up.
+
+    A .tnms row reads "Abejas Santos 09/27/2026 2:00 AM", which cannot be
+    split reliably into home and away. But the page has a class per field,
+    and selector-scoped extraction returns one per line. Fetch the columns
+    independently and zip them by index — provided every column returns the
+    same number of lines, which is exactly what this measures.
+    """
+    url = f"https://www.forebet.com/en/{sport_path}/predictions/{date}"
+    base = {"User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
+            "X-No-Cache": "true", "X-Timeout": "25"}
+    columns = {
+        "home": ".homeTeam",
+        "away": ".awayTeam",
+        "kickoff": ".date_bah",
+        "probabilities": ".fprc",
+        "pick": ".forepr",
+        "predicted_score": ".ex_sc",
+        "average": ".avg_sc",
+    }
+    out: dict[str, Any] = {}
+    for i, (name, selector) in enumerate(columns.items()):
+        if i:
+            time.sleep(min(pause, 6))
+        try:
+            body = relay_request(RELAY_BASE + url, {
+                **base, "X-Target-Selector": selector}, timeout=timeout + 20)
+        except Exception as exc:
+            out[name] = {"selector": selector,
+                         "error": f"{type(exc).__name__}: {exc}"[:90]}
+            continue
+        text = body.decode("utf-8", "replace")
+        marker = "Markdown Content:"
+        payload = text.split(marker, 1)[1].strip() if marker in text else text
+        rows = [ln.strip() for ln in payload.splitlines() if ln.strip()]
+        out[name] = {
+            "selector": selector,
+            "bytes": len(body),
+            "rows": len(rows),
+            "first": rows[:4],
+            "last": rows[-2:],
+        }
+    counts = {n: fp.get("rows") for n, fp in out.items() if fp.get("rows")}
+    out["_aligned"] = len(set(counts.values())) == 1 if counts else False
+    out["_counts"] = counts
+    return out
+
+
 def selector_html_modes(date: str, sport_path: str, *, timeout: int,
                         pause: float) -> dict[str, Any]:
     """Can the renderer hand back the matched subtree as HTML?
@@ -1484,6 +1534,11 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
             f"/predictions/{date}", timeout=timeout)
 
     time.sleep(pause)
+    report["columns"] = column_extracts(
+        date, SPORTS[sport].path if sport in SPORTS else sport,
+        timeout=timeout, pause=pause)
+
+    time.sleep(pause)
     report["selector_html"] = selector_html_modes(
         date, SPORTS[sport].path if sport in SPORTS else sport,
         timeout=timeout, pause=pause)
@@ -1697,6 +1752,20 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
             lines.append("  control: getrs.php answers DIRECTLY from the "
                          "runner — the APIs are not behind the bot check, so "
                          "an API route would need no relay at all.")
+
+    cols = report.get("columns") or {}
+    if cols:
+        lines.append(f"Column extracts, aligned={cols.get('_aligned')} "
+                     f"{cols.get('_counts')}")
+        for name, fp in cols.items():
+            if name.startswith("_"):
+                continue
+            lines.append(f"  {name} ({fp.get('selector')}): " +
+                         (fp.get("error") or
+                          f"{fp.get('rows')} rows {fp.get('first')}"))
+        if cols.get("_aligned"):
+            lines.append("COLUMNS ZIP CLEANLY — every field returns the same "
+                         "row count, so a capture can join them by index.")
 
     shtml = report.get("selector_html") or {}
     if shtml:
@@ -2026,7 +2095,7 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     # One annotation per section: a single blob silently truncates at ~3000
     # characters and the interesting result is usually last.
     sections = (
-        "match_json", "selector_html", "dom_selectors", "harvested_links",
+        "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",
         "recent_markup", "render_waits", "markdown_modes", "api_sweep",
         "getjson_crack", "js_call_sites", "current_bundle", "sitemaps",
         "endpoint_hunt", "fetch_matrix", "browser_probe", "save_page_now",

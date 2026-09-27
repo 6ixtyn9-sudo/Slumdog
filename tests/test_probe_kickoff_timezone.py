@@ -1847,3 +1847,62 @@ class TestSectionedAnnotations:
         # dedicated, empty section annotation.
         assert not any("title=probe:match_json" in e for e in emitted)
         assert not any("title=probe:dom_selectors" in e for e in emitted)
+
+
+class TestColumnExtracts:
+    """A .tnms row reads 'Abejas Santos 09/27/2026 2:00 AM' and cannot be
+    split reliably into home and away — but the page has a class per field,
+    so fetch the columns separately and zip them by index."""
+
+    def _run(self, monkeypatch, responder):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout:
+                                responder(headers.get("X-Target-Selector")))
+        return probe.column_extracts("2026-09-27", "basketball",
+                                     timeout=1, pause=0)
+
+    def test_every_field_has_its_own_selector(self, monkeypatch):
+        seen: list[str] = []
+        out = self._run(monkeypatch, lambda sel: seen.append(sel) or b"a\nb")
+        assert {".homeTeam", ".awayTeam", ".date_bah", ".fprc"} <= set(seen)
+        assert out["home"]["rows"] == 2
+
+    def test_equal_row_counts_report_as_aligned(self, monkeypatch):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        out = self._run(monkeypatch, lambda sel: b"Lakers\nCeltics\nHeat")
+        assert out["_aligned"] is True
+        assert set(out["_counts"].values()) == {3}
+
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "columns": out})
+        assert any("COLUMNS ZIP CLEANLY" in l for l in lines)
+
+    def test_mismatched_columns_are_not_called_aligned(self, monkeypatch):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        out = self._run(monkeypatch,
+                        lambda sel: b"a\nb" if sel == ".homeTeam" else b"a")
+        assert out["_aligned"] is False
+
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "columns": out})
+        assert not any("COLUMNS ZIP CLEANLY" in l for l in lines)
+
+    def test_the_relay_wrapper_is_stripped_from_rows(self, monkeypatch):
+        out = self._run(
+            monkeypatch,
+            lambda sel: b"Title: x\n\nURL Source: y\n\nMarkdown Content:\n"
+                        b"Lakers\nCeltics")
+        assert out["home"]["rows"] == 2
+        assert out["home"]["first"] == ["Lakers", "Celtics"]
+
+    def test_a_failed_column_does_not_claim_alignment(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "relay_request", _boom("422"))
+        out = probe.column_extracts("2026-09-27", "basketball",
+                                    timeout=1, pause=0)
+        assert out["_aligned"] is False and out["_counts"] == {}
