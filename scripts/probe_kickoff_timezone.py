@@ -743,6 +743,51 @@ def test_match_json(slug: str, mid: str, *, timeout: int,
     return out
 
 
+def selector_html_modes(date: str, sport_path: str, *, timeout: int,
+                        pause: float) -> dict[str, Any]:
+    """Can the renderer hand back the matched subtree as HTML?
+
+    Selector-scoped extraction already returns the board as text. If the
+    same request can return the rendered DOM subtree as markup, the existing
+    parser consumes it unchanged — no new Markdown parser, no row-order
+    join, and .homeTeam/.awayTeam/.date_bah come through as the fields the
+    pipeline already expects. The html mode alone returns the interstitial
+    because it fetches without rendering; combined with a selector it may
+    take the rendered path instead.
+    """
+    url = f"https://www.forebet.com/en/{sport_path}/predictions/{date}"
+    base = {"User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
+            "X-No-Cache": "true", "X-Timeout": "25"}
+    attempts = {
+        "selector_plus_return_html": {"X-Target-Selector": "div.rcnt",
+                                      "X-Return-Format": "html"},
+        "selector_plus_respond_html": {"X-Target-Selector": "div.rcnt",
+                                       "X-Respond-With": "html"},
+        "page_return_html_rendered": {"X-Return-Format": "html",
+                                      "X-Wait-For-Selector": "div.rcnt"},
+    }
+    out: dict[str, Any] = {}
+    for i, (name, extra) in enumerate(attempts.items()):
+        if i:
+            time.sleep(min(pause, 6))
+        try:
+            body = relay_request(RELAY_BASE + url, {**base, **extra},
+                                 timeout=timeout + 20)
+        except Exception as exc:
+            out[name] = {"error": f"{type(exc).__name__}: {exc}"[:100]}
+            continue
+        lowered = body.lower()
+        out[name] = {
+            "bytes": len(body),
+            "challenge": looks_like_challenge(body),
+            "rcnt": lowered.count(b'class="rcnt'),
+            "home_team": lowered.count(b"hometeam"),
+            "date_bah": lowered.count(b"date_bah"),
+            "sample": body[:260].decode("utf-8", "replace"),
+        }
+    return out
+
+
 def live_dom_selectors(date: str, sport_path: str, *,
                        timeout: int, pause: float) -> dict[str, Any]:
     """Ask the renderer which selectors exist on the live board.
@@ -1439,6 +1484,11 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
             f"/predictions/{date}", timeout=timeout)
 
     time.sleep(pause)
+    report["selector_html"] = selector_html_modes(
+        date, SPORTS[sport].path if sport in SPORTS else sport,
+        timeout=timeout, pause=pause)
+
+    time.sleep(pause)
     report["recent_markup"] = recent_markup_check(
         SPORTS[sport].path if sport in SPORTS else sport,
         timeout=timeout, pause=pause)
@@ -1647,6 +1697,24 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
             lines.append("  control: getrs.php answers DIRECTLY from the "
                          "runner — the APIs are not behind the bot check, so "
                          "an API route would need no relay at all.")
+
+    shtml = report.get("selector_html") or {}
+    if shtml:
+        lines.append("Selector + HTML output (would feed the existing parser):")
+        for name, fp in shtml.items():
+            lines.append(f"  {name}: " + (fp.get("error") or
+                         f"{fp.get('bytes')}B rcnt={fp.get('rcnt')} "
+                         f"homeTeam={fp.get('home_team')} "
+                         f"date_bah={fp.get('date_bah')} "
+                         f"challenge={fp.get('challenge')}"))
+        winners = [n for n, fp in shtml.items()
+                   if (fp.get("rcnt") or 0) > 5 and (fp.get("home_team") or 0) > 5]
+        if winners:
+            lines.append(
+                "RENDERED BOARD MARKUP AVAILABLE: " + ", ".join(winners) +
+                " — parse_html_events can consume this as-is, so capture "
+                "needs a fetch change and nothing else.")
+            lines.append(f"  sample: {shtml[winners[0]].get('sample', '')[:300]}")
 
     recent = report.get("recent_markup") or {}
     if recent:
@@ -1964,7 +2032,8 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
                              "js_call_sites", "sitemaps",
                              "match_ids", "match_json", "dom_selectors",
                              "harvested_links", "render_waits",
-                             "current_bundle", "recent_markup")},
+                             "current_bundle", "recent_markup",
+                             "selector_html")},
                            sort_keys=True)[:3000]
     emitted.append(
         f"::notice title=Endpoint hunt::{_annotation_escape(hunt_blob)}")

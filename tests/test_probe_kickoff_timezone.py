@@ -1771,3 +1771,49 @@ class TestMatchJsonForms:
         out = probe.test_match_json("a", "1", timeout=1, pause=0)
         assert out["error"] == "no form returned a body"
         assert len(out["tried"]) == 4
+
+
+class TestSelectorHtmlModes:
+    """If the renderer returns the matched subtree as markup, the existing
+    parser consumes it unchanged — no Markdown parser and no row-order join."""
+
+    def _run(self, monkeypatch, responder):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "relay_request",
+                            lambda url, headers, *, timeout: responder(headers))
+        return probe.selector_html_modes("2026-09-27", "basketball",
+                                         timeout=1, pause=0)
+
+    def test_selector_is_combined_with_html_output(self, monkeypatch):
+        seen: list[dict] = []
+        out = self._run(monkeypatch, lambda h: seen.append(h) or b"")
+        assert any(h.get("X-Target-Selector") == "div.rcnt"
+                   and h.get("X-Return-Format") == "html" for h in seen)
+        assert any(h.get("X-Wait-For-Selector") == "div.rcnt" for h in seen)
+        assert set(out) == {"selector_plus_return_html",
+                            "selector_plus_respond_html",
+                            "page_return_html_rendered"}
+
+    def test_parser_ready_markup_is_the_headline(self, monkeypatch):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        markup = (b'<div class="rcnt"><span class="homeTeam">Lakers</span>'
+                  b'<span class="date_bah">27/09/2026 19:30</span></div>') * 8
+        out = self._run(monkeypatch,
+                        lambda h: markup if h.get("X-Return-Format") == "html"
+                        else b"plain text")
+        assert out["selector_plus_return_html"]["rcnt"] == 8
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "selector_html": out})
+        assert any("RENDERED BOARD MARKUP AVAILABLE" in l for l in lines)
+
+    def test_an_interstitial_is_not_mistaken_for_markup(self, monkeypatch):
+        from scripts.probe_kickoff_timezone import summarise_offsets, verdict
+
+        out = self._run(monkeypatch,
+                        lambda h: b"<title>Just a moment...</title>")
+        assert out["selector_plus_return_html"]["challenge"] is True
+        _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
+                            "selector_html": out})
+        assert not any("RENDERED BOARD MARKUP AVAILABLE" in l for l in lines)
