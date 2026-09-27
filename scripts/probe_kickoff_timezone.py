@@ -697,20 +697,42 @@ def harvest_match_ids(sitemap_url: str, *, timeout: int) -> dict[str, Any]:
     return out
 
 
-def test_match_json(slug: str, mid: str, *, timeout: int) -> dict[str, Any]:
-    """The call site wants gdt=<slug>&mid=<id>. Give it exactly that."""
-    url = ("https://www.forebet.com/scripts/getjson.php?"
-           f"gdt={slug}&mid={mid}")
-    out: dict[str, Any] = {"url": url}
-    try:
-        body = relay_request(RELAY_BASE + url, {
-            "User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
-            "X-No-Cache": "true"}, timeout=timeout)
-    except Exception as exc:
-        out["error"] = f"{type(exc).__name__}: {exc}"[:110]
+def test_match_json(slug: str, mid: str, *, timeout: int,
+                    pause: float = 4) -> dict[str, Any]:
+    """Call getjson.php the way the page does.
+
+    The call site reads `L = document.URL.split("/").pop()`, so gdt is the
+    WHOLE last path segment — slug and id together. Earlier attempts passed
+    the slug with the id stripped off, which is likely why a real match
+    returned 14 bytes. Try the faithful form first, then the fallbacks.
+    """
+    forms = {
+        "slug_with_id": f"gdt={slug}-{mid}&mid={mid}",
+        "slug_only": f"gdt={slug}&mid={mid}",
+        "id_only": f"gdt={mid}&mid={mid}",
+        "mid_alone": f"mid={mid}",
+    }
+    out: dict[str, Any] = {"tried": {}}
+    payload = b""
+    for i, (name, query) in enumerate(forms.items()):
+        if i:
+            time.sleep(min(pause, 4))
+        url = f"https://www.forebet.com/scripts/getjson.php?{query}"
+        try:
+            body = relay_request(RELAY_BASE + url, {
+                "User-Agent": "EdgeFactory/1.0", "Accept": "text/plain",
+                "X-No-Cache": "true"}, timeout=timeout)
+        except Exception as exc:
+            out["tried"][name] = f"{type(exc).__name__}"[:40]
+            continue
+        marker = b"Markdown Content:"
+        candidate = body.split(marker, 1)[1].strip() if marker in body else body
+        out["tried"][name] = f"{len(candidate)}B"
+        if len(candidate) > len(payload):
+            payload, out["url"], out["form"] = candidate, url, name
+    if not payload:
+        out["error"] = "no form returned a body"
         return out
-    marker = b"Markdown Content:"
-    payload = body.split(marker, 1)[1].strip() if marker in body else body
     out["bytes"] = len(payload)
     # 14 bytes is not data. Require a plausible JSON body, not merely
     # something that is not literally "[]".

@@ -1320,7 +1320,8 @@ class TestSitemapRoute:
                 b'Markdown Content:\n[{"id":"2476264",'
                 b'"DATE_BAH":"2026-09-27 19:30:00","host":"Lakers",'
                 b'"guest":"Heat","Pred_1":"71","Pred_2":"29"}]')
-        out = probe.test_match_json("lakers-vs-heat", "2476264", timeout=1)
+        out = probe.test_match_json("lakers-vs-heat", "2476264", timeout=1,
+                                    pause=0)
         assert out["empty"] is False and out["has_date_bah"]
 
         _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
@@ -1333,7 +1334,7 @@ class TestSitemapRoute:
 
         monkeypatch.setattr(probe, "relay_request",
                             lambda url, headers, *, timeout: b"[]")
-        out = probe.test_match_json("x", "1", timeout=1)
+        out = probe.test_match_json("x", "1", timeout=1, pause=0)
         _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
                             "match_json": out})
         assert out["empty"] and not any("PER-MATCH JSON WORKS" in l
@@ -1447,7 +1448,7 @@ class TestListingSlice:
 
         monkeypatch.setattr(probe, "relay_request",
                             lambda url, headers, *, timeout: b'[{"a":1}]')
-        out = probe.test_match_json("slug", "123", timeout=1)
+        out = probe.test_match_json("slug", "123", timeout=1, pause=0)
         assert out["empty"] is True
 
         _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
@@ -1461,7 +1462,7 @@ class TestListingSlice:
                   b'"host":"Lakers","guest":"Heat","Pred_1":"71"}]'
         monkeypatch.setattr(probe, "relay_request",
                             lambda url, headers, *, timeout: payload)
-        out = probe.test_match_json("slug", "123", timeout=1)
+        out = probe.test_match_json("slug", "123", timeout=1, pause=0)
         assert out["empty"] is False and out["has_date_bah"]
 
 
@@ -1731,3 +1732,42 @@ class TestRowAlignment:
         _, lines = verdict({"fetch_errors": [], "offset": summarise_offsets([]),
                             "dom_selectors": out})
         assert any("div.tnms rows:" in l for l in lines)
+
+
+class TestMatchJsonForms:
+    """The call site reads gdt from the whole last path segment — slug AND
+    id — so passing the slug alone was never the call the page makes."""
+
+    def test_the_faithful_form_is_tried_first(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        seen: list[str] = []
+        monkeypatch.setattr(
+            probe, "relay_request",
+            lambda url, headers, *, timeout: seen.append(url) or b"[]")
+        probe.test_match_json("lakers-vs-heat", "2476264", timeout=1, pause=0)
+        assert "gdt=lakers-vs-heat-2476264&mid=2476264" in seen[0]
+
+    def test_the_biggest_body_wins(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        real = b'[{"id":"2476264","DATE_BAH":"2026-09-27 19:30:00",' \
+               b'"host":"Lakers","guest":"Heat","Pred_1":"71"}]'
+
+        def _relay(url, headers, *, timeout):
+            return real if "gdt=lakers-vs-heat-2476264" in url else b"[]"
+
+        monkeypatch.setattr(probe, "relay_request", _relay)
+        out = probe.test_match_json("lakers-vs-heat", "2476264", timeout=1,
+                                    pause=0)
+        assert out["form"] == "slug_with_id"
+        assert out["has_date_bah"] and out["empty"] is False
+        assert out["tried"]["slug_only"] == "2B"
+
+    def test_every_form_failing_is_reported(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "relay_request", _boom("502"))
+        out = probe.test_match_json("a", "1", timeout=1, pause=0)
+        assert out["error"] == "no form returned a body"
+        assert len(out["tried"]) == 4
