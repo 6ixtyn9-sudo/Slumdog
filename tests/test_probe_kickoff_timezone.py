@@ -1843,5 +1843,7 @@ class TestSectionedAnnotations:
         emitted = emit_annotations(
             {"target_date": "x", "match_json": {}, "dom_selectors": None},
             ["v"])
-        assert not any("match_json" in e for e in emitted)
-        assert not any("dom_selectors" in e for e in emitted)
+        # The report blob still lists the keys; what must not appear is a
+        # dedicated, empty section annotation.
+        assert not any("title=probe:match_json" in e for e in emitted)
+        assert not any("title=probe:dom_selectors" in e for e in emitted)
