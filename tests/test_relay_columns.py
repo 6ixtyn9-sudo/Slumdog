@@ -22,6 +22,7 @@ from slumdog.relay_columns import (
     infer_date_order,
     ROW_SCOPE,
     scoped,
+    _consensus,
     align_columns,
     event_day_from_kickoff,
     event_id_from_url,
@@ -556,3 +557,64 @@ class TestDateOrderIsMeasuredNotAssumed:
         assert result.status == CAPTURED
         assert [e.event_id for e in result.events] == ["1111"]
         assert result.observed_dates == ("2026-09-28", "2026-09-30")
+
+
+class TestColumnsThatRenderSeveralLinesPerRow:
+    """Measured on 2026-09-28: every board returned exactly three times the
+    row count for .ex_sc — the pair and each side's score — while nothing
+    else disagreed. basketball 57 against 19, hockey 102 against 34,
+    handball 36 against 12, volleyball 30 against 10."""
+
+    def test_an_exact_multiple_collapses_to_one_value_per_row(self):
+        aligned = align_columns({
+            "link": ["a", "b"], "home": ["A", "B"], "away": ["C", "D"],
+            "kickoff": ["k", "k"], "probabilities": ["71 29", "64 36"],
+            "predicted_score": ["77-79", "77", "**79**",
+                                "88-84", "88", "**84**"],
+        })
+        assert aligned["predicted_score"] == ["77-79", "88-84"]
+
+    def test_the_row_count_comes_from_columns_that_can_state_it(self):
+        # link, kickoff and probabilities are 1:1 with matches AND have
+        # detectable headings, so a noisy optional column cannot outvote
+        # them — and a name column carrying an undetectable heading does
+        # not corrupt the count it is about to be measured against.
+        assert _consensus({"link": ["a"], "kickoff": ["k"],
+                           "probabilities": ["p"],
+                           "home": ["Host", "A"],
+                           "average": ["1", "2", "3"]}) == 1
+
+    def test_those_columns_disagreeing_gives_no_consensus(self):
+        assert _consensus({"link": ["a", "b"], "kickoff": ["k"],
+                           "probabilities": ["p"]}) is None
+
+    def test_a_ragged_column_is_still_a_mismatch(self):
+        # 5 is not a multiple of 2: a partial render, not a known shape.
+        aligned = align_columns({
+            "link": ["a", "b"], "home": ["A", "B"], "away": ["C", "D"],
+            "kickoff": ["k", "k"], "probabilities": ["p", "p"],
+            "average": ["1", "2", "3", "4", "5"],
+        })
+        assert len(aligned["average"]) == 5
+
+    def test_a_live_board_shape_converts_end_to_end(self):
+        bodies = _full_board(3)
+        bodies[scoped(".ex_sc")] = b"\n".join(
+            [b"92-78", b"92", b"**78**"] * 3)
+        board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                                    sleep=lambda _s: None,
+                                    opener=_opener(bodies))
+        assert board.row_count == 3
+        events = rows_to_events(board, captured_at="2026-09-27T04:00:00Z")
+        assert [e.predicted_score for e in events] == ["92-78"] * 3
+
+
+class TestCollapsingIsNarrow:
+    def test_a_required_column_is_never_collapsed(self):
+        # A name column that happens to be an exact multiple of the row
+        # count is a broken capture, not a multi-line cell.
+        aligned = align_columns({
+            "link": ["a"], "kickoff": ["k"], "probabilities": ["p"],
+            "home": ["Host", "Lakers", "Heat", "Bulls"],
+        })
+        assert len(aligned["home"]) == 4

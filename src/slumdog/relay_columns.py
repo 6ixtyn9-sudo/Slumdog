@@ -167,23 +167,57 @@ def parse_column(body: bytes, *, selector: str, column: str = "") -> list[str]:
     return rows
 
 
-def align_columns(columns: dict[str, list[str]]) -> dict[str, list[str]]:
-    """Trim heading lines the shape filter could not see, or raise.
+#: Columns that are both 1:1 with matches and heading-detectable by shape,
+#: so their length is the row count with nothing to subtract. Team-name
+#: columns are 1:1 too, but a heading like "Host" is indistinguishable from
+#: a team, so they are measured against these rather than voting.
+_CONSENSUS_COLUMNS: tuple[str, ...] = ("link", "kickoff", "probabilities")
 
-    The shaped columns agree on how many matches the board holds. A
-    name column that is longer by one still carries its heading; anything
-    further apart is a partial render, which must fail rather than be
-    trimmed into looking consistent.
+
+def _consensus(columns: dict[str, list[str]]) -> int | None:
+    """How many matches the board holds, per the columns that can say so."""
+    counts = [len(columns[name]) for name in _CONSENSUS_COLUMNS
+              if name in columns]
+    if not counts or len(set(counts)) != 1:
+        return None
+    return counts[0]
+
+
+def align_columns(columns: dict[str, list[str]]) -> dict[str, list[str]]:
+    """Reconcile columns that render more than one line per row, or a
+    heading the shape filter could not see. Anything else is left alone to
+    fail as a mismatch.
+
+    Two real shapes, both measured on live boards:
+
+    * ``.ex_sc`` emits three lines per match — the pair and each side's
+      score ("77-79", "77", "**79**"). Every board on 2026-09-28 returned
+      exactly three times the row count there, and nothing else disagreed.
+      A column that is an exact multiple is collapsed to its first line
+      per group, which is the combined value.
+    * a team-name column carries a heading that has no shape to detect it
+      ("Host" is as name-like as a team), leaving it longer by one.
+
+    A column that is neither an exact multiple nor a single heading longer
+    is a partial render and must stay a mismatch, not be trimmed into
+    looking consistent.
     """
-    shaped = {name: len(rows) for name, rows in columns.items()
-              if name in _SHAPES}
-    if not shaped or len(set(shaped.values())) != 1:
+    expected = _consensus(columns)
+    if not expected:
         return columns
-    expected = next(iter(set(shaped.values())))
     aligned: dict[str, list[str]] = {}
     for name, rows in columns.items():
-        excess = len(rows) - expected
-        if name not in _SHAPES and 0 < excess <= _MAX_HEADING_LINES:
+        count = len(rows)
+        excess = count - expected
+        # Only columns that are not 1:1 with matches may be collapsed. A
+        # team-name column that happens to be an exact multiple of the row
+        # count is a broken capture, not a multi-line cell, and must stay a
+        # mismatch.
+        if (name not in REQUIRED_COLUMNS and count > expected
+                and count % expected == 0):
+            group = count // expected
+            rows = [rows[index * group] for index in range(expected)]
+        elif name not in _SHAPES and 0 < excess <= _MAX_HEADING_LINES:
             rows = rows[excess:]
         aligned[name] = rows
     return aligned
