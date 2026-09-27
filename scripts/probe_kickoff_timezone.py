@@ -878,51 +878,6 @@ def coverage_sweep(date: str, *, timeout: int, pause: float,
     return out
 
 
-def row_blocks(date: str, *, timeout: int, pause: float,
-               sports: tuple[str, ...] = ("basketball", "hockey", "baseball",
-                                          "tennis")) -> dict[str, Any]:
-    """Fetch each board as whole rows, one request per sport.
-
-    Scoping works — with ':has(.fprc):has(.tnms)' tennis returned 43 for
-    every column, the off-by-one gone. What is left is throttling: six
-    requests per sport means twenty-four chances to be refused, and on
-    2026-09-27 between one and four columns failed on every board.
-
-    If the row container renders as one block per match, a single request
-    carries every field with its row association intact — no join, no
-    alignment check, and a sixth of the request budget.
-    """
-    out: dict[str, Any] = {}
-    for sport in sports:
-        spec = SPORTS.get(sport)
-        if spec is None or time_left() < 60:
-            continue
-        url = f"https://www.forebet.com/en/{spec.path}/predictions/{date}"
-        pace(min(pause, 5))
-        try:
-            body = relay_request(RELAY_BASE + url, {
-                "User-Agent": "EdgeFactory/1.0",
-                "Accept": "text/plain",
-                "X-No-Cache": "true",
-                "X-Timeout": "25",
-                "X-Target-Selector": ROW_SCOPE,
-            }, timeout=timeout + 20)
-        except Exception as exc:  # noqa: BLE001
-            out[sport] = {"error": f"{type(exc).__name__}"}
-            continue
-        text = strip_wrapper(body)
-        blocks = [b.strip() for b in re.split(r"\n\s*\n", text) if b.strip()]
-        out[sport] = {
-            "bytes": len(body),
-            "blocks": len(blocks),
-            "lines": len(text.splitlines()),
-            "links": text.count("]("),
-            "sample": blocks[0][:500] if blocks else text[:300],
-            "sample2": blocks[1][:300] if len(blocks) > 1 else "",
-        }
-    return out
-
-
 def r1_coverage(date: str, *, timeout: int, pause: float,
                 sports: tuple[str, ...] = COVERAGE_SPORTS) -> dict[str, Any]:
     """Can each sport produce a rankable field for this date?
@@ -1693,12 +1648,13 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
         "columns": dict(COLUMN_SELECTORS),
     }
 
-    report["coverage_sweep"] = coverage_sweep(date, timeout=timeout,
-                                              pause=pause)
-    if time_left() > 240:
-        report["row_blocks"] = row_blocks(date, timeout=timeout, pause=pause)
+    # Coverage is the question in hand and gets the budget first. The sweep
+    # has already answered reachability for every sport, so it only reruns
+    # when there is time to spare; row_blocks is retired for the same reason.
     report["r1_coverage"] = r1_coverage(date, timeout=timeout, pause=pause)
-
+    if time_left() > 300:
+        report["coverage_sweep"] = coverage_sweep(date, timeout=timeout,
+                                                  pause=pause)
     json_kickoffs = football_utc_kickoffs(date, timeout=timeout)
     report["football_json_matches"] = len(json_kickoffs)
 
@@ -2011,18 +1967,6 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
                      f"{len(sweep)} — {', '.join(reachable) or 'none'}")
         lines.append(f"WITH MATCHES ON THE TARGET DATE: "
                      f"{', '.join(ready) or 'none'}")
-
-    blocks = report.get("row_blocks") or {}
-    if blocks:
-        lines.append("Whole-row fetch, one request per sport:")
-        for sport, rec in blocks.items():
-            lines.append(f"  {sport}: " + (rec.get("error") or
-                         f"{rec.get('bytes')}B blocks={rec.get('blocks')} "
-                         f"lines={rec.get('lines')} links={rec.get('links')}"))
-        for sport, rec in blocks.items():
-            if rec.get("sample"):
-                lines.append(f"  {sport} first block: {rec['sample'][:400]}")
-                break
 
     coverage = report.get("r1_coverage") or {}
     if coverage:
@@ -2384,7 +2328,7 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     # One annotation per section: a single blob silently truncates at ~3000
     # characters and the interesting result is usually last.
     sections = (
-        "capture_contract", "coverage_sweep", "row_blocks", "r1_coverage", "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",
+        "capture_contract", "r1_coverage", "coverage_sweep", "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",
         "recent_markup", "render_waits", "markdown_modes", "api_sweep",
         "getjson_crack", "js_call_sites", "current_bundle", "sitemaps",
         "endpoint_hunt", "fetch_matrix", "browser_probe", "save_page_now",

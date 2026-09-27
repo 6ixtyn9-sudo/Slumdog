@@ -2087,56 +2087,6 @@ class TestWallClockBudget:
             probe.set_deadline(None)
 
 
-class TestRowBlocks:
-    """Six requests per sport is twenty-four chances to be throttled, and on
-    2026-09-27 between one and four columns failed on every board. One
-    request for the whole row keeps the fields associated and costs a
-    sixth of the budget."""
-
-    def _run(self, monkeypatch, responder, sports=("basketball",)):
-        import scripts.probe_kickoff_timezone as probe
-
-        monkeypatch.setattr(probe, "relay_request",
-                            lambda url, headers, *, timeout:
-                                responder(headers.get("X-Target-Selector")))
-        return probe.row_blocks("2026-09-27", timeout=1, pause=0, sports=sports)
-
-    def test_the_whole_row_is_requested_once(self, monkeypatch):
-        from slumdog.relay_columns import ROW_SCOPE
-
-        seen: list[str] = []
-        self._run(monkeypatch, lambda sel: seen.append(sel) or b"x")
-        assert seen == [ROW_SCOPE]
-
-    def test_blocks_are_counted_per_match(self, monkeypatch):
-        body = (b"Markdown Content:\n[A B](https://f/m/a-1)\n71 29\n\n"
-                b"[C D](https://f/m/c-2)\n64 36\n")
-        out = self._run(monkeypatch, lambda sel: body)
-        assert out["basketball"]["blocks"] == 2
-        assert out["basketball"]["links"] == 2
-        assert "[A B]" in out["basketball"]["sample"]
-
-    def test_a_refusal_is_recorded_not_swallowed(self, monkeypatch):
-        import scripts.probe_kickoff_timezone as probe
-
-        monkeypatch.setattr(probe, "relay_request", _boom("422"))
-        out = probe.row_blocks("2026-09-27", timeout=1, pause=0,
-                               sports=("basketball",))
-        assert "error" in out["basketball"]
-
-    def test_it_reports_before_the_budget_runs_out(self, monkeypatch):
-        import scripts.probe_kickoff_timezone as probe
-
-        monkeypatch.setattr(probe, "relay_request",
-                            lambda url, headers, *, timeout: b"x")
-        probe.set_deadline(0)
-        try:
-            assert probe.row_blocks("2026-09-27", timeout=1, pause=0,
-                                    sports=("basketball",)) == {}
-        finally:
-            probe.set_deadline(None)
-
-
 class TestCoverageSweep:
     """Nine sports have never been probed through the column route. One
     row-scoped request each answers whether their boards use the same

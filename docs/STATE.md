@@ -140,6 +140,41 @@ from values that can only be read one way (a component over 12). A board
 that gives no disambiguating date, or that contradicts itself, is REFUSED as
 a `COVERAGE_GAP`; no order is ever guessed.
 
+### R1 CAPTURED FOR THREE BLOCKED SPORTS THROUGH THE PRODUCTION PATH (run 36342678198)
+
+Target date 2026-09-28, `capture_board()` called exactly as a capture would
+call it — retries, required columns, date-order inference, fail-closed policy.
+
+| Sport | Rows | Rankable | Strongest candidate |
+| --- | --- | --- | --- |
+| hockey | 34 | **34** | Kokshetau vs Pavlodar, p1 0.85, id 381952 |
+| basketball | 19 | **18** | Colonias Gold vs San Alfonzo, p1 0.85, id 285067 |
+| handball | 12 | **12** | Stal Mielec vs Wisla Plock, p2 0.86, id 186367 |
+| volleyball | — | — | skipped: out of the job's time budget |
+
+Status `CAPTURED`, no gaps, `suspect_short` false, and `observed_dates`
+recorded for each. With football's JSON that is **four sports with a rank-1
+field**, against one before this work.
+
+Two fixes got it there, both found by live measurement:
+
+* **Retry closed the throttling hole.** The stage had re-implemented
+  fetching and so never used production's retry; once it called
+  `capture_board`, all eight columns returned for all four sports with no
+  refusals at all.
+* **`.ex_sc` renders three lines per match** (the pair, then each side).
+  Every board returned exactly 3× the row count there — 57/19, 102/34,
+  36/12, 30/10. A column that is an exact multiple of the row count is
+  collapsed to its first line per group. Only columns that are NOT 1:1 with
+  matches may be collapsed, so a name column of the wrong length stays a
+  mismatch instead of being swallowed. The row count itself comes from
+  `link`, `kickoff` and `probabilities` — 1:1 with matches and
+  heading-detectable by shape.
+
+Still open: volleyball needs the budget freed (done — `row_blocks` retired,
+the sweep now only reruns with time to spare); the collector is still not
+wired; no settlement has been proven against a column-captured board.
+
 ## A WORKING CAPTURE ROUTE FOR THE BLOCKED SPORTS (2026-09-26)
 
 The boards are not unreachable. The relay's rendering engine clears the bot
