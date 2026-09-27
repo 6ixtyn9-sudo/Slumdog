@@ -125,6 +125,36 @@ This is NOT a value-betting, odds-first, EV, de-vigging, Kelly, or bookmaker-cov
 - Prefer retained bytes before network. Use existing collector/relay code, at most 6 workers, small batches, 62s pauses. One-off probes sequential/minimal, record URL/date/route/result.
 - Do not run American-football odds probe before ~2026-09-10.
 
+## Remote Probing From a Sandbox With No Egress
+
+The Arena sandbox has no outbound network (`curl` → `000`, exit 35). The GitHub runner does. Every external fact in this project since 2026-09-26 was obtained by shipping code to the runner and reading it back — no agent may claim a site fact it did not measure this way.
+
+**The loop.** `.github/workflows/probe_kickoff_timezone.yml` (owner-authored, `contents: read`, `continue-on-error: true`) runs `scripts/probe_kickoff_timezone.py` and triggers on pushes that touch the script. Pushing the script alone re-runs the probe — there is nothing to dispatch by hand.
+
+- **Never edit the workflow.** All probe logic goes in the script. Workflow files are owner-authored; a needed workflow change is a paste prepared under `docs/owner_paste/` plus a contract test (see `tests/test_workflow_persist_contract.py`).
+- Read results back with `gh`, not by opening logs:
+  ```bash
+  gh api repos/6ixtyn9-sudo/Slumdog/actions/runs?per_page=1 --jq '.workflow_runs[]|"\(.id) \(.status)"'
+  CR=$(gh api repos/6ixtyn9-sudo/Slumdog/actions/runs/<id>/jobs --jq '.jobs[0].check_run_url')
+  gh api "${CR#https://api.github.com/}/annotations" --jq '.[] | "== \(.title)\n\(.message)"'
+  ```
+- **Emit one `::notice` annotation per report section**, each JSON blob capped ~2600 chars. A single combined blob truncates at ~3000 and the answer you want is usually the last thing written — this cost two wasted runs.
+- **The job is capped at 15 minutes and the cap is silent.** An overrun is not a lost stage: the runner is killed before annotations are emitted and the run reports *nothing* (run 36294292356). The script arms `set_deadline()`, every network primitive calls `check_budget()`, and sleeps go through `pace()`. Put the stage that answers the current question FIRST.
+- One run ≈ 10–20 relay requests. Budget the question accordingly; prefer one request that carries a whole row over six that must be joined.
+- A run takes ~10–15 min wall clock. Poll with a bounded loop, then read annotations; do not re-push while a run is in flight.
+
+**How to reason about results.**
+
+- **One falsifiable hypothesis per run**, with the measurement that would disprove it. "Team names are absent from the DOM" survived days because nobody scoped a selector at the name element; it was false.
+- **Record negative results in `docs/STATE.md`** with the exact URL/header/route tried. The archive, `all.js`, headed Chromium, sitemaps, Save Page Now, `X-Return-Format: html`, and `getjson.php` are all closed — do not retry them without new evidence.
+- **The relay throttles, and throttled replies imitate data**: 422 for a selector that worked minutes earlier, a 591 B stub, an 18-row render of a 126-row board, and a bot-check page served as HTTP 200. Several recorded "dead ends" were throttled replies. Re-test under pacing before declaring anything dead, retry the transport with backoff, and never treat a short body as an empty board.
+- **A mismatch between measurements is the finding.** Every board returning exactly one fewer `.fprc` than `.homeTeam` was not a parsing bug; it meant some rows have no probability cell, which makes index-joining unsafe. The fix was `:has()` scoping, not a smarter parser.
+- Prefer a fix that removes a failure mode by construction over one that detects it afterwards.
+
+**Capture route currently in use** (`src/slumdog/relay_columns.py`, not yet wired into the collector): one relay GET per field to `https://r.jina.ai/<board url>` with `X-Target-Selector: .rcnt:has(.fprc):has(.tnms) <field>`, headers `User-Agent`, `Accept: text/plain`, `X-No-Cache: true`, `X-Timeout: 25`. Columns zip by index. Fail closed on a missing required column, disagreeing row counts, a bot-check body, or a board under `minimum_rows`. Headings are detected by shape, never by matching heading text (only `.fprc`'s heading matched an allowlist, which silently mis-aligned all four boards).
+
+**Discipline that applies to probe code too.** Every probe stage lands with tests that pin its refusals — throttle, partial render, interstitial — not just its happy path. Run the full suite and pyflakes before every push; a piped `pytest | tail` exits 0 even when red, so never chain `&& git push` off it. Expect "both added" conflicts on the two probe files during rebase (`git checkout --theirs`, then continue). The GitHub token can expire mid-session (`gh: Bad credentials`) — ask the user to reconnect; do not work around it.
+
 ## Documentation Governance
 
 - `docs/STATE.md` is canonical current truth, not append-only diary. Git history is history.
