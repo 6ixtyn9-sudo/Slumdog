@@ -71,7 +71,11 @@ from slumdog.relay_columns import (  # noqa: E402
     parse_column,
     rows_to_events,
 )
-from slumdog.relay_columns import BoardColumns, ROW_SCOPE  # noqa: E402
+from slumdog.relay_columns import (  # noqa: E402
+    BoardColumns,
+    ROW_SCOPE,
+    strip_wrapper,
+)
 from slumdog.sports import SPORTS  # noqa: E402
 
 
@@ -808,6 +812,51 @@ def test_match_json(slug: str, mid: str, *, timeout: int,
 COVERAGE_SPORTS: tuple[str, ...] = (
     "basketball", "hockey", "baseball", "tennis",
 )
+
+
+def row_blocks(date: str, *, timeout: int, pause: float,
+               sports: tuple[str, ...] = ("basketball", "hockey", "baseball",
+                                          "tennis")) -> dict[str, Any]:
+    """Fetch each board as whole rows, one request per sport.
+
+    Scoping works — with ':has(.fprc):has(.tnms)' tennis returned 43 for
+    every column, the off-by-one gone. What is left is throttling: six
+    requests per sport means twenty-four chances to be refused, and on
+    2026-09-27 between one and four columns failed on every board.
+
+    If the row container renders as one block per match, a single request
+    carries every field with its row association intact — no join, no
+    alignment check, and a sixth of the request budget.
+    """
+    out: dict[str, Any] = {}
+    for sport in sports:
+        spec = SPORTS.get(sport)
+        if spec is None or time_left() < 60:
+            continue
+        url = f"https://www.forebet.com/en/{spec.path}/predictions/{date}"
+        pace(min(pause, 5))
+        try:
+            body = relay_request(RELAY_BASE + url, {
+                "User-Agent": "EdgeFactory/1.0",
+                "Accept": "text/plain",
+                "X-No-Cache": "true",
+                "X-Timeout": "25",
+                "X-Target-Selector": ROW_SCOPE,
+            }, timeout=timeout + 20)
+        except Exception as exc:  # noqa: BLE001
+            out[sport] = {"error": f"{type(exc).__name__}"}
+            continue
+        text = strip_wrapper(body)
+        blocks = [b.strip() for b in re.split(r"\n\s*\n", text) if b.strip()]
+        out[sport] = {
+            "bytes": len(body),
+            "blocks": len(blocks),
+            "lines": len(text.splitlines()),
+            "links": text.count("]("),
+            "sample": blocks[0][:500] if blocks else text[:300],
+            "sample2": blocks[1][:300] if len(blocks) > 1 else "",
+        }
+    return out
 
 
 def r1_coverage(date: str, *, timeout: int, pause: float,
@@ -1611,6 +1660,7 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
 
     # Coverage runs first: it is the question the project is actually
     # blocked on, and a later stage overrunning must not cost its answer.
+    report["row_blocks"] = row_blocks(date, timeout=timeout, pause=pause)
     report["r1_coverage"] = r1_coverage(date, timeout=timeout, pause=pause)
 
     json_kickoffs = football_utc_kickoffs(date, timeout=timeout)
@@ -1909,6 +1959,18 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
             lines.append("  control: getrs.php answers DIRECTLY from the "
                          "runner — the APIs are not behind the bot check, so "
                          "an API route would need no relay at all.")
+
+    blocks = report.get("row_blocks") or {}
+    if blocks:
+        lines.append("Whole-row fetch, one request per sport:")
+        for sport, rec in blocks.items():
+            lines.append(f"  {sport}: " + (rec.get("error") or
+                         f"{rec.get('bytes')}B blocks={rec.get('blocks')} "
+                         f"lines={rec.get('lines')} links={rec.get('links')}"))
+        for sport, rec in blocks.items():
+            if rec.get("sample"):
+                lines.append(f"  {sport} first block: {rec['sample'][:400]}")
+                break
 
     coverage = report.get("r1_coverage") or {}
     if coverage:
@@ -2268,7 +2330,7 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     # One annotation per section: a single blob silently truncates at ~3000
     # characters and the interesting result is usually last.
     sections = (
-        "r1_coverage", "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",
+        "row_blocks", "r1_coverage", "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",
         "recent_markup", "render_waits", "markdown_modes", "api_sweep",
         "getjson_crack", "js_call_sites", "current_bundle", "sitemaps",
         "endpoint_hunt", "fetch_matrix", "browser_probe", "save_page_now",
