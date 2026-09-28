@@ -1095,7 +1095,8 @@ class TestRunRefreshForDate:
             def __init__(self, root=None, timeout=None, workers=None):
                 pass
 
-            def capture_selected(self, target, force=False, receipt_name=None):
+            def capture_selected(self, target, force=False, receipt_name=None,
+                                 pause_seconds=0, on_capture_timing=None):
                 assert force is True
                 assert receipt_name.startswith("capture_refresh_2026-09-23_")
                 # Emulate the receipt being committed evidence on disk.
@@ -1153,7 +1154,8 @@ class TestRunRefreshForDate:
             def __init__(self, root=None, timeout=None, workers=None):
                 pass
 
-            def capture_selected(self, target, force=False, receipt_name=None):
+            def capture_selected(self, target, force=False, receipt_name=None,
+                                 pause_seconds=0, on_capture_timing=None):
                 (tmp_path / "data" / "reports" / receipt_name).write_text("{}")
 
         def _fake_evaluator(target_date, repo_root, *, receipt_name=None,
@@ -1175,7 +1177,8 @@ class TestRunRefreshForDate:
         from scripts.forward_shadow_batch import run_refresh_for_date
         _make_completed_run(tmp_path, "2026-09-23", "run0001aaaaaaaaaa")
 
-        def _boom(self, target, force=False, receipt_name=None):
+        def _boom(self, target, force=False, receipt_name=None,
+                  pause_seconds=0, on_capture_timing=None):
             raise RuntimeError("fetch exploded")
 
         monkeypatch.setattr(
@@ -1265,3 +1268,102 @@ class TestRefreshInDriverMain:
         ])
         assert rc == 0
         assert len(seen) == 3
+
+
+class TestCaptureTimingStderrLogging:
+    """Priority 1 (2026-09-28), item 3 of the owner's follow-up: a killed
+    run must still show its per-sport-date timing in the job log, not only
+    in a receipt file that may never get written for the in-flight date.
+    ``_capture_timing_logger`` is the callback wired into every
+    ``capture_selected`` call site; these tests are the "does it actually
+    print" half of that claim (the timing itself is
+    tests/test_forebet.py::TestCaptureTimingInstrumentation's job)."""
+
+    def test_the_logger_prints_one_line_naming_phase_date_sport_and_outcome(
+            self, capsys):
+        import scripts.forward_shadow_batch as fsb
+        log = fsb._capture_timing_logger("forward", "2026-10-02")
+        log({"sport": "rugby", "elapsed_seconds": 1.234, "requests": 2,
+             "outcome": "COVERAGE_GAP"})
+        err = capsys.readouterr().err
+        assert "forward:2026-10-02" in err
+        assert "rugby" in err
+        assert "COVERAGE_GAP" in err
+        assert "1.234" in err
+        assert "requests=2" in err
+
+    def test_run_capture_forwards_pause_seconds_and_wires_the_forward_logger(
+            self, tmp_path, monkeypatch, capsys):
+        # This closes a real bug found while wiring this instrumentation:
+        # run_capture() accepted `pause_seconds` and its own docstring
+        # claimed "62s pauses", but nothing forwarded it to
+        # capture_selected(), so the forward pass ran through the untimed
+        # parallel branch and none of capture_timing ever fired for it.
+        import scripts.forward_shadow_batch as fsb
+        seen = {}
+
+        class _FakeCollector:
+            def __init__(self, root=None, timeout=None, workers=None,
+                        circuit_breaker_columns=0,
+                        circuit_breaker_attempts=1):
+                seen["circuit_breaker_columns"] = circuit_breaker_columns
+
+            def capture_selected(self, target_date, force=False,
+                                 receipt_name=None, pause_seconds=0,
+                                 on_capture_timing=None):
+                seen["pause_seconds"] = pause_seconds
+                assert on_capture_timing is not None
+                on_capture_timing({"sport": "hockey", "elapsed_seconds": 0.5,
+                                   "requests": 2, "outcome": "CAPTURED:relay_columns"})
+                (tmp_path / "data" / "reports").mkdir(
+                    parents=True, exist_ok=True)
+                return []
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector", _FakeCollector)
+        fsb.run_capture("2026-10-02", tmp_path, pause_seconds=17)
+        assert seen["pause_seconds"] == 17
+        # The forward pass is the one call site that opts into the breaker.
+        assert seen["circuit_breaker_columns"] == 2
+        err = capsys.readouterr().err
+        assert "forward:2026-10-02" in err
+        assert "hockey" in err
+
+    def test_run_refresh_for_date_forwards_pause_seconds_and_does_not_opt_into_the_breaker(
+            self, tmp_path, monkeypatch, capsys):
+        import scripts.forward_shadow_batch as fsb
+        _make_completed_run(tmp_path, "2026-09-23", "run0001aaaaaaaaaa")
+        seen = {}
+
+        class _FakeCollector:
+            def __init__(self, root=None, timeout=None, workers=None,
+                        **kwargs):
+                # run_refresh_for_date must NOT pass circuit_breaker_columns
+                # (event-day/refresh boards usually already exist).
+                seen["init_kwargs"] = kwargs
+
+            def capture_selected(self, target, force=False, receipt_name=None,
+                                 pause_seconds=0, on_capture_timing=None):
+                seen["pause_seconds"] = pause_seconds
+                assert on_capture_timing is not None
+                on_capture_timing({"sport": "rugby", "elapsed_seconds": 0.1,
+                                   "requests": 2, "outcome": "COVERAGE_GAP"})
+                (tmp_path / "data" / "reports" / receipt_name).write_text("{}")
+
+        def _fake_evaluator(target_date, repo_root, *, receipt_name=None,
+                            exclude_events_path=None):
+            return {"run_status": "SHADOW_NO_SELECTION",
+                    "artifact_dir": str(tmp_path), "refresh_exclusion_count": 0}
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector", _FakeCollector)
+        monkeypatch.setattr(fsb, "run_evaluator", _fake_evaluator)
+        entry = fsb.run_refresh_for_date(
+            "2026-09-23", tmp_path, pause_seconds=31,
+            base_date=dt.date(2026, 9, 22))
+        assert entry["status"] == "NO_NEW_EVENTS"
+        assert seen["pause_seconds"] == 31
+        assert "circuit_breaker_columns" not in seen["init_kwargs"]
+        err = capsys.readouterr().err
+        assert "refresh:2026-09-23" in err
+        assert "rugby" in err

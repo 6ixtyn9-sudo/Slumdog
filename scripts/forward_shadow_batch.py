@@ -68,6 +68,33 @@ STANDARD_SHADOW_SUBDIR = "shadow"
 EVENT_DAY_SHADOW_SUBDIR = "shadow_event_day"
 EVENT_DAY_CONFIG = "config/shadow_evaluator_event_day.json"
 
+
+def _capture_timing_logger(phase: str, target_date: str):
+    """A ``ForebetCollector.capture_selected(on_capture_timing=...)``
+    callback that prints one stderr line per sport-date the moment it
+    finishes (elapsed seconds, request count, outcome classification).
+
+    Priority 1 (2026-09-28): Forward Shadow #33 (run 36426785929) was
+    cancelled after 92 minutes of complete stderr silence following its
+    last printed line — nobody could tell which stage, sport, or date the
+    time went into, because nothing printed anything until a whole stage
+    finished (or never printed at all if cancelled mid-stage). This closes
+    that gap: each line lands in the job log the instant it happens, so a
+    killed run still shows exactly how far it got and where the time went,
+    even though the receipt file for the in-flight date never gets
+    written. ``phase`` distinguishes which driver stage this is (the
+    capture_timing dict itself only knows the sport, not the caller).
+    """
+    def _log(entry: dict) -> None:
+        print(
+            f"    [{phase}:{target_date}] {entry['sport']}: "
+            f"{entry['outcome']} "
+            f"(elapsed={entry['elapsed_seconds']}s "
+            f"requests={entry['requests']})",
+            file=sys.stderr,
+        )
+    return _log
+
 # Single source of truth for every SMALL evidence file this pipeline can
 # write and that must survive the runner (the scoped git waiver in AGENTS.md:
 # JSON/text evidence only — never raw capture bodies, never *.tar.gz, never
@@ -719,9 +746,15 @@ def run_refresh_for_date(
             repo_root / "data" / "reports" / "shadow" / target_date / run_id)
         entry["excluded_frozen"] = len(exclude_ids)
 
+        # Same dead-parameter bug as run_capture (see its NOTE): forward
+        # pause_seconds through so this stage is also paced and timed.
+        # Deliberately does NOT pass circuit_breaker_columns — see
+        # run_capture's docstring on why the breaker is opt-in per stage.
         collector = ForebetCollector(root=repo_root, timeout=timeout, workers=1)
         collector.capture_selected(
-            target_date, force=True, receipt_name=receipt_name)
+            target_date, force=True, receipt_name=receipt_name,
+            pause_seconds=pause_seconds,
+            on_capture_timing=_capture_timing_logger("refresh", target_date))
 
         exclude_path = Path(tempfile.mkstemp(
             prefix="refresh_exclude_", suffix=".json",
@@ -1016,7 +1049,8 @@ def run_event_day_for_date(
         collector.capture_selected(
             target_date, selected_sports,
             force=True, receipt_name=receipt_name,
-            pause_seconds=pause_seconds)
+            pause_seconds=pause_seconds,
+            on_capture_timing=_capture_timing_logger("event_day", target_date))
         try:
             receipt = json.loads((reports_dir / receipt_name).read_text())
             entry["captured_sports"] = len(receipt.get("captured", []))
@@ -1062,11 +1096,34 @@ def run_capture(target_date: str, repo_root: Path, *, pause_seconds: int = 62, t
 
     Uses the existing collector with workers=1 and 62s pauses.
     Returns the capture receipt dict.
+
+    This is the D+2..D+6 forward-pass call site, and the ONLY one that
+    opts into the column-route circuit breaker (Priority 1, scoped
+    2026-09-28): most sport-dates this far out genuinely have no board
+    yet, so a clean "not published" refusal on the first two probed
+    columns is real signal here. run_refresh_for_date (T+1/T+2, near-term)
+    and run_event_day_for_date (today) deliberately do NOT pass this —
+    their boards usually already exist, and a false trip there would
+    silently cost a real pick or a real grade instead of a wasted probe.
     """
     from slumdog.forebet import ForebetCollector
 
-    collector = ForebetCollector(root=repo_root, timeout=timeout, workers=1)
-    captures = collector.capture_selected(target_date)
+    # NOTE (found 2026-09-28, while wiring per-sport-date timing): this
+    # function accepted `pause_seconds` and its docstring above claimed
+    # "62s pauses", but nothing below ever forwarded it to
+    # capture_selected() — so this call ran through capture_selected's
+    # UNTIMED, UNPACED parallel branch (ThreadPoolExecutor, workers=1, so
+    # serial in effect but with no inter-board pause and none of
+    # capture_selected's `capture_timing` instrumentation, which only
+    # exists on the pause_seconds>0 serial path). Fixed here: the forward
+    # pass is exactly the stage the new instrumentation and the circuit
+    # breaker need visible.
+    collector = ForebetCollector(root=repo_root, timeout=timeout, workers=1,
+                                 circuit_breaker_columns=2,
+                                 circuit_breaker_attempts=1)
+    captures = collector.capture_selected(
+        target_date, pause_seconds=pause_seconds,
+        on_capture_timing=_capture_timing_logger("forward", target_date))
     receipt_path = repo_root / "data" / "reports" / f"capture_{target_date}.json"
     if receipt_path.is_file():
         return json.loads(receipt_path.read_text())

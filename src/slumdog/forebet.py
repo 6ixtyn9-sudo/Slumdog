@@ -488,7 +488,9 @@ def _classify_capture_outcome(exc: Exception) -> str:
 
 class ForebetCollector:
     def __init__(self, root: Path | str = ".", timeout: int = 35,
-                 workers: int = 4, before_request=None):
+                 workers: int = 4, before_request=None,
+                 circuit_breaker_columns: int = 0,
+                 circuit_breaker_attempts: int = 1):
         self.root = Path(root)
         self.timeout = timeout
         self.workers = max(1, min(int(workers), 6))
@@ -499,6 +501,18 @@ class ForebetCollector:
         # a 110-second budget by a factor of four in run 36409134160.
         # Production passes nothing and is unchanged.
         self.before_request = before_request
+        # Off by default (Priority 1, scoped 2026-09-28): the column-route
+        # circuit breaker (see relay_columns.fetch_board_columns) is only
+        # safe on a stage that expects most of its boards to genuinely not
+        # exist yet (the D+2..D+6 forward pass). Refusals on this source
+        # are intermittent per-column, not per-board, so a stage where the
+        # board usually already exists (event-day, the daily refresh, any
+        # settlement capture) must not enable it — a false trip there
+        # costs a real pick or a real grade, not a wasted probe. Only
+        # forward_shadow_batch.py's run_capture() passes
+        # circuit_breaker_columns=2 explicitly.
+        self.circuit_breaker_columns = circuit_breaker_columns
+        self.circuit_breaker_attempts = circuit_breaker_attempts
 
     def _fetch(self, sport: str, target_date: str) -> RawCapture:
         if self.before_request is not None:
@@ -564,7 +578,9 @@ class ForebetCollector:
                     target, sport, target_date,
                     captured_at=datetime.now(timezone.utc).isoformat(),
                     timeout=self.timeout,
-                    before_request=self.before_request)
+                    before_request=self.before_request,
+                    circuit_breaker_columns=self.circuit_breaker_columns,
+                    circuit_breaker_attempts=self.circuit_breaker_attempts)
                 if result.status != CAPTURED:
                     raise ValueError(
                         f"{sport} {target_date}: html capture rejected and "
@@ -605,7 +621,18 @@ class ForebetCollector:
     def capture_selected(self, target_date: str, sports: list[str] | None = None,
                          *, force: bool = False,
                          receipt_name: str | None = None,
-                         pause_seconds: float = 0.0) -> list[RawCapture]:
+                         pause_seconds: float = 0.0,
+                         on_capture_timing=None) -> list[RawCapture]:
+        """``on_capture_timing``, if given, is called once per sport-date on
+        the paced serial path (``pause_seconds>0``) the moment that sport's
+        fetch finishes, with the same dict recorded into the receipt's
+        ``capture_timing`` list (``sport``/``elapsed_seconds``/``requests``/
+        ``outcome``). This is a streaming callback, not just a post-hoc
+        receipt field, so a caller can log it to stderr immediately — a run
+        killed mid-batch still leaves that evidence in the job log even
+        though the receipt file for the date in flight never gets written.
+        A raising callback is swallowed; it must never break a capture.
+        """
         date.fromisoformat(target_date)
         selected = list(SPORTS) if not sports else sports
         unknown = [sport for sport in selected if sport not in SPORTS]
@@ -668,12 +695,25 @@ class ForebetCollector:
                     outcome = _classify_capture_outcome(exc)
                 finally:
                     self.before_request = outer_before_request
-                    capture_timing.append({
+                    entry = {
                         "sport": sport,
                         "elapsed_seconds": round(time.monotonic() - started, 3),
                         "requests": request_count["n"],
                         "outcome": outcome,
-                    })
+                    }
+                    capture_timing.append(entry)
+                    # Fired the moment this sport-date finishes, not after
+                    # the whole capture_selected() call returns: a killed
+                    # run (run 36426785929 was cancelled mid-batch with
+                    # zero stderr output after its last completed stage)
+                    # still leaves this evidence in the job log even if the
+                    # receipt file for the in-flight date never gets
+                    # written. Never allowed to break the capture itself.
+                    if on_capture_timing is not None:
+                        try:
+                            on_capture_timing(entry)
+                        except Exception:
+                            pass
         else:
             with ThreadPoolExecutor(max_workers=self.workers) as executor:
                 futures = {sport: executor.submit(self._fetch, sport, target_date) for sport in to_fetch}

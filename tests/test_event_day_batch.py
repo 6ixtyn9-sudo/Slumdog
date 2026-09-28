@@ -144,7 +144,8 @@ class TestShortNoticeStage:
                 pass
 
             def capture_selected(self, target_date, sports=None, force=False,
-                                 receipt_name=None, pause_seconds=0):
+                                 receipt_name=None, pause_seconds=0,
+                                 on_capture_timing=None):
                 (reports / receipt_name).write_text(json.dumps({
                     "target_date": target_date,
                     "captured": [{"sport": s} for s in captured_sports],
@@ -161,6 +162,38 @@ class TestShortNoticeStage:
             AssertionError("must not evaluate an empty capture")))
         entry = fsb.run_event_day_for_date(TARGET_DATE, tmp_path)
         assert entry["status"] == "NO_CAPTURES"
+
+    def test_capture_timing_is_logged_under_the_event_day_phase(
+            self, tmp_path, monkeypatch, capsys):
+        # Priority 1 (2026-09-28), item 3: the stage must wire
+        # on_capture_timing through with the "event_day" phase label, same
+        # as run_capture ("forward") and run_refresh_for_date ("refresh").
+        reports = tmp_path / "data" / "reports"
+        reports.mkdir(parents=True, exist_ok=True)
+
+        class _Collector:
+            def __init__(self, **kwargs):
+                pass
+
+            def capture_selected(self, target_date, sports=None, force=False,
+                                 receipt_name=None, pause_seconds=0,
+                                 on_capture_timing=None):
+                assert on_capture_timing is not None
+                on_capture_timing({"sport": "hockey", "elapsed_seconds": 0.2,
+                                   "requests": 2, "outcome": "CAPTURED:direct"})
+                (reports / receipt_name).write_text(json.dumps({
+                    "target_date": target_date,
+                    "captured": [{"sport": "hockey"}], "failures": []}))
+                return []
+
+        monkeypatch.setattr("slumdog.forebet.ForebetCollector", _Collector)
+        monkeypatch.setattr(fsb, "run_evaluator", lambda *a, **k: {
+            "run_id": "r1", "run_status": "SHADOW_NO_SELECTION",
+            "artifact_dir": str(tmp_path)})
+        fsb.run_event_day_for_date(TARGET_DATE, tmp_path)
+        err = capsys.readouterr().err
+        assert f"event_day:{TARGET_DATE}" in err
+        assert "hockey" in err
 
     def _run_stage_with_fake_evaluator(self, tmp_path, monkeypatch, *,
                                        selections, rejections=None,
@@ -584,7 +617,8 @@ class TestTheStageMeasuresBeforeItWidens:
                 pass
 
             def capture_selected(self, target_date, sports=None, force=False,
-                                 receipt_name=None, pause_seconds=0):
+                                 receipt_name=None, pause_seconds=0,
+                                 on_capture_timing=None):
                 calls.setdefault("sports", []).append(sports)
                 (reports / receipt_name).write_text(json.dumps({
                     "target_date": target_date, "captured": [],
@@ -653,7 +687,8 @@ class TestTheStageMeasuresBeforeItWidens:
                 pass
 
             def capture_selected(self, target_date, sports=None, force=False,
-                                 receipt_name=None, pause_seconds=0):
+                                 receipt_name=None, pause_seconds=0,
+                                 on_capture_timing=None):
                 (reports / receipt_name).write_text(json.dumps({
                     "target_date": target_date,
                     "captured": [{"sport": "hockey"}], "failures": []}))

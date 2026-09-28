@@ -207,13 +207,45 @@ class TestCircuitBreaker:
     requests, not 8 columns x 3 attempts = 24. Forward Shadow #33 (run
     36426785929) ran the forward pass's undifferentiated capture step for
     >=1h56m without finishing, mostly discovering "no board for this date"
-    the expensive way for sport-dates D+4..D+6 out."""
+    the expensive way for sport-dates D+4..D+6 out.
 
-    def test_the_board_is_not_attempted_further_once_the_first_two_columns_refuse(self):
+    Scoped a second time the same day: OFF by default (``circuit_breaker_
+    columns=0``), because refusals on this source are intermittent and move
+    BETWEEN columns run to run — the same volleyball settlement board
+    returned 22 rows in one run, 422'd on two columns in the next, and rows
+    again after that. A caller must opt in explicitly
+    (``circuit_breaker_columns=2``), which only the D+2..D+6 forward pass
+    does (see ``forward_shadow_batch.run_capture``)."""
+
+    def test_it_is_off_by_default_every_column_gets_the_full_budget(self):
+        # The default (no circuit_breaker_columns passed) must behave
+        # exactly like before the breaker existed: every column gets the
+        # full attempts budget from its first request. This is the safe
+        # default every call site except the forward pass relies on.
+        seen: list[str] = []
+        with pytest.raises(ColumnFetchError, match="missing required"):
+            fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                                sleep=lambda _s: None, opener=_opener({}, seen))
+        assert seen.count(scoped(".tnms")) == 3
+        assert len(seen) == 3 * len(COLUMN_SELECTORS)
+
+    def test_circuit_breaker_columns_zero_is_the_same_off_switch_explicit(self):
+        # Passing 0 explicitly is the same escape hatch as the default.
+        seen: list[str] = []
+        with pytest.raises(ColumnFetchError, match="missing required"):
+            fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                                sleep=lambda _s: None,
+                                opener=_opener({}, seen),
+                                circuit_breaker_columns=0)
+        assert seen.count(scoped(".tnms")) == 3
+        assert len(seen) == 3 * len(COLUMN_SELECTORS)
+
+    def test_opted_in_the_board_is_not_attempted_further_once_the_first_two_columns_refuse_with_422(self):
         seen: list[str] = []
         with pytest.raises(ColumnFetchError, match="circuit breaker"):
             fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                                sleep=lambda _s: None, opener=_opener({}, seen))
+                                sleep=lambda _s: None, opener=_opener({}, seen),
+                                circuit_breaker_columns=2)
         # link, home: one request each (circuit_breaker_attempts=1 default),
         # nothing for away/kickoff/probabilities/pick/predicted_score/average.
         assert seen == [scoped(".tnms"), scoped(".homeTeam")]
@@ -227,7 +259,8 @@ class TestCircuitBreaker:
         seen: list[str] = []
         with pytest.raises(ColumnFetchError, match="missing required"):
             fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                                sleep=lambda _s: None, opener=_opener(bodies, seen))
+                                sleep=lambda _s: None, opener=_opener(bodies, seen),
+                                circuit_breaker_columns=2)
         # home was retried at the full attempts (3), not left on the
         # single-attempt probe; every other column was tried too.
         assert seen.count(scoped(".homeTeam")) == 3
@@ -253,20 +286,71 @@ class TestCircuitBreaker:
             return base_opener(request, timeout=timeout)
 
         board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                                    sleep=lambda _s: None, opener=flaky)
+                                    sleep=lambda _s: None, opener=flaky,
+                                    circuit_breaker_columns=2)
         assert board.columns["home"] == ["Team0", "Team1"]
 
-    def test_circuit_breaker_columns_zero_restores_the_old_behaviour(self):
-        # The escape hatch: every column gets the full attempts budget from
-        # its first request, exactly like before 2026-09-28.
-        seen: list[str] = []
-        with pytest.raises(ColumnFetchError, match="missing required"):
+    def test_a_403_refusal_on_both_probed_columns_does_not_trip(self):
+        # 403 means "you are being refused right now", not "this board does
+        # not exist" — the exact ambiguity a genuinely absent board and a
+        # throttled one share. The breaker must not spend its one shot at
+        # distinguishing them on a code that means neither.
+        def refuses_403(request, timeout=None):
+            raise urllib.error.HTTPError("u", 403, "no", {}, None)
+
+        with pytest.raises(ColumnFetchError, match="missing required") as exc_info:
             fetch_board_columns(BOARD, "basketball", "2026-09-27",
-                                sleep=lambda _s: None,
-                                opener=_opener({}, seen),
-                                circuit_breaker_columns=0)
-        assert seen.count(scoped(".tnms")) == 3
-        assert len(seen) == 3 * len(COLUMN_SELECTORS)
+                                sleep=lambda _s: None, opener=refuses_403,
+                                circuit_breaker_columns=2)
+        assert "circuit breaker" not in str(exc_info.value)
+
+    def test_a_timeout_on_a_probed_column_does_not_trip(self):
+        # TimeoutError means the request did not complete, not that the
+        # selector matched nothing. Mixed with a 422 on the other probed
+        # column, it is still not unambiguous "not published" evidence.
+        def one_timeout_one_422(request, timeout=None):
+            selector = (request.headers.get("X-target-selector")
+                        or request.headers.get("X-Target-Selector"))
+            if selector == scoped(".tnms"):
+                raise TimeoutError("timed out")
+            raise urllib.error.HTTPError("u", 422, "no", {}, None)
+
+        with pytest.raises(ColumnFetchError, match="missing required") as exc_info:
+            fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                                sleep=lambda _s: None, opener=one_timeout_one_422,
+                                circuit_breaker_columns=2)
+        assert "circuit breaker" not in str(exc_info.value)
+
+    def test_capture_board_reports_a_trip_as_coverage_gap_naming_the_breaker(self):
+        # (c) from the owner's correction: the tripped outcome must be
+        # COVERAGE_GAP, never NO_ROWS_FOR_DATE — silence from a refusal is
+        # not evidence the board has no fixtures — and the reason must name
+        # the breaker and the codes that tripped it, not read like an
+        # ordinary missing-column failure.
+        result = capture_board(
+            BOARD, "basketball", "2026-09-27",
+            captured_at="2026-09-27T00:00:00Z",
+            sleep=lambda _s: None, opener=_opener({}),
+            circuit_breaker_columns=2)
+        assert result.status == COVERAGE_GAP
+        assert result.status != NO_ROWS_FOR_DATE
+        assert "circuit breaker" in result.reason
+        assert "422" in result.reason
+
+    def test_capture_board_with_a_transient_refusal_is_still_coverage_gap_but_not_via_the_breaker(self):
+        # Falling through to the ordinary "missing required column(s)"
+        # failure (not the breaker) is also a COVERAGE_GAP — just not one
+        # that claims to have detected an absent board.
+        def refuses_403(request, timeout=None):
+            raise urllib.error.HTTPError("u", 403, "no", {}, None)
+
+        result = capture_board(
+            BOARD, "basketball", "2026-09-27",
+            captured_at="2026-09-27T00:00:00Z",
+            sleep=lambda _s: None, opener=refuses_403,
+            circuit_breaker_columns=2)
+        assert result.status == COVERAGE_GAP
+        assert "circuit breaker" not in result.reason
 
 
 class TestMatchIdentity:
