@@ -2190,3 +2190,82 @@ class TestAnnotationsAreTheOnlyChannel:
         # Coverage is the question in hand; it must never be the one dropped.
         assert "probe:r1_coverage" in emitted
         assert "probe:api_sweep" not in emitted
+
+
+class TestHorizonCoverage:
+    """Rugby, mma and cricket are reachable but had nothing on 2026-09-28 —
+    their boards held 10-01 through 10-04. That is a publication horizon,
+    not a capture failure, and the distinction only means something if the
+    later date can actually be captured."""
+
+    def _run(self, monkeypatch, dates, capture):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "coverage_sweep",
+                            lambda date, **k: {"rugby": {"dates": dates}})
+        seen: list[str] = []
+
+        def fake_capture(url, sport, target, **kwargs):
+            seen.append(target)
+            return capture
+
+        monkeypatch.setattr(probe, "capture_board", fake_capture)
+        out = probe.horizon_coverage("2026-09-28", timeout=1, pause=0,
+                                     sports=("rugby",))
+        return out, seen
+
+    def _captured(self, events=3):
+        from slumdog.contracts import EventSnapshot
+        from slumdog.relay_columns import CAPTURED, BoardCapture
+
+        made = [EventSnapshot(
+            event_id=f"{i}", sport="rugby", event_date="2026-10-01",
+            captured_at="2026-09-28T00:00:00Z", source_url="u",
+            participant_1=f"T{i}", participant_2=f"R{i}",
+            probability_1=0.5 + i / 10, probability_2=0.5 - i / 10,
+            forebet_pick=1) for i in range(events)]
+        return BoardCapture(status=CAPTURED, sport="rugby",
+                            target_date="2026-10-01", source_url="u",
+                            events=made, row_count=events)
+
+    def test_the_earliest_future_date_is_captured(self, monkeypatch):
+        out, seen = self._run(monkeypatch,
+                              {"2026-10-02": 9, "2026-10-01": 1},
+                              self._captured())
+        assert seen == ["2026-10-01"]
+        assert out["rugby"]["horizon_date"] == "2026-10-01"
+        assert out["rugby"]["days_ahead"] == 3
+        assert out["rugby"]["rankable_events"] == 3
+
+    def test_past_dates_are_not_chased(self, monkeypatch):
+        # afl's board was entirely in the past; there is nothing to capture.
+        out, seen = self._run(monkeypatch,
+                              {"2026-09-11": 1, "2026-09-26": 2},
+                              self._captured())
+        assert seen == []
+        assert "no future dates" in out["rugby"]["verdict"]
+
+    def test_a_horizon_capture_reports_its_strongest_candidate(self,
+                                                               monkeypatch):
+        out, _ = self._run(monkeypatch, {"2026-10-01": 5}, self._captured(3))
+        assert out["rugby"]["top_by_probability"]["p1"] == 0.7
+
+    def test_a_failed_horizon_capture_is_still_a_gap(self, monkeypatch):
+        from slumdog.relay_columns import COVERAGE_GAP, BoardCapture
+
+        out, _ = self._run(monkeypatch, {"2026-10-01": 5}, BoardCapture(
+            status=COVERAGE_GAP, sport="rugby", target_date="2026-10-01",
+            source_url="u", reason="probabilities: HTTP 422"))
+        assert out["rugby"]["status"] == COVERAGE_GAP
+        assert out["rugby"]["rankable_events"] == 0
+
+    def test_it_stops_when_the_budget_is_gone(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        probe.set_deadline(0)
+        try:
+            out = probe.horizon_coverage("2026-09-28", timeout=1, pause=0,
+                                         sports=("rugby",))
+            assert "out of time" in out["rugby"]["verdict"]
+        finally:
+            probe.set_deadline(None)

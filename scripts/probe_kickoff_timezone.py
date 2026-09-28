@@ -878,6 +878,62 @@ def coverage_sweep(date: str, *, timeout: int, pause: float,
     return out
 
 
+def horizon_coverage(date: str, *, timeout: int, pause: float,
+                     sports: tuple[str, ...]) -> dict[str, Any]:
+    """Prove rankability for sports that publish beyond the target date.
+
+    Rugby, mma and cricket are reachable but had nothing on 2026-09-28:
+    their boards were full of 10-01 through 10-04. That is a publication
+    horizon, not a capture failure, and the distinction only means
+    something if the later date can actually be captured.
+
+    So: one cheap request to learn which dates the board holds, then a
+    full capture at the earliest of them that is not in the past. A sport
+    that proves rankable at its own horizon needs scheduling, not
+    rescue.
+    """
+    out: dict[str, Any] = {}
+    for sport in sports:
+        spec = SPORTS.get(sport)
+        if spec is None or time_left() < 120:
+            out[sport] = {"verdict": "skipped: out of time budget"}
+            continue
+        sweep = coverage_sweep(date, timeout=timeout, pause=pause,
+                               sports=(sport,))
+        found = sweep.get(sport, {})
+        dates = sorted(d for d in (found.get("dates") or {}) if d >= date)
+        if not dates:
+            out[sport] = {"verdict": "no future dates on the board",
+                          "sweep": found}
+            continue
+        target = dates[0]
+        url = f"https://www.forebet.com/en/{spec.path}/predictions/{target}"
+        pace(min(pause, 3))
+        result = capture_board(url, sport, target,
+                               captured_at=date + "T00:00:00Z",
+                               timeout=timeout, attempts=2, backoff=6.0,
+                               sleep=pace)
+        record: dict[str, Any] = {
+            "horizon_date": target,
+            "days_ahead": (dt.date.fromisoformat(target)
+                           - dt.date.fromisoformat(date)).days,
+            "status": result.status,
+            "rows": result.row_count,
+            "rankable_events": len(result.events),
+            "reason": result.reason[:160],
+        }
+        if result.events:
+            best = max(result.events, key=lambda e: max(
+                e.probability_1 or 0.0, e.probability_2 or 0.0))
+            record["top_by_probability"] = {
+                "event_id": best.event_id,
+                "match": f"{best.participant_1} vs {best.participant_2}",
+                "p1": best.probability_1, "p2": best.probability_2,
+            }
+        out[sport] = record
+    return out
+
+
 def r1_coverage(date: str, *, timeout: int, pause: float,
                 sports: tuple[str, ...] = COVERAGE_SPORTS) -> dict[str, Any]:
     """Can each sport produce a rankable field for this date?
@@ -1652,6 +1708,13 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
     # has already answered reachability for every sport, so it only reruns
     # when there is time to spare; row_blocks is retired for the same reason.
     report["r1_coverage"] = r1_coverage(date, timeout=timeout, pause=pause)
+
+    # The four above are proven; these publish further out and need their
+    # own horizon captured before the mandate can claim them.
+    report["horizon_coverage"] = horizon_coverage(
+        date, timeout=timeout, pause=pause,
+        sports=("rugby", "mma", "cricket"))
+
     if time_left() > 300:
         report["coverage_sweep"] = coverage_sweep(date, timeout=timeout,
                                                   pause=pause)
@@ -1967,6 +2030,20 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
                      f"{len(sweep)} — {', '.join(reachable) or 'none'}")
         lines.append(f"WITH MATCHES ON THE TARGET DATE: "
                      f"{', '.join(ready) or 'none'}")
+
+    horizon = report.get("horizon_coverage") or {}
+    if horizon:
+        lines.append("Sports captured at their own publication horizon:")
+        for sport, rec in horizon.items():
+            lines.append(
+                f"  {sport}: {rec.get('status', rec.get('verdict'))} "
+                f"date={rec.get('horizon_date')} "
+                f"(+{rec.get('days_ahead')}d) rows={rec.get('rows')} "
+                f"events={rec.get('rankable_events')} {rec.get('reason', '')}")
+            top = rec.get("top_by_probability")
+            if top:
+                lines.append(f"    strongest: {top['match']} "
+                             f"p1={top['p1']} p2={top['p2']}")
 
     coverage = report.get("r1_coverage") or {}
     if coverage:
@@ -2347,7 +2424,8 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     # One annotation per section: a single blob silently truncates at ~3000
     # characters and the interesting result is usually last.
     sections = (
-        "capture_contract", "r1_coverage", "coverage_sweep", "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",
+        "r1_coverage", "horizon_coverage", "capture_contract",
+        "coverage_sweep", "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",
         "recent_markup", "render_waits", "markdown_modes", "api_sweep",
         "getjson_crack", "js_call_sites", "current_bundle", "sitemaps",
         "endpoint_hunt", "fetch_matrix", "browser_probe", "save_page_now",
