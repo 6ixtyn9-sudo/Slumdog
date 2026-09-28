@@ -2468,3 +2468,81 @@ class TestAStageReportsBeforeTheWallIsHit:
 
         probe.emit_section("settlement_probe", {})
         assert capsys.readouterr().out == ""
+
+
+class TestTheProbeMeasuresTheRenderClock:
+    """Two requests decide whether any sport but football can produce a
+    pick, so this stage must be cheap, honest about failure, and never
+    report an offset it did not measure."""
+
+    def _run(self, monkeypatch, instants, cells):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "football_utc_kickoffs",
+                            lambda date, **k: instants)
+        monkeypatch.setattr(probe, "fetch_column", lambda *a, **k: cells)
+        return probe.render_clock_probe("2026-09-29", timeout=1, pause=0)
+
+    def _instants(self, count=25, hour_cycle=(14, 17, 19)):
+        import datetime as dt
+
+        return {str(2468000 + i): dt.datetime(
+            2026, 9, 29, hour_cycle[i % len(hour_cycle)], 0)
+            for i in range(count)}
+
+    def _cells(self, instants, offset_hours=-5):
+        import datetime as dt
+
+        out = []
+        for match_id, moment in instants.items():
+            shown = moment + dt.timedelta(hours=offset_hours)
+            out.append(f"[A B {shown.strftime('%d/%m/%Y %H:%M')}]"
+                       f"(https://f/m/a-b-{match_id})")
+        return out
+
+    def test_a_clean_board_reports_the_offset(self, monkeypatch):
+        instants = self._instants()
+        record = self._run(monkeypatch, instants, self._cells(instants))
+        assert record["proven"] is True
+        assert record["offset_minutes"] == -300
+        assert record["offset_hours"] == -5
+        assert record["joined"] == 25
+
+    def test_scatter_is_reported_as_a_refusal_with_the_evidence(
+            self, monkeypatch):
+        instants = self._instants()
+        cells = self._cells(instants)
+        cells[0] = cells[0].replace("09:00", "23:45")
+        record = self._run(monkeypatch, instants, cells)
+        assert record["proven"] is False
+        assert record["reason"]
+        assert record["observed_offsets"]
+
+    def test_no_json_means_no_rendered_request(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "football_utc_kickoffs",
+                            lambda date, **k: {})
+        called = {"n": 0}
+
+        def _boom(*a, **k):
+            called["n"] += 1
+            raise AssertionError("column fetched with nothing to join")
+
+        monkeypatch.setattr(probe, "fetch_column", _boom)
+        record = probe.render_clock_probe("2026-09-29", timeout=1, pause=0)
+        assert called["n"] == 0
+        assert "nothing to join" in record["verdict"]
+
+    def test_a_refused_column_is_reported_not_raised(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "football_utc_kickoffs",
+                            lambda date, **k: self._instants())
+
+        def _refuse(*a, **k):
+            raise RuntimeError("HTTP 422")
+
+        monkeypatch.setattr(probe, "fetch_column", _refuse)
+        record = probe.render_clock_probe("2026-09-29", timeout=1, pause=0)
+        assert "unavailable" in record["verdict"]

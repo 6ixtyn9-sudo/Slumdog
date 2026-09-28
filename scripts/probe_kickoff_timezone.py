@@ -72,6 +72,13 @@ from slumdog.relay_columns import (  # noqa: E402
     settled_rows,
 )
 from slumdog.relay_columns import (  # noqa: E402
+    event_id_from_url,
+    fetch_column,
+    match_url,
+    scoped,
+)
+from slumdog.render_clock import measure_render_clock  # noqa: E402
+from slumdog.relay_columns import (  # noqa: E402
     DAY_FIRST,
     MONTH_FIRST,
     ROW_SCOPE,
@@ -963,6 +970,74 @@ def horizon_coverage(date: str, *, timeout: int, pause: float,
     return out
 
 
+def render_clock_probe(date: str, *, timeout: int, pause: float) -> dict[str, Any]:
+    """Measure the renderer's offset live, the way the nightly stage will.
+
+    This is the measurement that decides whether thirteen sports can ever
+    produce a pick: football is the one sport visible through both the
+    tz=0 JSON and the renderer, so the gap between them is the offset the
+    renderer applies to every other sport's board. The 2026-09-26 red-team
+    finding put it at five hours; whether that is stable, and whether it is
+    the same for a whole board rather than one match, has never been
+    measured.
+
+    Two requests: the football JSON the probe already fetches, and one
+    rendered column.
+    """
+    record: dict[str, Any] = {"target_date": date}
+    try:
+        instants = {
+            f"football:{match_id}": moment.strftime("%Y-%m-%d %H:%M:%S")
+            for match_id, moment in football_utc_kickoffs(
+                date, timeout=timeout).items()
+        }
+    except BudgetExhausted as exc:
+        return {"verdict": f"stopped: {exc}"}
+    record["json_matches"] = len(instants)
+    if not instants:
+        record["verdict"] = "no tz=0 instants; nothing to join against"
+        return record
+    pace(min(pause, 3))
+    url = f"https://www.forebet.com/en/{SPORTS['football'].path}/predictions/{date}"
+    try:
+        cells = fetch_column(url, scoped(".tnms"), timeout=timeout,
+                             column="link", attempts=2, backoff=5.0,
+                             sleep=pace, before_request=check_budget)
+    except BudgetExhausted as exc:
+        return {"verdict": f"stopped: {exc}"}
+    except Exception as exc:  # noqa: BLE001 - reported, not raised
+        record["verdict"] = f"rendered column unavailable: {type(exc).__name__}"
+        return record
+    rendered: dict[str, str] = {}
+    for cell in cells:
+        link = match_url(cell)
+        if link:
+            rendered[f"football:{event_id_from_url(link)}"] = cell
+    record["rendered_rows"] = len(rendered)
+    record["joined"] = len(set(rendered) & set(instants))
+    result = measure_render_clock(
+        instants, rendered, target_date=date,
+        measured_at=dt.datetime.now(dt.timezone.utc).isoformat())
+    if result.proven:
+        record.update(
+            proven=True,
+            offset_minutes=result.clock.offset_minutes,
+            offset_hours=round(result.clock.offset_minutes / 60, 2),
+            samples=result.clock.samples,
+            distinct_hours=result.clock.distinct_hours)
+    else:
+        record.update(proven=False, reason=result.reason,
+                      detail=result.detail[:200],
+                      observed_offsets=dict(
+                          sorted(result.observed_offsets.items())[:8]))
+    record["sample"] = [
+        {"event_id": key, "rendered": rendered[key][:60],
+         "utc": instants[key]}
+        for key in sorted(set(rendered) & set(instants))[:3]
+    ]
+    return record
+
+
 def settlement_probe(date: str, *, timeout: int, pause: float,
                      sports: tuple[str, ...] = ("hockey",),
                      settled_date: str | None = None) -> dict[str, Any]:
@@ -1840,6 +1915,13 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
     # Coverage that cannot be graded is not coverage, and settlement is now
     # the only thing never proven against a real board — so it goes first,
     # ahead of sports that re-prove themselves every run.
+    # The offset decides whether any sport but football can ever produce a
+    # pick, and it costs two requests. Nothing else in this probe earns its
+    # budget as cheaply.
+    report["render_clock"] = render_clock_probe(date, timeout=timeout,
+                                                pause=pause)
+    emit_section("render_clock", report["render_clock"])
+
     report["settlement_probe"] = settlement_probe(
         date, timeout=timeout, pause=pause)
     emit_section("settlement_probe", report["settlement_probe"])
@@ -2189,6 +2271,24 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
             if top:
                 lines.append(f"    strongest: {top['match']} "
                              f"p1={top['p1']} p2={top['p2']}")
+
+    clock = report.get("render_clock") or {}
+    if clock:
+        if clock.get("proven"):
+            lines.append(
+                f"RENDER CLOCK MEASURED: rendered times are UTC"
+                f"{clock['offset_hours']:+g}h "
+                f"({clock['offset_minutes']} min) across "
+                f"{clock['samples']} matches and "
+                f"{clock['distinct_hours']} distinct hours. Every sport's "
+                f"rendered kickoff can be converted to an instant.")
+        else:
+            lines.append(
+                f"RENDER CLOCK NOT MEASURED: "
+                f"{clock.get('reason') or clock.get('verdict')} "
+                f"({clock.get('detail', '')}) — joined "
+                f"{clock.get('joined')} of {clock.get('json_matches')} "
+                f"json matches")
 
     settling = report.get("settlement_probe") or {}
     if settling:
@@ -2584,7 +2684,8 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     # One annotation per section: a single blob silently truncates at ~3000
     # characters and the interesting result is usually last.
     sections = (
-        "settlement_probe", "r1_coverage", "horizon_coverage",
+        "render_clock", "settlement_probe", "r1_coverage",
+        "horizon_coverage",
         "capture_contract",
         "coverage_sweep", "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",
         "recent_markup", "render_waits", "markdown_modes", "api_sweep",
