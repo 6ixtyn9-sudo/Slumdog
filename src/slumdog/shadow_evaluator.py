@@ -1988,6 +1988,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                         "Those events are removed from admission (their "
                         "original decisions stay frozen); the run emits only "
                         "genuinely new fixtures.")
+    p.add_argument("--render-clock", type=Path, default=None, metavar="PATH",
+                   help="EVENT_DAY mode: path to a render-clock calibration "
+                        "measured during THIS capture (see "
+                        "slumdog.render_clock). With one, a rendered kickoff "
+                        "is converted to UTC by measurement and its sport is "
+                        "no longer held back; without one, or with one that "
+                        "does not belong to this date, the run behaves "
+                        "exactly as if the flag were absent — football only.")
     return p
 
 
@@ -2016,6 +2024,7 @@ def main(argv: list[str] | None = None) -> int:
             history_paths=args.history or None,
             history_max_interim_bytes=args.history_max_interim_bytes,
             exclude_event_ids=exclude_event_ids,
+            render_clock_path=args.render_clock,
         )
     except ShadowEvaluatorError as e:
         print(f"SHADOW_RUN_BLOCKED: {e}", file=sys.stderr)

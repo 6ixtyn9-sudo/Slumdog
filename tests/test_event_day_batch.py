@@ -567,3 +567,150 @@ class TestShortNoticeCaptureIsPacedAndScoped:
         # entry, so "why is basketball missing" is answerable from evidence.
         assert "basketball" in entry["timezone_hold_sports"]
         assert "football" not in entry["timezone_hold_sports"]
+
+
+class TestTheStageMeasuresBeforeItWidens:
+    """Which sports the event-day stage may fetch is a question about
+    evidence, not about sports. The renderer's offset decides it, and the
+    stage must behave exactly as it did before whenever that offset is not
+    measurable."""
+
+    def _collector(self, tmp_path, monkeypatch, calls: dict):
+        reports = tmp_path / "data" / "reports"
+        reports.mkdir(parents=True, exist_ok=True)
+
+        class _Collector:
+            def __init__(self, **kwargs):
+                pass
+
+            def capture_selected(self, target_date, sports=None, force=False,
+                                 receipt_name=None, pause_seconds=0):
+                calls.setdefault("sports", []).append(sports)
+                (reports / receipt_name).write_text(json.dumps({
+                    "target_date": target_date, "captured": [],
+                    "failures": []}))
+                return []
+
+        monkeypatch.setattr("slumdog.forebet.ForebetCollector", _Collector)
+
+    def test_a_refused_calibration_leaves_the_stage_where_it_was(
+            self, tmp_path, monkeypatch):
+        from slumdog.shadow_evaluator import UTC_KICKOFF_PROVEN_SPORTS
+
+        calls: dict = {}
+        self._collector(tmp_path, monkeypatch, calls)
+        monkeypatch.setattr(
+            fsb, "calibrate_event_day_clock",
+            lambda *a, **k: (None, {"status": "REFUSED",
+                                    "reason": "OFFSETS_DISAGREE"}))
+        entry = fsb.run_event_day_for_date(TARGET_DATE, tmp_path,
+                                           pause_seconds=0)
+        assert calls["sports"][-1] == sorted(UTC_KICKOFF_PROVEN_SPORTS)
+        assert entry["render_clock"]["status"] == "REFUSED"
+        assert "basketball" in entry["timezone_hold_sports"]
+
+    def test_a_measured_clock_lets_every_sport_be_fetched(
+            self, tmp_path, monkeypatch):
+        from slumdog.sports import SPORTS
+
+        calls: dict = {}
+        self._collector(tmp_path, monkeypatch, calls)
+        clock_path = tmp_path / "render_clock.json"
+        clock_path.write_text("{}")
+        monkeypatch.setattr(
+            fsb, "calibrate_event_day_clock",
+            lambda *a, **k: (clock_path, {"status": "MEASURED",
+                                          "offset_minutes": -300,
+                                          "samples": 40}))
+        entry = fsb.run_event_day_for_date(TARGET_DATE, tmp_path,
+                                           pause_seconds=0)
+        assert calls["sports"][-1] == sorted(SPORTS)
+        assert entry["timezone_hold_sports"] == []
+        assert entry["render_clock"]["offset_minutes"] == -300
+
+    def test_the_clock_reaches_the_evaluator(self, tmp_path, monkeypatch):
+        calls: dict = {}
+        self._collector(tmp_path, monkeypatch, calls)
+        clock_path = tmp_path / "render_clock.json"
+        clock_path.write_text("{}")
+        monkeypatch.setattr(
+            fsb, "calibrate_event_day_clock",
+            lambda *a, **k: (clock_path, {"status": "MEASURED"}))
+        seen: dict = {}
+
+        def _fake_eval(target_date, repo_root, **kwargs):
+            seen.update(kwargs)
+            return {"run_id": "r1", "run_status": "SHADOW_NO_SELECTION",
+                    "artifact_dir": str(tmp_path)}
+
+        monkeypatch.setattr(fsb, "run_evaluator", _fake_eval)
+        # A capture with no rows short-circuits before evaluation, so give
+        # the stage something to evaluate.
+        reports = tmp_path / "data" / "reports"
+
+        class _Collector:
+            def __init__(self, **kwargs):
+                pass
+
+            def capture_selected(self, target_date, sports=None, force=False,
+                                 receipt_name=None, pause_seconds=0):
+                (reports / receipt_name).write_text(json.dumps({
+                    "target_date": target_date,
+                    "captured": [{"sport": "hockey"}], "failures": []}))
+                return []
+
+        monkeypatch.setattr("slumdog.forebet.ForebetCollector", _Collector)
+        fsb.run_event_day_for_date(TARGET_DATE, tmp_path, pause_seconds=0)
+        assert seen.get("render_clock_path") == clock_path
+
+
+class TestTheCalibrationItselfIsFrugalAndFailClosed:
+    def test_it_never_fetches_a_board_it_cannot_use(self, tmp_path,
+                                                    monkeypatch):
+        """No trusted instants means no calibration is possible, so the
+        rendered board is not requested of a source that throttles."""
+        reports = tmp_path / "data" / "reports"
+        reports.mkdir(parents=True, exist_ok=True)
+
+        class _Collector:
+            def __init__(self, **kwargs):
+                pass
+
+            def capture_selected(self, target_date, sports=None, **kwargs):
+                (reports / kwargs["receipt_name"]).write_text(json.dumps({
+                    "target_date": target_date, "captured": [],
+                    "failures": []}))
+                return []
+
+        fetched = {"n": 0}
+
+        def _boom(*a, **k):
+            fetched["n"] += 1
+            raise AssertionError("rendered board fetched with no instants")
+
+        monkeypatch.setattr("slumdog.forebet.ForebetCollector", _Collector)
+        monkeypatch.setattr("slumdog.relay_columns.fetch_column", _boom)
+        path, summary = fsb.calibrate_event_day_clock(
+            TARGET_DATE, tmp_path, pause_seconds=0)
+        assert path is None
+        assert summary["status"] == "REFUSED"
+        assert fetched["n"] == 0
+
+    def test_a_refusal_writes_no_calibration_file(self, tmp_path,
+                                                  monkeypatch):
+        reports = tmp_path / "data" / "reports"
+        reports.mkdir(parents=True, exist_ok=True)
+
+        class _Collector:
+            def __init__(self, **kwargs):
+                pass
+
+            def capture_selected(self, target_date, sports=None, **kwargs):
+                (reports / kwargs["receipt_name"]).write_text(json.dumps({
+                    "target_date": target_date, "captured": [],
+                    "failures": []}))
+                return []
+
+        monkeypatch.setattr("slumdog.forebet.ForebetCollector", _Collector)
+        fsb.calibrate_event_day_clock(TARGET_DATE, tmp_path, pause_seconds=0)
+        assert list(reports.glob("render_clock_*.json")) == []

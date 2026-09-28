@@ -862,6 +862,90 @@ def summarise_event_day_run(run_dir: Path) -> dict:
     return out
 
 
+def calibrate_event_day_clock(
+    target_date: str,
+    repo_root: Path,
+    *,
+    timeout: int = 45,
+    pause_seconds: int = 62,
+    stamp: str = "",
+) -> tuple[Path | None, dict]:
+    """Measure the renderer's clock for this capture, or explain why not.
+
+    Football is the one sport this run sees through both channels: the
+    tz=0 JSON, whose DATE_BAH is an instant, and the rendered board that
+    every other sport also comes from. The gap between them is the
+    renderer's offset for this run's egress. Returns the path to the
+    written calibration (or ``None``) and a summary for the batch entry.
+
+    Nothing here can make a run looser by accident: any failure returns
+    ``None``, which leaves the evaluator exactly where it is without a
+    calibration — football only.
+    """
+    from slumdog.capture_loader import load_capture_records
+    from slumdog.forebet import ForebetCollector, source_url
+    from slumdog.relay_columns import (
+        event_id_from_url,
+        fetch_column,
+        match_url,
+        scoped,
+    )
+    from slumdog.render_clock import calibrate_capture, instants_from_records
+    from slumdog.sports import SPORTS
+
+    stamp = stamp or dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    reports_dir = repo_root / "data" / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    receipt_name = f"capture_render_clock_{target_date}_{stamp}.json"
+    summary: dict = {"status": "PENDING", "reason": "", "detail": "",
+                     "offset_minutes": None, "samples": 0}
+
+    def fetch_instants() -> dict[str, str]:
+        collector = ForebetCollector(root=repo_root, timeout=timeout,
+                                     workers=1)
+        collector.capture_selected(target_date, ["football"],
+                                   receipt_name=receipt_name,
+                                   pause_seconds=0)
+        loaded = load_capture_records(
+            target_date=target_date,
+            capture_receipt_path=reports_dir / receipt_name,
+            repo_root=repo_root)
+        return instants_from_records(loaded.records)
+
+    def fetch_rendered() -> dict[str, str]:
+        # One request, not a whole board: the calibration needs only the
+        # cell that carries the match link and its rendered time. Every
+        # other column would be a request spent on something the
+        # measurement cannot use.
+        url = source_url(SPORTS["football"], target_date)
+        cells = fetch_column(url, scoped(".tnms"), timeout=timeout,
+                             column="link", attempts=2, backoff=5.0)
+        rendered: dict[str, str] = {}
+        for cell in cells:
+            link = match_url(cell)
+            if link:
+                rendered[f"football:{event_id_from_url(link)}"] = cell
+        return rendered
+
+    calibration = calibrate_capture(
+        target_date=target_date,
+        fetch_instants=fetch_instants,
+        fetch_rendered=fetch_rendered,
+        measured_at=dt.datetime.now(dt.timezone.utc).isoformat(),
+        source_run=stamp)
+    if not calibration.proven:
+        summary.update(status="REFUSED", reason=calibration.reason,
+                       detail=calibration.detail[:300])
+        return None, summary
+
+    clock = calibration.clock
+    path = reports_dir / f"render_clock_{target_date}_{stamp}.json"
+    path.write_text(json.dumps(clock.as_dict(), indent=2, sort_keys=True))
+    summary.update(status="MEASURED", offset_minutes=clock.offset_minutes,
+                   samples=clock.samples, detail=str(path.name))
+    return path, summary
+
+
 def run_event_day_for_date(
     target_date: str,
     repo_root: Path,
@@ -888,6 +972,7 @@ def run_event_day_for_date(
         "captured_sports": 0, "capture_failures": 0,
         "sports_with_r1": [], "r1_count": 0, "selection_count": 0,
         "timing_rejections": {}, "error": None,
+        "render_clock": {"status": "NOT_ATTEMPTED"},
     }
     base_date = base_date or dt.datetime.now(dt.timezone.utc).date()
     reports_dir = repo_root / "data" / "reports"
@@ -909,15 +994,27 @@ def run_event_day_for_date(
     entry["capture_receipt"] = receipt_name
     try:
         collector = ForebetCollector(root=repo_root, timeout=timeout, workers=1)
-        # Only fetch boards this track is allowed to decide from. Every other
-        # sport's HTML listing renders kickoff in the relay's local timezone,
-        # so the evaluator refuses it (KICKOFF_TIMEZONE_NOT_PROVEN_UTC) and
-        # fetching it would be a guaranteed-rejected request. Paced the same
-        # way as the settlement capture.
+        # Which boards this track may decide from is a question about
+        # evidence, not about sports. A rendered kickoff is unusable while
+        # its timezone is unknown — but football is visible through both the
+        # tz=0 JSON and the renderer in the same run, so the offset can be
+        # measured rather than assumed. With it, every sport's rendered
+        # kickoff becomes an instant; without it, nothing changes and only
+        # football is fetched, because every other request would be
+        # guaranteed-rejected.
+        clock_path, clock_summary = calibrate_event_day_clock(
+            target_date, repo_root, timeout=timeout,
+            pause_seconds=pause_seconds, stamp=stamp)
+        entry["render_clock"] = clock_summary
+        if clock_path is None:
+            selected_sports = sorted(UTC_KICKOFF_PROVEN_SPORTS)
+        else:
+            selected_sports = sorted(SPORTS)
+        entry["selected_sports"] = selected_sports
         entry["timezone_hold_sports"] = sorted(
-            s for s in SPORTS if s not in UTC_KICKOFF_PROVEN_SPORTS)
+            s for s in SPORTS if s not in selected_sports)
         collector.capture_selected(
-            target_date, sorted(UTC_KICKOFF_PROVEN_SPORTS),
+            target_date, selected_sports,
             force=True, receipt_name=receipt_name,
             pause_seconds=pause_seconds)
         try:
@@ -934,6 +1031,7 @@ def run_event_day_for_date(
             target_date, repo_root,
             receipt_name=receipt_name,
             config_rel=EVENT_DAY_CONFIG,
+            render_clock_path=clock_path,
         )
         entry["run_id"] = result.get("run_id")
         run_status = result.get("run_status")
@@ -986,6 +1084,7 @@ def run_evaluator(
     receipt_name: str | None = None,
     exclude_events_path: Path | None = None,
     config_rel: str = "config/shadow_evaluator.json",
+    render_clock_path: Path | None = None,
 ) -> dict:
     """Run the shadow evaluator for a target date.
 
@@ -1039,6 +1138,8 @@ def run_evaluator(
     ] + history_args
     if exclude_events_path is not None:
         cmd += ["--exclude-events", str(exclude_events_path)]
+    if render_clock_path is not None:
+        cmd += ["--render-clock", str(render_clock_path)]
 
     result = subprocess.run(
         cmd, capture_output=True, text=True, timeout=300, cwd=str(repo_root),

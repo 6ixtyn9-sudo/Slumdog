@@ -249,6 +249,44 @@ def measure_render_clock(
     ))
 
 
+def calibrate_capture(
+    *,
+    target_date: str,
+    fetch_instants,
+    fetch_rendered,
+    measured_at: str,
+    source_run: str = "",
+) -> Calibration:
+    """Run one calibration against a live capture.
+
+    The two fetchers are injected so this stays a measurement rather than a
+    network client: the caller decides where the tz=0 instants and the
+    rendered board come from, and a failure in either is a refusal, never a
+    partial calibration built from whatever did arrive.
+    """
+    try:
+        instants = fetch_instants()
+    except Exception as exc:  # noqa: BLE001 - reported, not raised
+        return Calibration(reason=NO_OVERLAPPING_MATCHES,
+                           detail=f"instants unavailable: "
+                                  f"{type(exc).__name__}: {exc}"[:200])
+    if not instants:
+        # No trusted instants means no calibration is possible, so the
+        # rendered board is not fetched at all. A request whose answer
+        # cannot be used is not worth making of a source that throttles.
+        return Calibration(reason=NO_OVERLAPPING_MATCHES,
+                           detail="no tz=0 instants in this capture")
+    try:
+        rendered = fetch_rendered()
+    except Exception as exc:  # noqa: BLE001
+        return Calibration(reason=NO_OVERLAPPING_MATCHES,
+                           detail=f"rendered board unavailable: "
+                                  f"{type(exc).__name__}: {exc}"[:200])
+    return measure_render_clock(
+        instants or {}, rendered or {}, target_date=target_date,
+        measured_at=measured_at, source_run=source_run)
+
+
 def instants_from_records(records, sport: str = "football") -> dict[str, str]:
     """Event id -> trusted UTC timestamp, from the channel that has one.
 

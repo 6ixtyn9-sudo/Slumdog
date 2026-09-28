@@ -256,6 +256,25 @@ records the whole basis in the payload — `timing_contract.render_clock` and
 input digest, because a run that converted kickoffs made a different timing
 claim from one that refused them.
 
+### How the event-day stage uses it
+
+`calibrate_event_day_clock` in `scripts/forward_shadow_batch.py` runs before
+the capture and decides what the capture may fetch:
+
+1. capture football (tz=0 JSON) and read its instants;
+2. fetch **one** column — `.tnms`, the cell carrying the link and the
+   rendered time — for the same board. One request, because the measurement
+   cannot use the rest, and the source throttles;
+3. measure; write `data/reports/render_clock_<date>_<stamp>.json` only if it
+   proves out;
+4. proven → capture every sport and pass `--render-clock` to the evaluator;
+   refused → capture football alone, exactly as before.
+
+If there are no instants the rendered column is never requested: a request
+whose answer cannot be used is not worth making. The stage records the
+outcome in `entry["render_clock"]`, so "why is basketball missing today" is
+answerable from the receipt.
+
 ## Documentation Governance
 
 - `docs/STATE.md` is canonical current truth, not append-only diary. Git history is history.
