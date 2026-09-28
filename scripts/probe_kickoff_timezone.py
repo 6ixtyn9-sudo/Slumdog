@@ -925,9 +925,13 @@ def horizon_coverage(date: str, *, timeout: int, pause: float,
         target = dates[0]
         url = f"https://www.forebet.com/en/{spec.path}/predictions/{target}"
         pace(min(pause, 3))
+        # Throttling is the only thing still failing these boards: rugby
+        # lost its kickoff column and cricket its home column to 422s while
+        # everything else came back clean. The refusals move between runs,
+        # so spend the retries here rather than lose the whole board.
         result = capture_board(url, sport, target,
                                captured_at=date + "T00:00:00Z",
-                               timeout=timeout, attempts=2, backoff=6.0,
+                               timeout=timeout, attempts=3, backoff=7.0,
                                sleep=pace)
         record: dict[str, Any] = {
             "horizon_date": target,
@@ -937,6 +941,7 @@ def horizon_coverage(date: str, *, timeout: int, pause: float,
             "rows": result.row_count,
             "rankable_events": len(result.events),
             "reason": result.reason[:160],
+            "partial": result.partial,
         }
         if result.events:
             best = max(result.events, key=lambda e: max(
