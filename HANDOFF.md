@@ -1,5 +1,96 @@
 # Slumdog Living Handoff
 
+**2026-09-28 (same session, continued a second time) — RUN a5e5720 IS THE FIRST LIVE PROOF THE WHOLE LOOP WORKS; R1_COVERAGE'S FLAT SLICE AND THE PROBE'S CIRCUIT-BREAKER MEASUREMENT BOTH FIXED.**
+
+**The baseline every later change is measured against**, read directly from
+run 36426785929's successor — the probe dispatched via `workflow_dispatch`
+against `arena/01a0e863-slumdog` at 2026-09-28T16:14:48Z (job
+`dd901317-5c15-5a40-80e7-b2a078e613a9`), read chunk-by-chunk from the
+owner-pasted signed log URL, not inferred:
+
+```
+collector_end_to_end: sport=volleyball route=relay_columns bytes=3833
+  capture_timing=[{elapsed_seconds: 93.286, requests: 10,
+                   outcome: "CAPTURED:relay_columns"}]
+  parsed_events=13  snapshots_unique_accepted=13
+  top_by_probability: volleyball:109598 Uzbekistan vs Kazakhstan p2=0.69
+  verdict: "capture -> disk -> parse produced events"
+settlement_probe.volleyball: rows=22 graded=18 statuses_seen={"FT": 22}
+  settled_date=2026-09-27  status=CAPTURED
+render_clock: proven=true offset_minutes=-120 joined=41 json_matches=140
+  distinct_hours=10  seconds=15.8
+r1_coverage: all 4 sports (basketball, hockey, handball, volleyball)
+  "stopped: stage slice of 45s spent" — 235.2s spent, 0/4 rankable, while
+  stage_seconds.budget_left (measured BEFORE r1_coverage ran) was 482
+```
+
+This is capture → disk → parse, a prior day's board graded, and the
+timezone offset measured, all live, all in one run — Priority 1's actual
+regression (the forward pass's undifferentiated ≥1h56m) was never in
+`collector_end_to_end`, `settlement_probe` or `render_clock`; each answers
+in under 100 seconds on its own. This run did NOT yet carry the breaker
+measurement (`circuit_breaker_comparison` is new this session, added after
+this run happened) or the fixed `r1_coverage` slice — both landed
+immediately below, from this evidence.
+
+**Two bugs this run exposed, both fixed this session (not yet re-verified
+live — that needs another dispatch):**
+
+1. **`r1_coverage`'s per-sport slice was a flat 45 seconds regardless of
+   how much of the job's actual budget was left.** With 482 seconds still
+   on the clock, every one of 4 sports still gave up after 45s each,
+   spending 235.2s total and answering nothing, while roughly half the
+   remaining budget sat unused. Fixed in `run_probe()`:
+   `per_sport = max(45.0, (time_left() - 60) / len(COVERAGE_SPORTS))`,
+   dividing what is actually left instead of a number picked before the
+   run knew.
+2. **The circuit-breaker measurement (Priority 1, item iii) did not run at
+   all**, because it only existed behind a `--circuit-breaker-probe` CLI
+   flag the workflow's hardcoded command line had no way to pass. Fixed by
+   making it two ordinary stages inside `run_probe()` instead of a
+   separate mode: the existing `collector_end_to_end` stage now opts the
+   breaker in (`circuit_breaker_columns=2`, the forward pass's exact
+   setting) for free — a capture that succeeds is also proof the breaker
+   did not falsely abort it — and a new `circuit_breaker_far` stage
+   captures one board `date + 5 days` (almost certainly not published
+   yet) with the same breaker setting. `circuit_breaker_comparison()`, a
+   pure function, reads both records back into `near_requests` /
+   `far_requests` / `near_false_abort` / `far_breaker_tripped` with no
+   extra request cost beyond the one new far capture. The
+   `--circuit-breaker-probe` CLI flag still exists as a focused,
+   standalone override (two fresh captures, useful for an on-demand
+   re-check) but the default sweep — the exact command line
+   `.github/workflows/probe_kickoff_timezone.yml` already runs — now
+   produces this evidence on its own, no workflow edit required.
+
+**A third, narrower bug also fixed:** `ForebetCollector.capture_selected`
+selected its timed/serial path via `pause_seconds > 0`, so the probe had
+been passing `pause_seconds=0.001` — a value small enough to never actually
+sleep on a single-sport call but truthy enough to pick the branch. Nothing
+marked that as load-bearing, and a future refactor could have silently
+undone it. `capture_selected` now takes an explicit `serial: bool | None`
+kwarg (`None` still infers from `pause_seconds > 0`, unaffected for every
+production caller); the probe now passes `serial=True, pause_seconds=0`
+outright. `on_capture_timing` combined with `serial=False` (explicit or
+inferred) is now refused with `ValueError` rather than silently producing
+an empty `capture_timing` — a contradiction is now an error, not a quiet
+no-op.
+
+**Still open for the next session, in the owner's stated order:** (iii) is
+now landed but its evidence is from BEFORE the fix (see above) — the next
+dispatch (`workflow_dispatch` against this branch, no paste needed) will
+carry `circuit_breaker_comparison` and the corrected `r1_coverage`; read
+that run's annotations to confirm `far_breaker_tripped=true` and
+`near_false_abort=false` before calling item (iii) closed. Then (iv) a
+per-run request budget through `ForebetCollector(before_request=...)`, then
+(v) the publication-horizon gate. Only after all five land, re-dispatch
+Forward Shadow. A workflow-trigger durability fix (`branches: [main,
+'arena/**']`, replacing a dead single-session-branch pin that silently
+stopped this workflow's push trigger from firing on this very branch) is
+staged at `docs/owner_paste/probe_kickoff_timezone.yml` — optional, not
+blocking, since `workflow_dispatch` already works from any branch (that is
+how run a5e5720 above happened at all).
+
 **2026-09-28 (same session, continued) — NETWORK-REACHABILITY CLAIM CORRECTED A THIRD TIME (this is the one to trust); OWNER PROVED THE WEB-FETCH TOOL READS A PASTED SIGNED BLOB URL.**
 
 The entry directly below this one ("FORWARD SHADOW #33 READ END TO END...")

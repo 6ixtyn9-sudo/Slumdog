@@ -1210,16 +1210,16 @@ def collector_end_to_end(date: str, *, timeout: int, pause: float,
                 root=root, timeout=timeout, workers=1, before_request=guard,
                 circuit_breaker_columns=circuit_breaker_columns,
                 circuit_breaker_attempts=circuit_breaker_attempts)
-            # pause_seconds must be > 0 (not literally 0) to route through
-            # capture_selected's TIMED serial path rather than its untimed
-            # parallel one — that is what populates the receipt's
-            # capture_timing (elapsed/requests/outcome), which this probe
-            # needs to report and which is otherwise silently empty. A
-            # single-sport list never actually pauses (pause_seconds only
-            # applies between the 2nd+ sport in one call), so this is free.
+            # serial=True (not a "pause_seconds small but truthy" trick)
+            # selects capture_selected's TIMED one-sport-at-a-time path,
+            # which is what populates the receipt's capture_timing
+            # (elapsed/requests/outcome) this probe needs to report. A
+            # single-sport list never actually sleeps on that path (the
+            # pause only applies between the 2nd+ sport in one call), so
+            # pause=0 here costs nothing.
             collector.capture_selected(date, [sport], force=True,
                                        receipt_name=receipt,
-                                       pause_seconds=0.001)
+                                       pause_seconds=0, serial=True)
         except Exception as exc:  # noqa: BLE001 - reported, not raised
             record["verdict"] = f"capture failed: {type(exc).__name__}: {exc}"[:240]
             # One coarse request to separate "the renderer refused us" from
@@ -1303,6 +1303,50 @@ def collector_end_to_end(date: str, *, timeout: int, pause: float,
     return record
 
 
+def circuit_breaker_comparison(near: dict[str, Any],
+                               far: dict[str, Any]) -> dict[str, Any]:
+    """Read the breaker's two live questions straight off two already-run
+    ``collector_end_to_end`` records — not inferred, not assumed:
+
+    1. On a board that almost certainly DOES exist (``near``), did turning
+       the breaker on cost a FALSE ABORT — the exact failure mode Section 1
+       of the owner's correction was about?
+    2. On a board that almost certainly does NOT exist yet (``far``,
+       mirroring the forward pass's D+2..D+6 reach), did the breaker abort
+       cheaply, or did the live refusal not look like the clean HTTP 422
+       the breaker is scoped to trip on?
+
+    Pure and I/O-free by design: this never makes a request itself, so it
+    can be called on the SAME near-board record ``run_probe`` already
+    produces for the plain ``collector_end_to_end`` stage instead of paying
+    for a second capture of a board this probe already fetched.
+    """
+    near_timing = (near.get("capture_timing") or [{}])[0]
+    far_timing = (far.get("capture_timing") or [{}])[0]
+    return {
+        "near_requests": near_timing.get("requests"),
+        "near_outcome": near_timing.get("outcome"),
+        "near_false_abort": bool(
+            near_timing.get("outcome", "").startswith("COVERAGE_GAP")
+            and "circuit breaker" in "; ".join(near.get("failures") or [])),
+        "far_requests": far_timing.get("requests"),
+        "far_outcome": far_timing.get("outcome"),
+        "far_breaker_tripped": "circuit breaker" in "; ".join(
+            far.get("failures") or []),
+        # A theoretical ceiling, not a live measurement: production never
+        # actually runs with the breaker off (circuit_breaker_columns=0),
+        # so there is no "off" request count to compare against directly.
+        # len(selectors) * default attempts is the worst case every column
+        # fails once and is retried to exhaustion; a real successful
+        # capture (see collector_end_to_end's own "requests", i.e.
+        # near_requests above) is typically far cheaper than this ceiling
+        # even with the breaker off, because most columns succeed first
+        # try. This is context for the far side's savings, not a baseline
+        # to expect near_requests to have hit.
+        "no_breaker_worst_case_requests": len(COLUMN_SELECTORS) * 3,
+    }
+
+
 def circuit_breaker_measurement(date: str, *, timeout: int, pause: float,
                                 sport: str = "volleyball",
                                 far_offset_days: int = 5,
@@ -1315,19 +1359,18 @@ def circuit_breaker_measurement(date: str, *, timeout: int, pause: float,
     Unit tests already prove the retry arithmetic deterministically against
     a fake opener (tests/test_relay_columns.py::TestCircuitBreaker); what
     they cannot prove is whether the real source's live refusal behaviour
-    matches the assumptions the breaker is built on. Two things are not
-    yet known live, and both matter before the forward pass is allowed to
-    rely on this:
+    matches the assumptions the breaker is built on. See
+    ``circuit_breaker_comparison`` for the two questions this answers.
 
-    1. On a board that almost certainly does NOT exist yet (``date`` +
-       ``far_offset_days``, mirroring the forward pass's D+2..D+6 reach),
-       does the breaker actually abort cheaply (~2-3 requests), or does the
-       live refusal not look like the clean HTTP 422 the breaker is scoped
-       to trip on?
-    2. On a board that almost certainly DOES exist (``date`` itself — this
-       probe already runs against "tomorrow" by default), does turning the
-       breaker on cost a FALSE ABORT — the exact failure mode Section 1 of
-       the owner's correction was about?
+    This is the STANDALONE, two-fresh-capture form (both near and far
+    captured here), kept as the ``--circuit-breaker-probe`` CLI override
+    for a focused, on-demand re-check. The default probe sweep in
+    ``run_probe`` does NOT call this function — it gets the near half for
+    free from the plain ``collector_end_to_end`` stage (also run with the
+    breaker on) and only pays for one fresh far capture, then calls
+    ``circuit_breaker_comparison`` directly on both. Calling this function
+    from the sweep too would capture the near board twice for the same
+    answer, which is exactly the request cost Priority 1 is trying to cut.
 
     Both go through ``collector_end_to_end``, i.e. the real production
     path (``ForebetCollector.capture_selected`` -> ``capture_board`` ->
@@ -1361,27 +1404,7 @@ def circuit_breaker_measurement(date: str, *, timeout: int, pause: float,
             slice_seconds=min(half_budget, time_left() - 20),
             circuit_breaker_columns=2, circuit_breaker_attempts=1)
 
-    near_timing = (out["near"].get("capture_timing") or [{}])[0]
-    far_timing = (out["far"].get("capture_timing") or [{}])[0]
-    # The two questions this function exists to answer, read straight off
-    # the timing this run actually produced — not inferred, not assumed.
-    out["comparison"] = {
-        "near_requests": near_timing.get("requests"),
-        "near_outcome": near_timing.get("outcome"),
-        "near_false_abort": bool(
-            near_timing.get("outcome", "").startswith("COVERAGE_GAP")
-            and "circuit breaker" in "; ".join(out["near"].get("failures") or [])),
-        "far_requests": far_timing.get("requests"),
-        "far_outcome": far_timing.get("outcome"),
-        "far_breaker_tripped": "circuit breaker" in "; ".join(
-            out["far"].get("failures") or []),
-        # Static reference, not re-measured live: the documented,
-        # test-verified cost of the SAME board with the breaker off
-        # (len(selectors) * attempts, 8 * 3 by default). Requests are
-        # actually counted for the "on" side above; this is only context
-        # for how much a trip would have saved, not a live comparison run.
-        "no_breaker_reference_requests": 24,
-    }
+    out["comparison"] = circuit_breaker_comparison(out["near"], out["far"])
     return out
 
 
@@ -2260,6 +2283,12 @@ def stage_succeeded(name: str, record: dict[str, Any]) -> bool:
         return bool(record.get("proven"))
     if name == "collector_end_to_end":
         return (record.get("parsed_events") or 0) > 0
+    if name == "circuit_breaker_far":
+        # Unlike the plain collector_end_to_end stage, a COVERAGE_GAP here
+        # (the board not existing yet) is the expected, useful answer, not
+        # a failure to retry — the question is only "did a request happen
+        # and get timed", which capture_timing being non-empty proves.
+        return bool(record.get("capture_timing"))
     if name == "settlement_probe":
         return any((rec.get("graded") or 0) > 0
                    for rec in record.values() if isinstance(rec, dict))
@@ -2267,7 +2296,8 @@ def stage_succeeded(name: str, record: dict[str, Any]) -> bool:
 
 
 def run_open_questions(date: str, *, timeout: int, pause: float,
-                       passes: int = 3) -> dict[str, Any]:
+                       passes: int = 3,
+                       far_offset_days: int = 5) -> dict[str, Any]:
     """Run the unanswered stages in passes, not in one long grind.
 
     Every run so far spent each stage's whole slice retrying a refusal
@@ -2293,16 +2323,35 @@ def run_open_questions(date: str, *, timeout: int, pause: float,
     # hockey's sixty-four, same route, same proof - a smaller page renders
     # faster and is refused less, and what is being tested here is the
     # PATH, not the sport.
+    far_date = (dt.date.fromisoformat(date)
+               + dt.timedelta(days=far_offset_days)).isoformat()
     stages = (
+        # circuit_breaker_columns=2 (the forward pass's exact opt-in, see
+        # forward_shadow_batch.run_capture) rides along on this stage for
+        # free: a capture that succeeds never trips the breaker, so this
+        # is also the "near board, breaker on" half of Priority 1's live
+        # measurement (item iii) — see circuit_breaker_comparison below,
+        # which reads it back out instead of paying for a second capture
+        # of the same board.
         ("collector_end_to_end", lambda budget: collector_end_to_end(
             date, timeout=timeout, pause=pause, sport="volleyball",
-            slice_seconds=budget)),
+            slice_seconds=budget,
+            circuit_breaker_columns=2, circuit_breaker_attempts=1)),
         ("settlement_probe", lambda budget: settlement_probe(
             date, timeout=timeout, pause=pause, sports=("volleyball",),
             slice_seconds=budget, attempts=1)),
         ("render_clock", lambda budget: render_clock_probe(
             date, timeout=timeout, pause=pause,
             slice_seconds=min(budget, 90), attempts=1)),
+        # The far ("almost certainly absent") half of the same measurement.
+        # Deliberately its own stage rather than folded into
+        # circuit_breaker_measurement()'s two-fresh-capture form (see that
+        # function's docstring): the near board is already captured above,
+        # so this is the only additional request cost item (iii) pays.
+        ("circuit_breaker_far", lambda budget: collector_end_to_end(
+            far_date, timeout=timeout, pause=pause, sport="volleyball",
+            slice_seconds=budget,
+            circuit_breaker_columns=2, circuit_breaker_attempts=1)),
     )
     results: dict[str, Any] = {}
     stage_meta: dict[str, dict[str, Any]] = {}
@@ -2394,13 +2443,33 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
         name: meta.get("seconds") for name, meta in stage_meta.items()}
     report["stage_seconds"]["budget_left"] = round(time_left())
 
+    # Priority 1, item (iii): the live circuit-breaker measurement, built
+    # from the two records open_questions already produced above (near =
+    # collector_end_to_end, far = circuit_breaker_far) rather than a fresh
+    # pair of captures — see circuit_breaker_comparison's docstring. Only
+    # emitted once both halves exist; a stage that never got its turn
+    # (time ran out) leaves nothing here rather than a misleading partial
+    # comparison built from one real record and one empty one.
+    if report.get("collector_end_to_end") and report.get("circuit_breaker_far"):
+        report["circuit_breaker_comparison"] = circuit_breaker_comparison(
+            report["collector_end_to_end"], report["circuit_breaker_far"])
+        emit_section("circuit_breaker_comparison",
+                     report["circuit_breaker_comparison"])
+
     # Coverage for the proven sports only runs on what is left: those
     # sports have produced rank-1 fields repeatedly, and re-proving them
-    # was costing the stages that have never succeeded.
+    # was costing the stages that have never succeeded. Their slice used
+    # to be a flat 45s each regardless of how much budget remained, so a
+    # run with budget_left in the hundreds still reported every sport
+    # "stopped: stage slice of 45s spent" (run a5e5720, 2026-09-28:
+    # budget_left 482, r1_coverage itself spent only 235.2s and still
+    # produced zero rankable fields). Divide what is actually left instead.
     if time_left() > 200:
         stage_started = time.monotonic()
+        per_sport = max(45.0, (time_left() - 60) / max(1, len(COVERAGE_SPORTS)))
         report["r1_coverage"] = r1_coverage(date, timeout=timeout,
-                                            pause=pause)
+                                            pause=pause,
+                                            slice_seconds=per_sport)
         report["stage_seconds"]["r1_coverage"] = round(
             time.monotonic() - stage_started, 1)
         emit_section("r1_coverage", report["r1_coverage"])
@@ -3115,11 +3184,16 @@ def _annotation_escape(text: str) -> str:
                 .replace("\n", "%0A").replace("::", "%3A%3A"))
 
 
-#: Annotations are the only channel out of a run: logs and artifacts live in
-#: blob storage, which the agent sandbox cannot reach. Run 36343604474
-#: emitted none at all while reporting success, and with the log unreadable
-#: there was no way to tell whether the probe had crashed, been throttled, or
-#: simply said nothing. Everything below exists to make that distinguishable.
+#: Annotations are the channel that needs no human in the loop: they are
+#: served by api.github.com straight to a read of the run/job, no paste
+#: required. Full logs and artifacts (blob storage) ARE also readable from
+#: this sandbox, but only via a signed URL the owner pastes in — see
+#: AGENTS.md's "Remote Probing" table, corrected 2026-09-28 after two
+#: earlier, narrower claims here both got this wrong in opposite
+#: directions. Run 36343604474 emitted no annotations at all while
+#: reporting success, and at the time there was no way to tell whether the
+#: probe had crashed, been throttled, or simply said nothing. Everything
+#: below exists to make that distinguishable without waiting on a paste.
 MAX_SECTION_ANNOTATIONS = 8
 
 
@@ -3138,9 +3212,10 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     """Print the verdict as Actions annotations and return what was printed.
 
     Annotations are served by api.github.com, whereas run logs and build
-    artifacts are served from blob storage. That difference matters: it is
-    what lets the result be read back without a human copying it out of a
-    browser.
+    artifacts are served from blob storage that needs a signed URL (see
+    AGENTS.md). That difference matters: an annotation is what lets the
+    result be read back with no owner action at all, not the only way the
+    result CAN be read back.
     """
     if os.environ.get("GITHUB_ACTIONS") != "true":
         return []
@@ -3156,7 +3231,9 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     # characters and the interesting result is usually last.
     sections = (
         "render_clock", "stage_seconds", "settlement_probe",
-        "collector_end_to_end", "passes_used", "r1_coverage",
+        "collector_end_to_end", "circuit_breaker_far",
+        "circuit_breaker_comparison",
+        "passes_used", "r1_coverage",
         "horizon_coverage",
         "capture_contract",
         "coverage_sweep", "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",

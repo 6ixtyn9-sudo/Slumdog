@@ -83,21 +83,48 @@ requests to the source plus one extra board, spaced by `--pause 20`.
 `timeout-minutes: 15`. Action SHAs are the same pins `forward_shadow.yml`
 already uses.
 
-**How to run it, in the browser:**
+**You do NOT need to apply this paste just to run the probe.** Corrected
+2026-09-28: `workflow_dispatch` already works from **Actions → Probe kickoff
+timezone → Run workflow**, against ANY branch, using that branch's own copy
+of `scripts/probe_kickoff_timezone.py` — no workflow-file edit needed. Run
+a5e5720 (2026-09-28) proved this: dispatched straight from the UI against
+`arena/01a0e863-slumdog`, no paste applied, and it ran that branch's updated
+script end to end (capture → parse → settle → render-clock, all four
+green). An agent's own `gh workflow run` fails (`HTTP 403: Resource not
+accessible by integration` — app tokens can't dispatch), but a human
+clicking the same button in the browser is unaffected.
 
-1. Open `docs/owner_paste/probe_kickoff_timezone.yml` on branch
-   `arena/01a0dd7a-slumdog` and copy the whole file.
-2. Go to **Add file → Create new file** on that same branch, name it
-   `.github/workflows/probe_kickoff_timezone.yml`, paste, and commit to the
-   branch (not to `main`).
-3. That commit triggers the run by itself — the workflow's `push` trigger is
-   scoped to this branch and to these two paths. **Actions → Probe kickoff
-   timezone** shows the log; the `kickoff-timezone-probe` artifact holds the
-   full JSON report.
+**What this specific paste is for:** only the `push` trigger's branch list,
+which is genuinely stale — it names one specific past session's branch
+(`arena/01a0dd7a-slumdog`) and nothing else, so a push from any other branch
+(this one included, verified 2026-09-28) silently triggers nothing. The
+staged copy widens it to `[main, 'arena/**']` so the NEXT agent's push does
+not hit the same wall. Nothing else changed: no new CLI flags, no new
+`workflow_dispatch` inputs — the circuit-breaker measurement item (iii)
+needed is now a normal stage inside `run_probe()` itself (see
+`scripts/probe_kickoff_timezone.py`), so the existing hardcoded `python
+scripts/probe_kickoff_timezone.py --date "$DATE" --sport basketball --pause
+20 --out probe_report.json` line already produces it — no workflow change
+needed for that part at all.
 
-The last lines of the log are the verdict. Exit 0 means a definite answer
-(either a machine-readable start instant exists in the raw HTML, or the relay's
-offset was unanimous across at least 20 joined matches). Exit 1 means the probe
-was inconclusive and the hold stands — an ambiguous probe is not permission.
+**To apply (optional, whenever convenient — not blocking any current
+work):**
 
-**Delete it afterwards.** It is a diagnostic, not part of the pipeline.
+1. Open `docs/owner_paste/probe_kickoff_timezone.yml` on this branch and
+   copy the whole file.
+2. Paste it over `.github/workflows/probe_kickoff_timezone.yml` on `main`
+   in the GitHub web UI, commit.
+3. Delete the staged copy (git history is the record) and drop
+   `tests/test_probe_workflow_persist_contract.py`'s staged-copy class,
+   moving its trigger-branch assertion onto the live file, the same
+   migration `forward_shadow.yml`'s paste went through above.
+
+**How to run the probe right now, without applying anything:** Actions →
+Probe kickoff timezone → Run workflow → pick the branch → Run workflow. The
+last lines of the log are the verdict; the `kickoff-timezone-probe` artifact
+holds the full JSON report, including `circuit_breaker_comparison` if both
+halves got their turn in the stage budget.
+
+**Delete the live workflow file entirely once the timezone hold and the
+Priority 1 breaker measurement are both settled for good.** It is a
+diagnostic, not part of the pipeline.

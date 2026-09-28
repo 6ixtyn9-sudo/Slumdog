@@ -19,7 +19,16 @@ name: Probe kickoff timezone (one-shot, read-only)
 on:
   push:
     branches:
-      - arena/01a0dd7a-slumdog
+      # A specific session branch here (as this line originally read) goes
+      # dead the moment that session ends: verified 2026-09-28 when pushes
+      # from a LATER session's branch (arena/01a0e863-slumdog) silently
+      # never triggered this workflow at all, because only an earlier
+      # session's branch (arena/01a0dd7a-slumdog) was ever listed. The
+      # trigger itself is durable (main plus any arena/* session branch);
+      # the workflow being one-shot and short-lived is still true and is
+      # about when it gets DELETED, not about which branches can run it.
+      - main
+      - 'arena/**'
     paths:
       - .github/workflows/probe_kickoff_timezone.yml
       - scripts/probe_kickoff_timezone.py

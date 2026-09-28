@@ -195,6 +195,51 @@ class TestCaptureTimingInstrumentation:
             .read_text())
         assert receipt["capture_timing"] == []
 
+    def test_serial_true_times_a_single_sport_even_at_pause_zero(
+        self, tmp_path, monkeypatch
+    ):
+        """The probe used to select the timed path with pause_seconds=0.001
+        — small enough to be free (a single-sport call never sleeps) but
+        truthy enough to pick the branch, which nothing marked as
+        load-bearing and a future refactor could silently undo. serial=True
+        must select the same path outright, at pause_seconds=0."""
+        from slumdog.forebet import ForebetCollector, RawCapture
+
+        def fake_fetch(self, sport, target_date):
+            self.before_request()
+            return RawCapture(
+                sport, target_date, "2026-09-29T04:00:00+00:00", "u", "r",
+                "columns_v1", "abc", 3, "p.txt", "p.json",
+                route="relay_columns")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        collector.capture_selected(
+            "2026-09-29", sports=["volleyball"], pause_seconds=0,
+            serial=True)
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        [timing] = receipt["capture_timing"]
+        assert timing["sport"] == "volleyball"
+        assert timing["requests"] == 1
+
+    def test_on_capture_timing_without_serial_is_refused(
+        self, tmp_path, monkeypatch
+    ):
+        """A callback that can only ever fire on the serial path must be
+        refused outright when the caller did not select that path, not
+        silently ignored — an empty capture_timing would look identical to
+        a callback that fired zero times because nothing failed."""
+        from slumdog.forebet import ForebetCollector
+
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=2)
+        with pytest.raises(ValueError, match="on_capture_timing requires"):
+            collector.capture_selected(
+                "2026-09-29", sports=["football"], pause_seconds=0,
+                on_capture_timing=lambda entry: None)
+
     def test_a_caller_supplied_before_request_still_runs_under_the_counter(
         self, tmp_path, monkeypatch
     ):

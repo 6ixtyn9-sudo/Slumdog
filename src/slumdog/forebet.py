@@ -622,18 +622,40 @@ class ForebetCollector:
                          *, force: bool = False,
                          receipt_name: str | None = None,
                          pause_seconds: float = 0.0,
-                         on_capture_timing=None) -> list[RawCapture]:
+                         on_capture_timing=None,
+                         serial: bool | None = None) -> list[RawCapture]:
         """``on_capture_timing``, if given, is called once per sport-date on
-        the paced serial path (``pause_seconds>0``) the moment that sport's
-        fetch finishes, with the same dict recorded into the receipt's
-        ``capture_timing`` list (``sport``/``elapsed_seconds``/``requests``/
-        ``outcome``). This is a streaming callback, not just a post-hoc
-        receipt field, so a caller can log it to stderr immediately — a run
-        killed mid-batch still leaves that evidence in the job log even
-        though the receipt file for the date in flight never gets written.
-        A raising callback is swallowed; it must never break a capture.
+        the paced serial path the moment that sport's fetch finishes, with
+        the same dict recorded into the receipt's ``capture_timing`` list
+        (``sport``/``elapsed_seconds``/``requests``/``outcome``). This is a
+        streaming callback, not just a post-hoc receipt field, so a caller
+        can log it to stderr immediately — a run killed mid-batch still
+        leaves that evidence in the job log even though the receipt file
+        for the date in flight never gets written. A raising callback is
+        swallowed; it must never break a capture.
+
+        ``serial`` picks the timed, one-sport-at-a-time path explicitly
+        instead of the untimed thread-pool one. Default ``None`` infers it
+        from ``pause_seconds > 0`` (every production stage already passes a
+        real pause and gets this for free). Pass ``serial=True`` outright
+        for a caller that wants timing on a single sport where a "small
+        but truthy" pause would otherwise be needed only to select the
+        branch and never actually sleep — that was a real trap here once:
+        it worked by accident and nothing marked the accident as load-
+        bearing. ``on_capture_timing`` with ``serial`` false (explicitly or
+        by inference) is refused outright rather than silently producing an
+        empty ``capture_timing`` — the parallel path has no per-sport
+        instrumentation at all, so asking for a callback there is a
+        contradiction, not a valid no-op.
         """
         date.fromisoformat(target_date)
+        if serial is None:
+            serial = pause_seconds > 0
+        if on_capture_timing is not None and not serial:
+            raise ValueError(
+                "on_capture_timing requires serial=True (or pause_seconds>0"
+                " to infer it): the parallel (workers>1) path has no"
+                " per-sport timing to call it with")
         selected = list(SPORTS) if not sports else sports
         unknown = [sport for sport in selected if sport not in SPORTS]
         if unknown:
@@ -666,7 +688,7 @@ class ForebetCollector:
         # attempt (``relay_columns.fetch_column``) — the same seam a request
         # budget would hook into, so the count is what a budget would see.
         capture_timing: list[dict] = []
-        if pause_seconds and pause_seconds > 0:
+        if serial:
             # Paced serial path. A same-day stage fetches every sport in one
             # burst; ``pause_seconds`` spaces those requests the same way the
             # settlement capture does, so an extra daily stage does not raise
@@ -747,10 +769,9 @@ class ForebetCollector:
                 str(markets_path.relative_to(self.root))
                 if markets_path is not None else None
             ),
-            # Empty on the parallel (workers>1) path — only the paced
-            # serial path (pause_seconds>0, what every production stage
-            # uses) times individual sports. See the comment above the
-            # serial loop for why.
+            # Empty unless serial=True (or pause_seconds>0, which infers
+            # it) — only the paced serial path times individual sports.
+            # See the comment above the serial loop for why.
             "capture_timing": capture_timing,
         }
         (report_dir / receipt_filename).write_text(

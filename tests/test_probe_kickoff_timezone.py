@@ -2649,7 +2649,8 @@ class TestTheProductionPathIsDrivenEndToEnd:
                 self.root = Path(root)
 
             def capture_selected(self, target_date, sports=None, force=False,
-                                 receipt_name=None, pause_seconds=0):
+                                 receipt_name=None, pause_seconds=0,
+                                 **kwargs):
                 if raises:
                     raise raises
                 reports = self.root / "data" / "reports"
@@ -2770,8 +2771,12 @@ class TestCollectorEndToEndReportsCaptureTiming:
     receipt's captured/failures counts, and must use pause_seconds>0 (not
     literally 0) to actually populate it."""
 
-    def test_pause_seconds_is_nonzero_so_the_timed_path_is_used(
+    def test_serial_is_explicit_so_the_timed_path_is_used(
             self, monkeypatch):
+        """serial=True must be passed outright, not inferred from a
+        pause_seconds value that is truthy only to select the branch and
+        never actually sleeps for a single-sport call — see forebet.py's
+        capture_selected docstring for why that used to be a trap."""
         import scripts.probe_kickoff_timezone as probe
 
         seen = {}
@@ -2782,8 +2787,8 @@ class TestCollectorEndToEndReportsCaptureTiming:
 
             def capture_selected(self, target_date, sports=None,
                                  force=False, receipt_name=None,
-                                 pause_seconds=0, **kwargs):
-                seen["pause_seconds"] = pause_seconds
+                                 pause_seconds=0, serial=None, **kwargs):
+                seen["serial"] = serial
                 reports = self.root / "data" / "reports"
                 reports.mkdir(parents=True, exist_ok=True)
                 (reports / receipt_name).write_text(json.dumps(
@@ -2792,7 +2797,7 @@ class TestCollectorEndToEndReportsCaptureTiming:
 
         monkeypatch.setattr("slumdog.forebet.ForebetCollector", _Collector)
         probe.collector_end_to_end("2026-09-29", timeout=1, pause=0)
-        assert seen["pause_seconds"] > 0
+        assert seen["serial"] is True
 
     def test_capture_timing_is_read_from_the_receipt(self, monkeypatch):
         import scripts.probe_kickoff_timezone as probe
@@ -2846,6 +2851,172 @@ class TestCollectorEndToEndReportsCaptureTiming:
         probe.collector_end_to_end(
             "2026-09-29", timeout=1, pause=0, circuit_breaker_columns=2)
         assert seen["circuit_breaker_columns"] == 2
+
+
+class TestCircuitBreakerComparison:
+    """The pure comparison, extracted so it can be called on records
+    run_probe already has (the near board from the plain
+    collector_end_to_end stage) instead of paying for a second capture of
+    the same board — see circuit_breaker_comparison's own docstring."""
+
+    def test_no_requests_are_made(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        def _boom(*a, **k):
+            raise AssertionError("must not make a request")
+
+        monkeypatch.setattr(probe, "fetch", _boom)
+        monkeypatch.setattr(probe, "collector_end_to_end", _boom)
+        out = probe.circuit_breaker_comparison(
+            {"capture_timing": [{"requests": 10,
+                                 "outcome": "CAPTURED:relay_columns"}],
+             "failures": []},
+            {"capture_timing": [{"requests": 2, "outcome": "COVERAGE_GAP"}],
+             "failures": ["v 2026-10-04: circuit breaker tripped"]})
+        assert out["near_requests"] == 10
+        assert out["far_requests"] == 2
+
+    def test_a_cheap_trip_on_the_far_board_is_recognised(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        out = probe.circuit_breaker_comparison(
+            {"capture_timing": [{"requests": 10,
+                                 "outcome": "CAPTURED:relay_columns"}],
+             "failures": []},
+            {"capture_timing": [{"requests": 2, "outcome": "COVERAGE_GAP"}],
+             "failures": ["v 2026-10-04: circuit breaker tripped — ..."]})
+        assert out["far_breaker_tripped"] is True
+        assert out["near_false_abort"] is False
+
+    def test_a_false_abort_on_the_near_board_is_recognised(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        out = probe.circuit_breaker_comparison(
+            {"capture_timing": [{"requests": 2, "outcome": "COVERAGE_GAP"}],
+             "failures": ["v 2026-09-29: circuit breaker tripped — ..."]},
+            {"capture_timing": [{"requests": 2, "outcome": "COVERAGE_GAP"}],
+             "failures": ["v 2026-10-04: circuit breaker tripped — ..."]})
+        assert out["near_false_abort"] is True
+
+    def test_the_worst_case_is_computed_not_hardcoded(self):
+        """Was a bare ``24`` once; must track COLUMN_SELECTORS so a future
+        column added/removed does not silently make this number wrong."""
+        import scripts.probe_kickoff_timezone as probe
+
+        out = probe.circuit_breaker_comparison(
+            {"capture_timing": [{}], "failures": []},
+            {"capture_timing": [{}], "failures": []})
+        assert out["no_breaker_worst_case_requests"] == (
+            len(probe.COLUMN_SELECTORS) * 3)
+
+    def test_missing_capture_timing_does_not_crash(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        out = probe.circuit_breaker_comparison(
+            {"verdict": "skipped: out of time budget"},
+            {"verdict": "skipped: out of time budget"})
+        assert out["near_requests"] is None
+        assert out["far_requests"] is None
+        assert out["far_breaker_tripped"] is False
+
+
+class TestCircuitBreakerFarStageInRunProbe:
+    """Item (iii)'s default-sweep wiring: circuit_breaker_far must be a
+    normal, budget-shared stage the owner's existing hardcoded workflow
+    command already exercises, not something that needs a CLI flag."""
+
+    def test_a_non_empty_capture_timing_is_success_even_on_a_coverage_gap(
+            self):
+        """Unlike the plain collector_end_to_end stage, a COVERAGE_GAP here
+        is the expected, useful answer (the far board doesn't exist yet),
+        not a failure to keep retrying."""
+        import scripts.probe_kickoff_timezone as probe
+
+        assert probe.stage_succeeded(
+            "circuit_breaker_far",
+            {"capture_timing": [{"outcome": "COVERAGE_GAP"}],
+             "parsed_events": 0})
+        assert not probe.stage_succeeded("circuit_breaker_far", {})
+        assert not probe.stage_succeeded(
+            "circuit_breaker_far", {"verdict": "skipped: out of budget"})
+
+    def test_run_probe_computes_the_comparison_from_its_own_two_stages(
+            self, monkeypatch):
+        """run_probe must not call circuit_breaker_measurement (which would
+        capture the near board a second time) — it builds the comparison
+        from collector_end_to_end + circuit_breaker_far directly."""
+        import scripts.probe_kickoff_timezone as probe
+
+        def _boom(*a, **k):
+            raise AssertionError(
+                "run_probe must not re-capture the near board")
+
+        monkeypatch.setattr(probe, "circuit_breaker_measurement", _boom)
+        monkeypatch.setattr(probe, "fetch", lambda *a, **k: b"")
+        monkeypatch.setattr(probe, "render_clock_probe",
+                            lambda *a, **k: {"proven": True})
+        monkeypatch.setattr(probe, "settlement_probe",
+                            lambda *a, **k: {"hockey": {"graded": 1}})
+
+        calls = {"n": 0}
+
+        def e2e(date, *a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return {"parsed_events": 3, "capture_timing": [
+                    {"requests": 10, "outcome": "CAPTURED:relay_columns"}],
+                    "failures": []}
+            return {"capture_timing": [
+                {"requests": 2, "outcome": "COVERAGE_GAP"}],
+                "failures": [f"v {date}: circuit breaker tripped — ..."]}
+
+        monkeypatch.setattr(probe, "collector_end_to_end", e2e)
+        monkeypatch.setattr(probe, "r1_coverage", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "coverage_sweep", lambda *a, **k: {})
+        report = probe.run_probe("2026-09-29", sport="basketball",
+                                 timeout=1, pause=0)
+        assert report["circuit_breaker_comparison"]["near_requests"] == 10
+        assert report["circuit_breaker_comparison"]["far_breaker_tripped"]
+        assert report["circuit_breaker_comparison"]["near_false_abort"] is False
+
+    def test_r1_coverage_gets_what_is_left_not_a_flat_45s(self, monkeypatch):
+        """Run a5e5720 (2026-09-28): budget_left 482s, r1_coverage still
+        spent only 235.2s and reported every sport "stopped: stage slice of
+        45s spent" — hundreds of seconds sat unused. r1_coverage's own
+        default (45.0) must not be what run_probe hands it when there is
+        far more than that left."""
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "fetch", lambda *a, **k: b"")
+        monkeypatch.setattr(probe, "render_clock_probe",
+                            lambda *a, **k: {"proven": True})
+        monkeypatch.setattr(probe, "settlement_probe",
+                            lambda *a, **k: {"hockey": {"graded": 1}})
+        monkeypatch.setattr(
+            probe, "collector_end_to_end",
+            lambda *a, **k: {"parsed_events": 1, "capture_timing": [
+                {"requests": 1, "outcome": "CAPTURED:relay_columns"}]})
+        monkeypatch.setattr(probe, "coverage_sweep", lambda *a, **k: {})
+
+        seen = {}
+
+        def _r1(date, *, timeout, pause, slice_seconds=45.0, **k):
+            seen["slice_seconds"] = slice_seconds
+            return {}
+
+        monkeypatch.setattr(probe, "r1_coverage", _r1)
+        probe.set_deadline(650)
+        try:
+            probe.run_probe("2026-09-29", sport="basketball",
+                            timeout=1, pause=0)
+        finally:
+            probe.set_deadline(None)
+        # (time_left() - 60) / len(COVERAGE_SPORTS), evaluated with
+        # essentially the whole 650s still on the clock (every other stage
+        # above is mocked to return instantly) — comfortably above the old
+        # flat 45s regardless of exactly how much overhead the test itself
+        # costs.
+        assert seen["slice_seconds"] > 100
 
 
 class TestCircuitBreakerMeasurement:
@@ -2993,8 +3164,14 @@ class TestTheOpenQuestionsAreAskedInPasses:
             return {"proven": True, "offset_minutes": -120}
 
         def e2e(*a, **k):
+            # Shared by two stages now: "collector_end_to_end" (near board)
+            # and "circuit_breaker_far" (far board) both call
+            # collector_end_to_end — see run_open_questions' stages tuple.
+            # capture_timing must be present or circuit_breaker_far's own
+            # stage_succeeded() never returns True and it keeps retrying.
             calls["e2e"] += 1
-            return {"parsed_events": 3}
+            return {"parsed_events": 3,
+                   "capture_timing": [{"outcome": "CAPTURED:relay_columns"}]}
 
         def settle(*a, **k):
             calls["settle"] += 1
@@ -3004,8 +3181,9 @@ class TestTheOpenQuestionsAreAskedInPasses:
         monkeypatch.setattr(probe, "collector_end_to_end", e2e)
         monkeypatch.setattr(probe, "settlement_probe", settle)
         out = probe.run_open_questions("2026-09-29", timeout=1, pause=0)
-        assert calls == {"clock": 1, "e2e": 1, "settle": 1}
+        assert calls == {"clock": 1, "e2e": 2, "settle": 1}
         assert out["passes_used"]["render_clock"] == 1
+        assert out["passes_used"]["circuit_breaker_far"] == 1
 
     def test_a_stage_that_refuses_is_retried_in_a_later_pass(self,
                                                              monkeypatch):
@@ -3095,27 +3273,38 @@ class TestTheBudgetFollowsTheOpenQuestions:
             self, monkeypatch):
         import scripts.probe_kickoff_timezone as probe
 
+        e2e_shares: list[float] = []
         shares: dict[str, float] = {}
         probe.set_deadline(600)
         monkeypatch.setattr(probe, "render_clock_probe",
                             lambda *a, **k: {"proven": True})
-        monkeypatch.setattr(
-            probe, "collector_end_to_end",
-            lambda date, timeout=0, pause=0, slice_seconds=0, **k: (
-                shares.__setitem__("e2e", slice_seconds),
-                {"parsed_events": 1})[1])
+
+        def e2e(date, timeout=0, pause=0, slice_seconds=0, **k):
+            # Called once for "collector_end_to_end" (near) and once for
+            # "circuit_breaker_far" (far) — both go through this same
+            # function, see run_open_questions' stages tuple. Recorded by
+            # position, not by date, so the assertion below does not need
+            # to reproduce the far-date arithmetic itself.
+            e2e_shares.append(slice_seconds)
+            return {"parsed_events": 1,
+                   "capture_timing": [{"outcome": "CAPTURED:relay_columns"}]}
+
+        monkeypatch.setattr(probe, "collector_end_to_end", e2e)
         monkeypatch.setattr(
             probe, "settlement_probe",
             lambda date, timeout=0, pause=0, slice_seconds=0, **k: (
                 shares.__setitem__("settle", slice_seconds),
                 {"hockey": {"graded": 1}})[1])
         probe.run_open_questions("2026-09-29", timeout=1, pause=0)
-        # Two costly questions, ~600s on the clock, ~70s held back for
-        # reporting: each gets about half. The calibration is not in the
-        # split - it has proven the same offset three times on two
-        # requests, and runs on what is left.
-        assert 230 < shares["e2e"] < 290
-        assert 230 < shares["settle"] < 290
+        # Three costly questions now (collector_end_to_end, settlement_probe
+        # and circuit_breaker_far all share "what's left"), ~600s on the
+        # clock, ~70s held back for reporting: each gets about a third. The
+        # calibration is not in the split - it has proven the same offset
+        # three times on two requests, and runs on what is left.
+        assert len(e2e_shares) == 2
+        for share in e2e_shares:
+            assert 150 < share < 200
+        assert 150 < shares["settle"] < 200
 
     def test_a_board_gets_more_than_a_calibration_needs(self, monkeypatch):
         import scripts.probe_kickoff_timezone as probe
