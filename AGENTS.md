@@ -198,6 +198,29 @@ match the whole document), and a range resolves to the day it **begins** —
 a pick frozen 24h before the last day of a Test would be frozen three days
 after the match started.
 
+## The Production Path, Proven Live
+
+Run 36423084168, volleyball 2026-09-29, through `ForebetCollector` — not
+through a probe-shaped copy of it:
+
+```
+route=relay_columns  body_format=columns_v1  bytes=3533  body_on_disk=true
+captures_verified=1  parser_emitted_snapshots=12  snapshots_unique_accepted=12
+parsed_events=12   top: volleyball:109598 Uzbekistan vs Kazakhstan p2=0.69
+verdict: capture -> disk -> parse produced events
+```
+
+The run before it is the reason this stage exists. It captured the same
+board correctly, wrote 3,032 good bytes with the right route and format
+— and parsed them as HTML to nothing, because
+`looks_like_columns_body` searched the first 400 bytes for the format
+marker and a real ten-row board puts it at byte 1406 (the JSON was
+key-sorted; `columns` sorts before `format`). **A capture that is
+written and unreadable is worse than one that fails: it looks like a
+quiet day.** The detector now parses the body and reads the field, the
+marker leads the document for a human, and the loader passes
+`body_format` and `route` through from the receipt it already had.
+
 ## Settling Is Not Ranking
 
 Proven live, run 36419041728: 22 volleyball rows for 2026-09-27, all

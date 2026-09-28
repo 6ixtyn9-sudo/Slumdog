@@ -1260,10 +1260,12 @@ def collector_end_to_end(date: str, *, timeout: int, pause: float,
             # of a zero took two runs the first time.
             record["capture_accounting"] = {
                 k: v for k, v in
-                (loaded.capture_accounting or {}).items() if v}
+                (getattr(loaded, "capture_accounting", None) or {}).items()
+                if v}
             record["snapshot_accounting"] = {
                 k: v for k, v in
-                (loaded.snapshot_accounting or {}).items() if v}
+                (getattr(loaded, "snapshot_accounting", None) or {}).items()
+                if v}
             if records:
                 best = max(records, key=lambda r: max(
                     r.probability_1 or 0.0, r.probability_2 or 0.0))
