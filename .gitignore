@@ -38,6 +38,8 @@ data/reports/shadow_event_day/**/*.tar.gz
 # a re-run to review.
 !data/reports/r1_scorecard_*.json
 !data/reports/r1_scorecard_*.md
+!data/reports/r1_backtest_*.json
+!data/reports/r1_backtest_*.md
 
 # Settlement evidence: commit receipts, exclude raw capture bodies.
 data/settlement_evidence/*

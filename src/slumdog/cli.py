@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .analyze import analyze_depth, r1_scorecard
 from .backfill import backfill, backfill_sport
+from .backtest import r1_backtest
 from .clock import today_iso
 from .detail_worker import capture_detail_batch, enrich_events_from_details
 from .depth_sweep import run_depth_sweep
@@ -122,6 +123,17 @@ def main() -> int:
     _date_arg(scorecard, help_text="YYYY-MM-DD label for the report (default: today)")
     scorecard.add_argument("--root", default=".")
 
+    backtest = sub.add_parser(
+        "r1-backtest",
+        help=("offline replay of the frozen R1/R2 rule over the committed "
+              "historical corpus (data/reports/history_<sport>.jsonl.gz, no "
+              "network): reconstructs the pick identify_forebet_underdog -> "
+              "build_pre_event_features -> is_r2_eligible -> r1_sort_key and "
+              "grades it against the ledger's own settled winner, split by "
+              "reconstruction provenance (HISTORICAL_PAGE vs pre-event)"))
+    _date_arg(backtest, help_text="YYYY-MM-DD label for the report (default: today)")
+    backtest.add_argument("--root", default=".")
+
     research = sub.add_parser("research", help="model cards + feature ablations from settled ledgers")
     research.add_argument("--root", default=".")
     research.add_argument("--min-rows", type=int, default=100)
@@ -219,6 +231,10 @@ def main() -> int:
         return 0
     if args.command == "r1-scorecard":
         path = r1_scorecard(args.root, args.date)
+        print(path)
+        return 0
+    if args.command == "r1-backtest":
+        path = r1_backtest(args.root, args.date)
         print(path)
         return 0
     if args.command == "research":
