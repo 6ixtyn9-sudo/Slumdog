@@ -13,6 +13,35 @@ from slumdog.backtest import r1_backtest, KNOWN_LIMITATIONS
 from slumdog.contracts import SettledEvent
 
 
+def _write_shadow_run(root, track_dir_name, event_date, run_id, selections):
+    """A minimal shadow-track run directory: just enough for
+    analyze._iter_track_runs to yield it (manifest.json + settlement.json
+    present) and for backtest._pre_event_r1_selections to read the
+    genuinely pre-event PRIMARY_SHADOW_SELECTION rows out of it."""
+    run_dir = root / "data" / "reports" / track_dir_name / event_date / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "manifest.json").write_text(json.dumps({"run_id": run_id}))
+    (run_dir / "settlement.json").write_text(json.dumps({"grades": []}))
+    (run_dir / "shadow_selections.json").write_text(json.dumps({"selections": selections}))
+    return run_dir
+
+
+def _pre_event_selection(event_id, sport, event_date, *, favorite_index, underdog_index,
+                          favorite_probability, underdog_probability, draw_probability=None,
+                          status="PRIMARY_SHADOW_SELECTION"):
+    return {
+        "status": status,
+        "event_id": event_id,
+        "sport": sport,
+        "event_date": event_date,
+        "favorite_index": favorite_index,
+        "favorite_probability": favorite_probability,
+        "underdog_index": underdog_index,
+        "underdog_probability": underdog_probability,
+        "draw_probability": draw_probability,
+    }
+
+
 def _ev(event_id, sport, event_date, p1, p2, winner_index, *,
         probability_1=0.6, probability_2=0.4, draw_probability=None,
         forebet_pick=1, disposition="SETTLED", reconstruction="HISTORICAL_PAGE"):
@@ -243,6 +272,153 @@ class TestTracksAndSportsNeverPooled:
         per_sport = analysis["corpus_inventory"]["per_sport"]
         assert "esoccer" not in per_sport
         assert "afl" not in per_sport
+
+
+class TestContaminationCheck:
+    def test_no_pre_event_evidence_is_insufficient_data(self, tmp_path):
+        events = _build_eligible_scenario(winner_index=2)
+        _write_ledger(tmp_path, "football", events)
+        path = r1_backtest(tmp_path, target_date="2026-01-01")
+        analysis = json.loads(path.read_text())
+        verdict = analysis["provenance_verdict"]
+        assert verdict["STANDARD"]["verdict"] == "INSUFFICIENT_DATA"
+        assert verdict["EVENT_DAY"]["verdict"] == "INSUFFICIENT_DATA"
+        assert verdict["STANDARD"]["pre_event_picks_available"] == 0
+
+    def test_matching_pre_event_capture_is_identical(self, tmp_path):
+        events = _build_eligible_scenario(winner_index=2)
+        _write_ledger(tmp_path, "football", events)
+        _write_shadow_run(
+            tmp_path, "shadow", _date(100), "run-1",
+            [_pre_event_selection(
+                "test-event", "football", _date(100),
+                favorite_index=1, underdog_index=2,
+                favorite_probability=0.6, underdog_probability=0.4,
+            )],
+        )
+        path = r1_backtest(tmp_path, target_date="2026-01-01")
+        analysis = json.loads(path.read_text())
+        check = analysis["provenance_verdict"]["STANDARD"]
+        assert check["verdict"] == "IDENTICAL"
+        assert check["matched_to_historical_ledger"] == 1
+        assert check["differing_count"] == 0
+        assert check["underdog_identity_flipped_count"] == 0
+        # The headline must say the rates are a real measurement, not a
+        # footnoted upper bound, when the check comes back clean.
+        assert "measurement, not just an upper bound" in analysis["headline"]
+
+    def test_recomputed_probability_is_flagged_differing(self, tmp_path):
+        events = _build_eligible_scenario(winner_index=2)
+        _write_ledger(tmp_path, "football", events)
+        _write_shadow_run(
+            tmp_path, "shadow", _date(100), "run-1",
+            [_pre_event_selection(
+                "test-event", "football", _date(100),
+                favorite_index=1, underdog_index=2,
+                favorite_probability=0.5, underdog_probability=0.5,  # differs from ledger's 0.6/0.4
+            )],
+        )
+        path = r1_backtest(tmp_path, target_date="2026-01-01")
+        analysis = json.loads(path.read_text())
+        check = analysis["provenance_verdict"]["STANDARD"]
+        assert check["verdict"] == "DIFFERING"
+        assert check["differing_count"] == 1
+        assert check["max_absolute_probability_delta_seen"] is not None
+        assert check["max_absolute_probability_delta_seen"] > 0.005
+        # The headline must say EVERY rate is an upper bound, loudly, not in
+        # a footnote, exactly per the owner directive.
+        assert "EVERY rate below is an upper bound" in analysis["headline"]
+
+    def test_underdog_side_flip_is_flagged_even_if_probabilities_are_close(self, tmp_path):
+        events = _build_eligible_scenario(winner_index=2)
+        _write_ledger(tmp_path, "football", events)
+        _write_shadow_run(
+            tmp_path, "shadow", _date(100), "run-1",
+            [_pre_event_selection(
+                "test-event", "football", _date(100),
+                favorite_index=2, underdog_index=1,  # flipped vs. ledger's identity
+                favorite_probability=0.6, underdog_probability=0.4,
+            )],
+        )
+        path = r1_backtest(tmp_path, target_date="2026-01-01")
+        analysis = json.loads(path.read_text())
+        check = analysis["provenance_verdict"]["STANDARD"]
+        assert check["verdict"] == "DIFFERING"
+        assert check["underdog_identity_flipped_count"] == 1
+
+    def test_tracks_are_never_pooled_in_the_verdict(self, tmp_path):
+        events = _build_eligible_scenario(winner_index=2)
+        _write_ledger(tmp_path, "football", events)
+        _write_shadow_run(
+            tmp_path, "shadow", _date(100), "run-1",
+            [_pre_event_selection(
+                "test-event", "football", _date(100),
+                favorite_index=1, underdog_index=2,
+                favorite_probability=0.6, underdog_probability=0.4,
+            )],
+        )
+        path = r1_backtest(tmp_path, target_date="2026-01-01")
+        analysis = json.loads(path.read_text())
+        verdict = analysis["provenance_verdict"]
+        assert verdict["STANDARD"]["verdict"] == "IDENTICAL"
+        assert verdict["EVENT_DAY"]["verdict"] == "INSUFFICIENT_DATA"
+        assert verdict["EVENT_DAY"]["pre_event_picks_available"] == 0
+
+    def test_statistical_power_note_distinguishes_gross_vs_small_bias(self, tmp_path):
+        events = _build_eligible_scenario(winner_index=2)
+        _write_ledger(tmp_path, "football", events)
+        _write_shadow_run(
+            tmp_path, "shadow", _date(100), "run-1",
+            [_pre_event_selection(
+                "test-event", "football", _date(100),
+                favorite_index=1, underdog_index=2,
+                favorite_probability=0.6, underdog_probability=0.4,
+            )],
+        )
+        path = r1_backtest(tmp_path, target_date="2026-01-01")
+        analysis = json.loads(path.read_text())
+        note = analysis["provenance_verdict"]["STANDARD"]["statistical_power_note"]
+        assert "n=1" in note
+        assert "gross, systematic recomputation" in note
+        assert "NOT enough to bound a small" in note
+
+    def test_provenance_verdict_is_rendered_at_the_top_of_the_markdown(self, tmp_path):
+        events = _build_eligible_scenario(winner_index=2)
+        _write_ledger(tmp_path, "football", events)
+        path = r1_backtest(tmp_path, target_date="2026-01-01")
+        text = path.with_suffix(".md").read_text()
+        verdict_pos = text.find("VERDICT FIRST")
+        caveat_pos = text.find("The caveat that must not be buried")
+        assert verdict_pos != -1
+        assert caveat_pos != -1
+        assert verdict_pos < caveat_pos
+
+
+class TestCliNeverFailsTheJob:
+    def test_r1_backtest_cli_exits_zero_even_when_the_engine_raises(self, tmp_path, monkeypatch):
+        import sys
+        import slumdog.cli as cli
+
+        def _boom(root, target_date=None):
+            raise RuntimeError("simulated unexpected failure")
+
+        monkeypatch.setattr(cli, "r1_backtest", _boom)
+        monkeypatch.setattr(
+            sys, "argv",
+            ["slumdog", "r1-backtest", "--root", str(tmp_path), "--date", "2026-01-01"])
+        rc = cli.main()
+        assert rc == 0
+
+    def test_r1_backtest_cli_exits_zero_on_the_happy_path(self, tmp_path, monkeypatch):
+        import sys
+        import slumdog.cli as cli
+
+        monkeypatch.setattr(
+            sys, "argv",
+            ["slumdog", "r1-backtest", "--root", str(tmp_path), "--date", "2026-01-01"])
+        rc = cli.main()
+        assert rc == 0
+        assert (tmp_path / "data" / "reports" / "r1_backtest_2026-01-01.json").is_file()
 
 
 class TestCorpusInventory:

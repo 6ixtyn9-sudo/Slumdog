@@ -234,8 +234,17 @@ def main() -> int:
         print(path)
         return 0
     if args.command == "r1-backtest":
-        path = r1_backtest(args.root, args.date)
-        print(path)
+        # This step is meant to run unattended inside a CI job that already
+        # built the historical ledgers (see docs/owner_paste/ for the staged
+        # pipeline.yml step) -- it must never fail that job. r1_backtest()
+        # is already internally defensive per-sport, but this is the
+        # last-resort net: any unexpected error still exits 0 with an
+        # honest error note on stdout, never a non-zero CLI exit.
+        try:
+            path = r1_backtest(args.root, args.date)
+            print(path)
+        except Exception as exc:
+            print(f"r1-backtest failed without producing a report: {type(exc).__name__}: {exc}")
         return 0
     if args.command == "research":
         path = build_research(args.root, args.min_rows, allow_research=args.research_override)

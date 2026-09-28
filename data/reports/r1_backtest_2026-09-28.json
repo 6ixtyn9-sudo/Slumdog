@@ -71,10 +71,36 @@
   "generated_at_target_date": "2026-09-28",
   "headline": "no sport in this checkout has both a committed ledger and at least one R2-eligible, ranked R1 candidate -- there is nothing to score. This is the finding, reported plainly with the per-sport row counts above (0/12 sports have any ledger at all in this checkout), not a confident-looking empty table.",
   "known_limitations": [
-    "Every row in every history_<sport>.jsonl.gz ledger this repo has ever written carries reconstruction=HISTORICAL_PAGE: its probabilities and forebet_pick were read off Forebet's historical results page after the match finished, not captured from a live board before kickoff. A hit rate measured on this population is an upper bound on the live rule's edge, not a measurement of it -- see this module's docstring. No PRE_EVENT_CAPTURE population exists in this corpus today; if one appears in a future run of this tool, it will be reported separately, never pooled with HISTORICAL_PAGE rows.",
+    "Every row in every history_<sport>.jsonl.gz ledger this repo has ever written carries reconstruction=HISTORICAL_PAGE: its probabilities and forebet_pick were read off Forebet's historical results page after the match finished, not captured from a live board before kickoff. Whether that biases a hit rate depends on whether Forebet's historical page recomputes its displayed prediction or shows the one it published pre-kickoff -- see the VERDICT FIRST section above/at the top of this report, which tests that directly rather than assuming it. No PRE_EVENT_CAPTURE population exists in this corpus today; if one appears in a future run of this tool, it will be reported separately, never pooled with HISTORICAL_PAGE rows.",
     "history_loader.load_valid_history excludes VOID/NO_CONTEST rows before this module sees them, so a match that later voided is never in a day's candidate pool here even though the live pipeline (which cannot know VOID in advance) would have ranked it. This under-pools relative to the live system by each sport's VOID rate."
   ],
   "method": "offline replay of the frozen R1/R2 rule (underdog.identify_forebet_underdog -> dataset.build_pre_event_features -> baseline_analyzer.is_r2_eligible [R2_CONSERVATIVE_FIXED_RULE] -> baseline_analyzer.r1_sort_key [R1_ALWAYS_RANK_COMPARATOR]) over every row in data/reports/history_<sport>.jsonl.gz; zero network calls; grading via shadow_settle.grade_underdog_win, identical to the live R1 scorecard's contract",
   "populations": {},
+  "provenance_verdict": {
+    "EVENT_DAY": {
+      "differing_count": 0,
+      "headline": "0 of 0 pre-event EVENT_DAY pick(s) matched a row in the historical ledger by event_id -- either no ledger is present in this checkout, or none of these matches are in it yet. Cannot say anything about contamination for this track.",
+      "matched_to_historical_ledger": 0,
+      "max_absolute_probability_delta_seen": null,
+      "pre_event_picks_available": 0,
+      "sample_pairs": [],
+      "statistical_power_note": "n=0: enough to detect gross, systematic recomputation (every pair moving the same way) but NOT enough to bound a small, occasional discrepancy (bound threshold used here: 30 pairs).",
+      "underdog_identity_flipped_count": 0,
+      "unmatched_no_ledger_row": 0,
+      "verdict": "INSUFFICIENT_DATA"
+    },
+    "STANDARD": {
+      "differing_count": 0,
+      "headline": "0 of 62 pre-event STANDARD pick(s) matched a row in the historical ledger by event_id -- either no ledger is present in this checkout, or none of these matches are in it yet. Cannot say anything about contamination for this track.",
+      "matched_to_historical_ledger": 0,
+      "max_absolute_probability_delta_seen": null,
+      "pre_event_picks_available": 62,
+      "sample_pairs": [],
+      "statistical_power_note": "n=0: enough to detect gross, systematic recomputation (every pair moving the same way) but NOT enough to bound a small, occasional discrepancy (bound threshold used here: 30 pairs).",
+      "underdog_identity_flipped_count": 0,
+      "unmatched_no_ledger_row": 62,
+      "verdict": "INSUFFICIENT_DATA"
+    }
+  },
   "reconstruction_populations_present": []
 }

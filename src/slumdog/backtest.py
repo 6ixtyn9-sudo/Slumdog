@@ -56,6 +56,7 @@ from .analyze import (
     UNKNOWN_PROBABILITY_BAND,
     _forebet_pick_of,
     _grade_pick,
+    _iter_track_runs,
     _probability_band,
     _rate_block,
     _score_pick_rows,
@@ -81,9 +82,11 @@ KNOWN_LIMITATIONS = (
     "written carries reconstruction=HISTORICAL_PAGE: its probabilities "
     "and forebet_pick were read off Forebet's historical results page "
     "after the match finished, not captured from a live board before "
-    "kickoff. A hit rate measured on this population is an upper bound on "
-    "the live rule's edge, not a measurement of it -- see this module's "
-    "docstring. No PRE_EVENT_CAPTURE population exists in this corpus "
+    "kickoff. Whether that biases a hit rate depends on whether Forebet's "
+    "historical page recomputes its displayed prediction or shows the one "
+    "it published pre-kickoff -- see the VERDICT FIRST section above/at "
+    "the top of this report, which tests that directly rather than "
+    "assuming it. No PRE_EVENT_CAPTURE population exists in this corpus "
     "today; if one appears in a future run of this tool, it will be "
     "reported separately, never pooled with HISTORICAL_PAGE rows.",
     "history_loader.load_valid_history excludes VOID/NO_CONTEST rows "
@@ -205,7 +208,163 @@ def _reconstruct_sport(sport: str, root: Path) -> dict[str, Any]:
         "sport_days_with_eligible_r1": sport_days_with_eligible_pool,
         "r1_rows": r1_rows,
         "cohort_rows": cohort_rows,
+        "settled_events": settled,
     }
+
+
+#: A pair below this many matched rows can detect gross, systematic
+#: recomputation (every pair moves the same way) but cannot bound a small,
+#: occasional discrepancy -- say which of those two applies, every time.
+_MIN_PAIRS_TO_BOUND_A_SMALL_BIAS = 30
+
+#: Two probabilities this close are the same value modulo float/round-trip
+#: noise; the ledger and the shadow captures both store 2-decimal Forebet
+#: percentages, so this tolerance is far tighter than any real recompute
+#: would produce.
+_PROBABILITY_MATCH_TOLERANCE = 0.005
+
+
+def _pre_event_r1_selections(reports_dir: Path) -> dict[str, list[dict[str, Any]]]:
+    """The genuinely pre-event-captured R1 picks, one list per track.
+
+    Reads ``shadow_selections.json`` (frozen at ``captured_at``, before the
+    match was known) rather than ``settlement.json`` (which only carries
+    post-hoc grades) -- this is the one population in this repo that is
+    NOT reconstructed from a historical page. Restricted to target dates
+    that already have a ``settlement.json`` (the same scope
+    ``analyze.r1_scorecard`` uses), so every row returned here is settled
+    and comparable to the historical ledger. Tracks are kept separate,
+    never pooled, matching every other rule in this codebase.
+    """
+    tracks = {"STANDARD": reports_dir / "shadow", "EVENT_DAY": reports_dir / "shadow_event_day"}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for track_name, track_root in tracks.items():
+        rows: list[dict[str, Any]] = []
+        try:
+            runs = list(_iter_track_runs(track_root))
+        except Exception:
+            runs = []
+        for _target_date, _run_id, run_dir in runs:
+            if not (run_dir / "settlement.json").exists():
+                continue
+            sel_path = run_dir / "shadow_selections.json"
+            if not sel_path.exists():
+                continue
+            try:
+                sel_doc = json.loads(sel_path.read_text())
+            except Exception:
+                continue
+            for sel in sel_doc.get("selections", []):
+                if sel.get("status") == "PRIMARY_SHADOW_SELECTION":
+                    rows.append(sel)
+        out[track_name] = rows
+    return out
+
+
+def _contamination_check(
+    reports_dir: Path, historical_by_key: dict[tuple[str, str], SettledEvent],
+) -> dict[str, Any]:
+    """Does Forebet's historical results page show the SAME prediction it
+    published before kickoff, or a recomputed one?
+
+    Joins every genuinely pre-event R1 pick this repo holds (frozen
+    ``captured_at``, before any result was known) against the matching row
+    in the historical-page ledger by ``event_id``, and compares the
+    favourite/underdog probabilities and the underdog side itself. This
+    decides whether ``populations["HISTORICAL_PAGE"]`` in this same report
+    can be trusted or is only an upper bound -- see the module docstring.
+    """
+    pre_event_by_track = _pre_event_r1_selections(reports_dir)
+    result: dict[str, Any] = {}
+    for track_name, pre_rows in pre_event_by_track.items():
+        pairs: list[dict[str, Any]] = []
+        unmatched = 0
+        for sel in pre_rows:
+            sport = sel.get("sport")
+            event_id = sel.get("event_id")
+            key = (sport, event_id)
+            hist_ev = historical_by_key.get(key)
+            if hist_ev is None:
+                unmatched += 1
+                continue
+            hist_identity = identify_forebet_underdog(
+                hist_ev.probability_1, hist_ev.probability_2, hist_ev.draw_probability)
+            pre_fav_p = sel.get("favorite_probability")
+            pre_dog_p = sel.get("underdog_probability")
+            pre_dog_idx = sel.get("underdog_index")
+            deltas = []
+            if pre_fav_p is not None and hist_identity.favorite_probability is not None:
+                deltas.append(abs(pre_fav_p - hist_identity.favorite_probability))
+            if pre_dog_p is not None and hist_identity.underdog_probability is not None:
+                deltas.append(abs(pre_dog_p - hist_identity.underdog_probability))
+            max_delta = max(deltas) if deltas else None
+            identity_flipped = (
+                pre_dog_idx is not None
+                and hist_identity.underdog_index is not None
+                and pre_dog_idx != hist_identity.underdog_index
+            )
+            differs = identity_flipped or (
+                max_delta is not None and max_delta > _PROBABILITY_MATCH_TOLERANCE
+            )
+            pairs.append({
+                "sport": sport,
+                "event_id": event_id,
+                "pre_event_favorite_probability": pre_fav_p,
+                "pre_event_underdog_probability": pre_dog_p,
+                "historical_page_favorite_probability": hist_identity.favorite_probability,
+                "historical_page_underdog_probability": hist_identity.underdog_probability,
+                "max_absolute_probability_delta": max_delta,
+                "underdog_identity_flipped": identity_flipped,
+                "differs": differs,
+            })
+
+        matched = len(pairs)
+        differing = [p for p in pairs if p["differs"]]
+        flipped = [p for p in pairs if p["underdog_identity_flipped"]]
+        deltas_present = [p["max_absolute_probability_delta"] for p in pairs
+                           if p["max_absolute_probability_delta"] is not None]
+
+        if matched == 0:
+            verdict = "INSUFFICIENT_DATA"
+            headline = (
+                f"0 of {len(pre_rows)} pre-event {track_name} pick(s) matched a row in the "
+                "historical ledger by event_id -- either no ledger is present in this "
+                "checkout, or none of these matches are in it yet. Cannot say anything "
+                "about contamination for this track."
+            )
+        elif differing:
+            verdict = "DIFFERING"
+            headline = (
+                f"{len(differing)}/{matched} matched pair(s) differ between the pre-event "
+                f"capture and the historical-page ledger ({len(flipped)} with the underdog "
+                "side itself flipped). Forebet's historical page does NOT reliably show the "
+                "prediction it made before kickoff for this track -- every hit rate on the "
+                "HISTORICAL_PAGE population must be labelled an upper bound, not a measurement."
+            )
+        else:
+            verdict = "IDENTICAL"
+            headline = (
+                f"All {matched} matched pair(s) agree between the pre-event capture and the "
+                "historical-page ledger (no probability differed by more than "
+                f"{_PROBABILITY_MATCH_TOLERANCE}, no underdog side flipped)."
+            )
+        can_bound_small_bias = matched >= _MIN_PAIRS_TO_BOUND_A_SMALL_BIAS
+        result[track_name] = {
+            "verdict": verdict,
+            "headline": headline,
+            "pre_event_picks_available": len(pre_rows),
+            "matched_to_historical_ledger": matched,
+            "unmatched_no_ledger_row": unmatched,
+            "differing_count": len(differing),
+            "underdog_identity_flipped_count": len(flipped),
+            "max_absolute_probability_delta_seen": max(deltas_present) if deltas_present else None,
+            "statistical_power_note": (
+                f"n={matched}: {'enough to bound even a small systematic bias' if can_bound_small_bias else 'enough to detect gross, systematic recomputation (every pair moving the same way) but NOT enough to bound a small, occasional discrepancy'} "
+                f"(bound threshold used here: {_MIN_PAIRS_TO_BOUND_A_SMALL_BIAS} pairs)."
+            ),
+            "sample_pairs": pairs[:10],
+        }
+    return result
 
 
 def _score_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -303,18 +462,44 @@ def r1_backtest(root: Path | str = ".", target_date: str | None = None) -> Path:
     all_r1_rows: list[dict[str, Any]] = []
     all_cohort_rows: list[dict[str, Any]] = []
     corpus_wide_reconstruction_counts: Counter[str] = Counter()
+    historical_by_key: dict[tuple[str, str], SettledEvent] = {}
 
     for sport in dated_sports:
-        result = _reconstruct_sport(sport, root)
+        # This tool must never fail the CI job it runs in (owner directive):
+        # a malformed/corrupt ledger for one sport degrades to an honest
+        # per-sport error, not a crash that loses every other sport's report.
+        try:
+            result = _reconstruct_sport(sport, root)
+        except Exception as exc:
+            per_sport[sport] = {
+                "sport": sport,
+                "available": False,
+                "note": f"error while reconstructing this sport's ledger: {type(exc).__name__}: {exc}",
+            }
+            continue
         per_sport[sport] = {
             k: v for k, v in result.items()
-            if k not in ("r1_rows", "cohort_rows")
+            if k not in ("r1_rows", "cohort_rows", "settled_events")
         }
         if result.get("available") and result.get("r1_rows") is not None:
             all_r1_rows.extend(result["r1_rows"])
             all_cohort_rows.extend(result["cohort_rows"])
             for label, count in result.get("reconstruction_populations", {}).items():
                 corpus_wide_reconstruction_counts[label] += count
+            for ev in result.get("settled_events", []):
+                historical_by_key[(ev.sport, ev.event_id)] = ev
+
+    try:
+        provenance_verdict = _contamination_check(root / "data" / "reports", historical_by_key)
+    except Exception as exc:
+        provenance_verdict = {
+            "error": f"contamination check failed: {type(exc).__name__}: {exc}",
+            "note": (
+                "the check that tests whether the historical-page ledger "
+                "agrees with genuine pre-event captures could not run; "
+                "treat every rate below as UNVERIFIED, not as IDENTICAL"
+            ),
+        }
 
     sports_with_ledger = sum(1 for s in per_sport.values() if s.get("available"))
     sports_with_rows = sum(1 for s in per_sport.values() if s.get("settled_row_count"))
@@ -331,6 +516,7 @@ def r1_backtest(root: Path | str = ".", target_date: str | None = None) -> Path:
 
     analysis: dict[str, Any] = {
         "generated_at_target_date": target_date,
+        "provenance_verdict": provenance_verdict,
         "method": (
             "offline replay of the frozen R1/R2 rule "
             "(underdog.identify_forebet_underdog -> "
@@ -368,12 +554,35 @@ def r1_backtest(root: Path | str = ".", target_date: str | None = None) -> Path:
             "checkout), not a confident-looking empty table."
         )
     else:
+        verdicts_seen = {
+            check.get("verdict") for check in provenance_verdict.values()
+            if isinstance(check, dict) and "verdict" in check
+        }
+        # Most conservative wins: any track showing a difference outweighs
+        # any other track that happened to come back clean or untested.
+        if "DIFFERING" in verdicts_seen:
+            bias_clause = (
+                "the provenance check above found the historical-page ledger "
+                "DIFFERS from genuine pre-event captures on at least one "
+                "matched pair, so EVERY rate below is an upper bound on the "
+                "live rule's edge, not a measurement of it -- see VERDICT FIRST"
+            )
+        elif "IDENTICAL" in verdicts_seen:
+            bias_clause = (
+                "the provenance check above found every matched pair identical "
+                "to its pre-event capture, so these rates are treated as a real "
+                "measurement, not just an upper bound -- see VERDICT FIRST for n"
+            )
+        else:
+            bias_clause = (
+                "the provenance check above could not reach a verdict "
+                "(insufficient matched pairs or an error) -- treat every rate "
+                "below as UNVERIFIED, not as a clean measurement, until it can"
+            )
         analysis["headline"] = (
             f"{len(populations)} reconstruction population(s) present: "
-            f"{', '.join(populations)}. See known_limitations -- every "
-            "population found in this corpus today is HISTORICAL_PAGE "
-            "(post-hoc), so any rate below is an upper bound on the live "
-            "rule's edge, not a measurement of it."
+            f"{', '.join(populations)}. Every population found in this "
+            f"corpus today is HISTORICAL_PAGE (post-hoc); {bias_clause}."
         )
         for population in populations:
             pop_rows = rows_by_population.get(population, [])
@@ -411,10 +620,46 @@ def _render_rate_line(label: str, block: dict[str, Any]) -> str:
     )
 
 
+def _render_provenance_verdict_markdown(provenance_verdict: dict[str, Any]) -> list[str]:
+    lines = [
+        "## VERDICT FIRST: is the historical-page corpus contaminated?",
+        "",
+        "Every row below this section is read from Forebet's *historical results "
+        "page*, fetched after each match finished. That is only a problem if the "
+        "page recomputes its displayed prediction after the fact rather than "
+        "showing what it published before kickoff. This is decidable: every "
+        "genuinely pre-event R1 pick this repo holds (frozen at capture time) is "
+        "joined here against the same match's row in the historical ledger.",
+        "",
+    ]
+    if "error" in provenance_verdict:
+        lines += [f"**Could not run: {provenance_verdict['error']}**", provenance_verdict.get("note", ""), ""]
+        return lines
+    for track, check in provenance_verdict.items():
+        lines += [
+            f"### {track} track",
+            "",
+            f"**Verdict: {check['verdict']}** — {check['headline']}",
+            "",
+            f"- Pre-event picks available: {check['pre_event_picks_available']}",
+            f"- Matched to a historical-ledger row by event_id: {check['matched_to_historical_ledger']}",
+            f"- Unmatched (no ledger row for that event_id): {check['unmatched_no_ledger_row']}",
+            f"- Differing pairs: {check['differing_count']}",
+            f"- Underdog identity flipped: {check['underdog_identity_flipped_count']}",
+            f"- Max |probability delta| seen: {check['max_absolute_probability_delta_seen']}",
+            f"- {check['statistical_power_note']}",
+            "",
+        ]
+    return lines
+
+
 def _render_r1_backtest_markdown(analysis: dict[str, Any]) -> str:
     lines = [
         f"# R1 rule backtest on the historical corpus — {analysis['generated_at_target_date']}",
         "",
+    ]
+    lines += _render_provenance_verdict_markdown(analysis.get("provenance_verdict", {}))
+    lines += [
         "## The caveat that must not be buried",
         "",
     ]

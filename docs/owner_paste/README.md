@@ -188,3 +188,59 @@ map, but zero standing footprint).
 availability map answers the scheduling question well enough to pick a
 serving window for event-day capture, or once Forebet's block clears for
 good.** It is a measurement job, not part of the pipeline.
+
+## `pipeline_backtest_step.yml` — staged 2026-09-28, OPTIONAL: run the R1 backtest where the ledgers already are
+
+**Why it exists:** `data/reports/history_<sport>.jsonl.gz` ledgers are
+CI-only artifacts by design (seeded per job, never committed to `main`),
+so no sandbox session can ever reach them to run `slumdog r1-backtest`
+itself — see `HANDOFF.md`'s network-reachability entries. Committing all
+11 gzipped ledgers to git to work around that would break this repo's own
+evidence-hygiene rule (full evidence stays as an artifact; only small,
+derived evidence gets committed). The fix inverts the transfer instead:
+run the backtest inside the job that already has the ledgers, and commit
+only its output — a few KB of JSON/markdown, the same size class as
+`r1_scorecard_*` — alongside the existing small-evidence commit pattern
+(`forward_shadow.yml`'s "Persist small evidence to git" step).
+
+**What is staged:** a full copy of `.github/workflows/pipeline.yml` plus
+one new job, `backtest`, inserted after `history` and before `aggregate`.
+It `needs: [history]`, runs on every history build (daily, weekly, and
+manual dispatch — not gated to the weekly run like `aggregate`/`research`,
+since this job makes no network request at all), assembles the sport
+ledger artifacts exactly the way the existing `research` job already
+does, then runs `python -m slumdog.cli r1-backtest --root .`, publishes
+the markdown to the job summary, commits `data/reports/r1_backtest_*.{json,md}`
+to `main`, and uploads the pair as an artifact too. Every other job in the
+file, and the workflow-level trigger and `permissions: contents: read`
+default, are untouched — the new job gets its own job-level
+`permissions: contents: write` override, scoped to nothing wider than that
+one commit. `tests/test_pipeline_backtest_step_contract.py` pins all of
+this: the diff from the live file is exactly one added job, the write
+permission is job-level only, the persist step's `git add` only ever
+touches the two `r1_backtest_*` globs, the push only ever targets
+`origin HEAD:main` with no force flag, and the run step cannot fail the
+job (no `set -e`, ends in `exit 0` — `slumdog r1-backtest` is already
+internally defensive per sport and reports "0/N sports have a ledger"
+plainly rather than raising when the corpus is thin or absent).
+
+**To apply:** open `docs/owner_paste/pipeline_backtest_step.yml` on this
+branch, copy the whole file, paste it over
+`.github/workflows/pipeline.yml` on `main` in the GitHub web UI, commit.
+Then delete the staged copy (git history is the record, same as every
+cycle above) and migrate `test_pipeline_backtest_step_contract.py`'s
+checks onto the live file the way `test_probe_workflow_persist_contract.py`
+did for the probe's trigger fix.
+
+**This is optional, not mandatory** — same standing as
+`probe_canary_cron.yml` below: it answers a different question (does the
+R1 rule have any edge, versus when the source is reachable) and the owner
+should decide independently whether either, both, or neither cron/step is
+wanted. Staging it here does not paste it anywhere.
+
+**Delete this staged file (and, once applied, the new live job) once the
+R1-rule edge question is answered well enough that a fresh backtest run on
+every pipeline cycle stops being useful** — e.g. once the corpus has been
+graded once, the contamination verdict is settled, and any rule change
+based on it has already shipped. It is a measurement job, not part of the
+pipeline's core capture/settle/train loop.
