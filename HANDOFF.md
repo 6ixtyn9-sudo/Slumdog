@@ -1,5 +1,35 @@
 # Slumdog Living Handoff
 
+**2026-09-28 (same session, continued a third time) — RUN 36426785929's LOG IS PERMANENTLY CLOSED (owner instruction, do not re-ask); PROBE WORKFLOW TRIGGER FIX LANDED ON `main` AND MERGED IN; forward_shadow_batch.py NOW EMITS PER-PHASE CHECK-RUN ANNOTATIONS.**
+
+**Stop asking for run 36426785929 / job 108942599581's log — closed by explicit owner instruction.** The owner diagnosed, with verified evidence, exactly why it was never readable: GitHub's raw log/artifact endpoints
+(`/actions/runs/<id>/logs`, artifact zips) require **repo-admin** credentials even on a public repo — an anonymous `GET .../actions/runs/36426785929/logs` returned `403 "Must have admin rights to Repository"`. Check-run
+**annotations**, by contrast, are anonymous-readable: an unauthenticated `GET .../check-runs/108942599581/annotations` returned JSON with no credential at all. Separately, the owner confirmed both of the two earlier
+"successful" pasted signed URLs in this whole session were the **`probe` job's** log (running `probe_kickoff_timezone.py`), never Forward Shadow's `forward-batch` job (running `forward_shadow_batch.py --root .`) — an
+easy signed-URL/UI mismatch, not a defect in how those pastes were read. Run 36426785929's only unread unique value was a "before" request-count baseline; **run a5e5720's measured `collector_end_to_end` figures
+(`requests=10`, `elapsed=93.286s`, `outcome=CAPTURED:relay_columns`, `parsed_events=13`) are now the permanent "before" baseline instead** — do not re-request that URL.
+
+**Consequence, now a standing design rule:** any script whose run needs to be diagnosable without an owner paste must emit its findings as check-run annotations (`::notice`), incrementally, the moment each phase
+finishes — never batched at the end, because a killed/cancelled run must still leave partial findings behind (the same "a stage reports as it finishes" lesson `docs/STATE.md` already carries for the probe's own
+15-minute cap). `probe_kickoff_timezone.py` already did this (`emit_section`); `forward_shadow_batch.py` did not — its only annotations were the two GitHub-generated cancellation notices — which is the specific reason
+run #33 was unreadable even in principle, separate from the admin-rights issue above.
+
+**Fixed this session:** `scripts/forward_shadow_batch.py` now has `emit_notice()` (ported `_annotation_escape`/2600-char-cap pattern from the probe's `emit_section`) wired to fire once per phase as it completes —
+settlement backlog, completion pass, delta settlement, refresh pass, event-day pass, and once per forward-pass target date (immediately after that date's `process_date()` returns, carrying a `summarize_capture_timing()`
+roll-up of that date's per-sport `capture_timing` — total requests, total elapsed seconds, counts grouped by outcome family — rather than one annotation per sport, which would blow past any reasonable annotation
+budget across a multi-date, multi-sport run), plus a final `summary` notice. New tests (`tests/test_forward_shadow_batch.py::TestPhaseAnnotationOrdering`) assert a phase's notice is on the wire *before* the next
+phase's work begins and before the next forward-pass date's capture starts — the actual property that matters for a run killed mid-way, test-enforced rather than asserted informally.
+
+**Also reconciled this session:** the owner applied the staged probe-workflow trigger fix directly to `main` (commit `1348ded`: `on.push.branches: [main, 'arena/**']`). This branch picked it up via
+`git merge origin/main` (merge commit `3de1b98`) rather than an authored diff — **merging in an already owner-committed `.github/workflows/*.yml` change succeeds under this bot's restricted push token, even though
+authoring a fresh diff to that same path directly is rejected** (`refusing to allow a GitHub App to create or update workflow ... without 'workflows' permission`). Use this pattern for any future owner-applied
+workflow fix instead of leaving a branch permanently stale relative to `main`. `docs/owner_paste/probe_kickoff_timezone.yml` (the staged copy) is deleted, `docs/owner_paste/README.md`'s section rewritten to
+"APPLIED" style, and `tests/test_probe_workflow_persist_contract.py` rewritten to guard the live file's `on.push.branches` directly (asserts it contains both `main` and `arena/**`, and that no single hardcoded
+session-branch entry ever reappears) instead of pinning a staged diff that no longer exists. Consequence: a push touching `scripts/probe_kickoff_timezone.py` now auto-triggers the workflow on this branch — no
+dispatch needed for future probe measurements.
+
+Full repo gate after all of the above: `pytest` — 1623 passed, 0 failed. `pyflakes`/`py_compile`/`git diff --check` on all touched files — clean. `scripts/check_workflow_evidence_globs.py` — 24/24 covered.
+
 **2026-09-28 (same session, continued a second time) — RUN a5e5720 IS THE FIRST LIVE PROOF THE WHOLE LOOP WORKS; R1_COVERAGE'S FLAT SLICE AND THE PROBE'S CIRCUIT-BREAKER MEASUREMENT BOTH FIXED.**
 
 **The baseline every later change is measured against**, read directly from
@@ -84,12 +114,11 @@ that run's annotations to confirm `far_breaker_tripped=true` and
 `near_false_abort=false` before calling item (iii) closed. Then (iv) a
 per-run request budget through `ForebetCollector(before_request=...)`, then
 (v) the publication-horizon gate. Only after all five land, re-dispatch
-Forward Shadow. A workflow-trigger durability fix (`branches: [main,
-'arena/**']`, replacing a dead single-session-branch pin that silently
-stopped this workflow's push trigger from firing on this very branch) is
-staged at `docs/owner_paste/probe_kickoff_timezone.yml` — optional, not
-blocking, since `workflow_dispatch` already works from any branch (that is
-how run a5e5720 above happened at all).
+Forward Shadow. **[Superseded — see the top-of-file entry: the workflow-
+trigger durability fix (`branches: [main, 'arena/**']`) has since been
+applied by the owner to `main` and merged into this branch; it is no
+longer staged, and a push (not just `workflow_dispatch`) now triggers the
+probe.]**
 
 **2026-09-28 (same session, continued) — NETWORK-REACHABILITY CLAIM CORRECTED A THIRD TIME (this is the one to trust); OWNER PROVED THE WEB-FETCH TOOL READS A PASTED SIGNED BLOB URL.**
 
@@ -117,13 +146,18 @@ carry forward, independent of GitHub specifics: when a read method fails,
 report which method failed and under which condition — never generalize a
 tested failure into an untested impossibility.**
 
-**Next actions this session (owner-directed, in order):**
-1. Ask the owner to paste a fresh signed log URL for run 36426785929 (the
+**Next actions this session (owner-directed, in order) — item 1 RETRACTED,
+see the top-of-file entry above: the owner has since closed this line of
+inquiry entirely (run 36426785929's log needs repo-admin rights no matter
+how it's fetched; its only value, a request-count baseline, is superseded
+by run a5e5720's measured `collector_end_to_end` numbers). Do not re-ask
+for that URL.**
+1. ~~Ask the owner to paste a fresh signed log URL for run 36426785929 (the
    run page's Download-log link; window ~10 minutes, ask again if it's
    gone stale) and read it via WEB FETCH, chunk by chunk. Answer the
    original four questions from stdout in that log — the driver prints its
    receipt there — not from the 59.7MB artifact, which is too big to fetch
-   usefully by this route.
+   usefully by this route.~~ (retracted — see above)
 2. Instrument `forward_shadow_batch.py` BEFORE touching Priority 1's fix:
    one line per phase and per sport-date (elapsed seconds, request count,
    outcome: `CAPTURED` / `NO_ROWS_FOR_DATE` / `COVERAGE_GAP` / raised).

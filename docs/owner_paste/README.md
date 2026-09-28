@@ -67,63 +67,50 @@ is the record, same as the 2026-09-27 paste) and move
 `TestTheStagedFixIsNarrowAndCorrect`'s two checks onto `live_text` in
 `TestEveryDeclaredArtifactIsPersisted` / `TestThePersistStepStaysNarrow`.
 
-## `probe_kickoff_timezone.yml` — one-shot kickoff-timezone probe
+## `probe_kickoff_timezone.yml` — APPLIED 2026-09-28, file removed
 
-**Why:** the EVENT_DAY track currently refuses every sport except football
-because only the football capture URL pins `tz=0`; HTML boards render kickoff
-in the requesting client's timezone and ignore `?tz=0` (see
-`docs/EVENT_DAY_TRACK.md` §6.1). This job gathers the evidence that would lift
-that hold. Running it on a GitHub runner is the point: that is the exact relay
-and IP combination production captures from, so the answer is about the real
-pipeline rather than some other machine's geolocation.
+**Why it exists:** the EVENT_DAY track currently refuses every sport except
+football because only the football capture URL pins `tz=0`; HTML boards
+render kickoff in the requesting client's timezone and ignore `?tz=0` (see
+`docs/EVENT_DAY_TRACK.md` §6.1). This job gathers the evidence that would
+lift that hold, and also carries the Priority 1 circuit-breaker measurement
+(item iii) as a normal stage inside `run_probe()` itself — no separate CLI
+flag or `workflow_dispatch` input was ever needed for that part.
 
-**Safety:** `permissions: contents: read`. It commits nothing, touches no
-evidence tree, freezes no capture, and writes only a build artifact. Two HTTP
-requests to the source plus one extra board, spaced by `--pause 20`.
-`timeout-minutes: 15`. Action SHAs are the same pins `forward_shadow.yml`
-already uses.
+**What was staged and applied:** only the `push` trigger's branch list. It
+used to name one specific past session's branch (`arena/01a0dd7a-slumdog`)
+and nothing else, so a push from any other branch silently triggered
+nothing — the workflow only ever ran via manual `workflow_dispatch`. The
+owner applied the fix directly to `main` (commit `1348ded`:
+`branches: [main, 'arena/**']`, byte-similar to what was staged here). This
+branch picked it up via `git merge origin/main` rather than an authored
+diff — merging in an already owner-committed workflow-file change is
+accepted by the restricted push token even though authoring a fresh diff to
+that path directly is refused; use this pattern for any future
+`docs/owner_paste/*.yml` fix once the owner applies it to `main`.
 
-**You do NOT need to apply this paste just to run the probe.** Corrected
-2026-09-28: `workflow_dispatch` already works from **Actions → Probe kickoff
-timezone → Run workflow**, against ANY branch, using that branch's own copy
-of `scripts/probe_kickoff_timezone.py` — no workflow-file edit needed. Run
-a5e5720 (2026-09-28) proved this: dispatched straight from the UI against
-`arena/01a0e863-slumdog`, no paste applied, and it ran that branch's updated
-script end to end (capture → parse → settle → render-clock, all four
-green). An agent's own `gh workflow run` fails (`HTTP 403: Resource not
-accessible by integration` — app tokens can't dispatch), but a human
-clicking the same button in the browser is unaffected.
+Consequence: any push touching `scripts/probe_kickoff_timezone.py` or the
+workflow file itself, from `main` or any `arena/**` session branch, now
+triggers the probe automatically — dispatch is no longer required for
+future probe measurements, just a push.
 
-**What this specific paste is for:** only the `push` trigger's branch list,
-which is genuinely stale — it names one specific past session's branch
-(`arena/01a0dd7a-slumdog`) and nothing else, so a push from any other branch
-(this one included, verified 2026-09-28) silently triggers nothing. The
-staged copy widens it to `[main, 'arena/**']` so the NEXT agent's push does
-not hit the same wall. Nothing else changed: no new CLI flags, no new
-`workflow_dispatch` inputs — the circuit-breaker measurement item (iii)
-needed is now a normal stage inside `run_probe()` itself (see
-`scripts/probe_kickoff_timezone.py`), so the existing hardcoded `python
-scripts/probe_kickoff_timezone.py --date "$DATE" --sport basketball --pause
-20 --out probe_report.json` line already produces it — no workflow change
-needed for that part at all.
+The staged copy is deleted rather than kept as a record — git history is
+the record, same as the 2026-09-27 `forward_shadow.yml` cycle above.
+`tests/test_probe_workflow_persist_contract.py` now guards the live file's
+branch list directly, so the gap cannot silently reopen.
 
-**To apply (optional, whenever convenient — not blocking any current
-work):**
-
-1. Open `docs/owner_paste/probe_kickoff_timezone.yml` on this branch and
-   copy the whole file.
-2. Paste it over `.github/workflows/probe_kickoff_timezone.yml` on `main`
-   in the GitHub web UI, commit.
-3. Delete the staged copy (git history is the record) and drop
-   `tests/test_probe_workflow_persist_contract.py`'s staged-copy class,
-   moving its trigger-branch assertion onto the live file, the same
-   migration `forward_shadow.yml`'s paste went through above.
-
-**How to run the probe right now, without applying anything:** Actions →
-Probe kickoff timezone → Run workflow → pick the branch → Run workflow. The
-last lines of the log are the verdict; the `kickoff-timezone-probe` artifact
-holds the full JSON report, including `circuit_breaker_comparison` if both
-halves got their turn in the stage budget.
+**Running the probe:** Actions → Probe kickoff timezone → Run workflow →
+pick the branch → Run workflow (still works, independent of the push
+trigger) — or simply push a change touching the probe script. The last
+lines of the log are the verdict; the `kickoff-timezone-probe` artifact
+holds the full JSON report, including `circuit_breaker_comparison`. Note
+(2026-09-28, owner-verified): reading that artifact or the raw job log
+requires **repo-admin** credentials even on a public repo (anonymous
+`GET /actions/runs/<id>/logs` → 403 "Must have admin rights to
+Repository"); the probe's own `emit_section` **check-run annotations** are
+anonymous-readable with no credential at all
+(`/check-runs/<job_id>/annotations`) and are the reliable way to read a run
+without an owner paste.
 
 **Delete the live workflow file entirely once the timezone hold and the
 Priority 1 breaker measurement are both settled for good.** It is a

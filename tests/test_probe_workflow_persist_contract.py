@@ -8,118 +8,106 @@ push touches ``.github/workflows/`` — confirmed again 2026-09-28:
        `.github/workflows/probe_kickoff_timezone.yml` without `workflows`
        permission)
 
-The live file's ``on.push.branches`` names exactly one branch,
-``arena/01a0dd7a-slumdog`` — a specific prior session's branch. That branch
-is gone; nothing that pushes from anywhere else (this branch included,
-verified 2026-09-28) triggers the workflow at all, silently. This does NOT
-block running the probe — ``workflow_dispatch`` already works from the
-Actions UI against any branch regardless of the push trigger's branch list
-(run a5e5720, 2026-09-28, dispatched against ``arena/01a0e863-slumdog`` with
-no paste applied) — but the push trigger going dead the moment a session
-ends is exactly the same failure shape ``test_workflow_persist_contract.py``
-already documents for ``forward_shadow.yml``'s persist step: an
+The live file's ``on.push.branches`` used to name exactly one branch,
+``arena/01a0dd7a-slumdog`` — a specific prior session's branch, long gone —
+so nothing that pushed from anywhere else silently triggered the workflow
+at all. This was exactly the failure shape ``test_workflow_persist_contract
+.py`` already documents for ``forward_shadow.yml``'s persist step: an
 owner-authored file quietly stops doing what an agent assumed it still did.
 
-The fix (``branches: [main, 'arena/**']``, nothing else) is staged at
-``docs/owner_paste/probe_kickoff_timezone.yml`` for the owner to paste in
-whenever convenient — it is not blocking, since dispatch already works.
-Until it is applied, this file pins the staged copy so it cannot drift into
-a wider change; once applied, move its two assertions onto ``live_text``
-and delete the staged copy, the same migration ``forward_shadow.yml``'s
-paste went through.
+The fix (``branches: [main, 'arena/**']``, nothing else) was staged at
+``docs/owner_paste/probe_kickoff_timezone.yml`` and applied by the owner
+directly to `main` (commit ``1348ded``, picked up onto this branch via a
+merge of ``origin/main`` rather than an authored diff — merging in an
+already owner-committed workflow change is accepted by the restricted push
+token even though authoring a fresh one is not). These tests now guard the
+live file directly, the same migration ``test_workflow_persist_contract.py``
+went through for ``forward_shadow.yml`` on 2026-09-27: the staged copy and
+its "not yet applied" tests are gone, replaced by a permanent guard that the
+branch list stays wide and never regresses to a single hardcoded session
+branch.
 """
 from __future__ import annotations
 
-import difflib
 from pathlib import Path
 
-import pytest
+import yaml
 
 LIVE = Path(".github/workflows/probe_kickoff_timezone.yml")
-STAGED = Path("docs/owner_paste/probe_kickoff_timezone.yml")
 
 
-@pytest.fixture(scope="module")
-def live_text() -> str:
+def _live_text() -> str:
     return LIVE.read_text()
 
 
-class TestTheLiveTriggerIsStillNarrow:
-    """Documents the gap directly against the live file, the same way
-    test_workflow_persist_contract.py's TestEveryDeclaredArtifactIsPersisted
-    documents forward_shadow.yml's pre-paste state — so the assertion this
-    class exists to eventually make (a durable trigger) is visible as a
-    target, not silently absent."""
+def _push_branches() -> list:
+    # YAML parses the bare `on:` key as the boolean True unless quoted, so
+    # look it up defensively under both spellings.
+    parsed = yaml.safe_load(_live_text())
+    on = parsed.get("on", parsed.get(True))
+    return on["push"]["branches"]
 
-    def test_the_branch_list_is_not_yet_durable(self, live_text):
-        # NOT a bug being asserted against; a record of the gap the staged
-        # paste below closes. Flip this the day the paste lands (see
-        # TestTheStagedFixIsNarrowAndCorrect's docstring for the migration).
-        assert "arena/01a0dd7a-slumdog" in live_text
-        assert "'arena/**'" not in live_text
 
-    def test_dispatch_is_unaffected_by_the_stale_trigger(self, live_text):
+class TestThePushTriggerStaysDurable:
+    """Permanent guard: the push trigger must keep firing for `main` and
+    for any session branch, and must never again narrow to one hardcoded
+    session branch (the exact regression this file was created to catch).
+    """
+
+    def test_the_branch_list_includes_main_and_every_session_branch(self):
+        branches = _push_branches()
+        assert "main" in branches
+        assert "arena/**" in branches
+
+    def test_no_single_hardcoded_session_branch_has_reappeared(self):
+        branches = _push_branches()
+        # The specific regression this test pins against: an
+        # owner-pasted, one-off session branch (of any shape) sitting
+        # alone in on.push.branches, silently dead the moment that
+        # session ends. `arena/**` covers every session branch already, so
+        # a literal per-session entry (like the old `arena/01a0dd7a-
+        # slumdog`) should never need to exist in the parsed branch list
+        # again. Checked against the PARSED list, not raw text, since the
+        # old branch name legitimately still appears in this file's own
+        # explanatory comment.
+        assert not any(b != "arena/**" and b.startswith("arena/")
+                      for b in branches), branches
+        assert len(branches) == 2, branches
+
+    def test_dispatch_is_still_available_independent_of_the_push_trigger(
+            self):
         # workflow_dispatch has its own inputs block, entirely independent
-        # of on.push.branches — the stale push trigger cannot silently
-        # break the one path that already works from any branch.
+        # of on.push.branches — this is the path that already worked from
+        # any branch even while the push trigger was stale (run a5e5720,
+        # 2026-09-28), and must keep working regardless of push-trigger
+        # changes.
+        live_text = _live_text()
         assert "workflow_dispatch:" in live_text
         assert "probe_date:" in live_text
 
 
-class TestTheStagedFixIsNarrowAndCorrect:
-    """Pins the pending owner-paste while it waits to be applied.
-
-    Once the owner pastes ``docs/owner_paste/probe_kickoff_timezone.yml``
-    over the live file, drop this class, add
-    ``test_the_branch_list_is_durable`` to ``TestTheLiveTriggerIsStillNarrow``
-    (renamed), and delete the staged file — the migration
-    ``test_workflow_persist_contract.py`` already went through once for
-    ``forward_shadow.yml``.
+class TestThePermissionsAndPinsAreUnchanged:
+    """The branch-list fix was scoped to widen ``on.push.branches`` only —
+    pin the surrounding safety properties so a future edit to this file
+    cannot quietly widen permissions or drop a pin alongside an unrelated
+    trigger change.
     """
 
-    def test_the_staged_copy_only_widens_the_branch_list(self, live_text):
-        if not STAGED.exists():
-            pytest.skip("no owner-paste pending for probe_kickoff_timezone.yml")
-        live_lines = live_text.splitlines(keepends=True)
-        staged_lines = STAGED.read_text().splitlines(keepends=True)
-        diff = list(difflib.unified_diff(live_lines, staged_lines, n=0))
-        added_code = [line[1:] for line in diff if line.startswith("+")
-                     and not line.startswith("+++")
-                     and line[1:].strip() and not line[1:].strip().startswith("#")]
-        removed_code = [line[1:] for line in diff if line.startswith("-")
-                        and not line.startswith("---")
-                        and line[1:].strip() and not line[1:].strip().startswith("#")]
-        # Comment-only lines are allowed to change freely (the staged copy
-        # explains itself); only the CODE lines are pinned to exactly this
-        # one substitution — the old single branch entry replaced by two.
-        assert removed_code == ["      - arena/01a0dd7a-slumdog\n"], (
-            "the staged paste has drifted from the branch-list-only fix "
-            f"it was created for; removed code lines: {removed_code!r}")
-        assert added_code == ["      - main\n", "      - 'arena/**'\n"], (
-            "the staged paste has drifted from the branch-list-only fix "
-            f"it was created for; added code lines: {added_code!r}")
+    def test_read_only_permissions_and_pins_are_present(self):
+        live_text = _live_text()
+        for needle in (
+            "permissions:",
+            "contents: read",
+            "timeout-minutes: 15",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+            "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        ):
+            assert needle in live_text, needle
 
-    def test_the_staged_copy_keeps_workflow_dispatch_probe_date(self):
-        if not STAGED.exists():
-            pytest.skip("no owner-paste pending for probe_kickoff_timezone.yml")
-        staged_text = STAGED.read_text()
-        assert "workflow_dispatch:" in staged_text
-        assert "probe_date:" in staged_text
-        # No new CLI flag plumbing needed in the workflow itself — the
-        # circuit-breaker measurement (Priority 1, item iii) is now a
-        # normal stage inside run_probe(), so the existing hardcoded
-        # command line already exercises it.
-        assert "--circuit-breaker-probe" not in staged_text
-
-    def test_the_staged_copy_does_not_touch_permissions_or_pins(
-        self, live_text
-    ):
-        if not STAGED.exists():
-            pytest.skip("no owner-paste pending for probe_kickoff_timezone.yml")
-        staged_text = STAGED.read_text()
-        for needle in ("permissions:", "contents: read",
-                      "timeout-minutes: 15",
-                      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-                      "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
-                      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"):
-            assert needle in live_text and needle in staged_text, needle
+    def test_no_new_circuit_breaker_cli_flag_was_smuggled_in(self):
+        # The circuit-breaker measurement (Priority 1, item iii) is a
+        # normal stage inside run_probe() itself, not a new CLI flag —
+        # the existing hardcoded command line already exercises it.
+        live_text = _live_text()
+        assert "--circuit-breaker-probe" not in live_text

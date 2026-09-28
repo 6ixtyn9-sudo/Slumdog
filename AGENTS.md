@@ -143,6 +143,24 @@ So: full run logs and artifacts ARE readable in this sandbox, for the cost of on
 
 **The general rule this leaves standing:** when a read method fails, report which method failed and under what condition, not a conclusion about every possible method. "I could not authenticate to the artifacts endpoint with tool X" is a finding. "Run findings are unreadable" is a claim about methods nobody tried yet.
 
+**Sharper still (2026-09-28, owner-verified): the raw-log/artifact gate is specifically repo-ADMIN rights, not "any credential," and it is why run 36426785929/job 108942599581's log was never readable by this session at all — annotations were the only thing that could have carried its findings, and it emitted none.** Two anonymous, unauthenticated probes settled this:
+
+| Method | Target | Result |
+|---|---|---|
+| Anonymous `GET` (no credential at all) | `.../actions/runs/<id>/logs` | **FAILS** — `403 "Must have admin rights to Repository"`, on a public repo. Repo visibility never mattered; only who can mint the request matters, and that requires repo-admin. |
+| Anonymous `GET` (no credential at all) | `.../check-runs/<job_id>/annotations` | **WORKS** — returns JSON with no auth of any kind. |
+
+So the earlier owner-pasted signed-blob-URL reads that worked in this session worked *because the owner has admin rights on this repo* and used their own authenticated browser session to mint that URL — not because the
+signed URL itself sidesteps the admin check for anyone. Nothing in this sandbox (no tool, no token this session holds) can mint that URL itself, ever, regardless of the repo being public. **Consequence, now a standing
+design rule for every script in this repo:** if a run's findings need to be readable by an agent (or anyone) without an owner pasting a fresh signed URL from their own browser, those findings must be emitted as
+check-run annotations — incrementally, per phase, the moment each phase finishes, never batched at the end, because a killed/cancelled run must still leave partial findings behind. `probe_kickoff_timezone.py` already
+does this (`emit_section`, below); `scripts/forward_shadow_batch.py` now does too (`emit_notice`, one per settlement/completion/refresh/event-day phase plus one per forward-pass target date, each carrying a
+`summarize_capture_timing()` roll-up) — added specifically because it was the one script in this repo with none, which is the literal reason run #33 was a dead end.
+
+**Also confirmed the same day: a pasted "successful" log is only as good as confirming which job it actually came from.** Two earlier pastes in this session's history were both quietly the `probe` job's log (running
+`probe_kickoff_timezone.py`), never Forward Shadow's `forward-batch` job (running `forward_shadow_batch.py --root .`) — GitHub hands back whichever job's signed URL matches the page the owner is looking at, and it is
+easy to grab the wrong one without noticing. Before treating a pasted log as answering a question about a specific workflow/job, check the job name printed at its top.
+
 
 **The loop — correction (2026-09-28):** `.github/workflows/probe_kickoff_timezone.yml` (owner-authored, `contents: read`, `continue-on-error: true`) runs `scripts/probe_kickoff_timezone.py` on pushes that touch the script, but **only from the exact branches named in its `on.push.branches` list** — it does not fire for every branch that touches the script, contradicting the line this replaces. Verified 2026-09-28: the list only named a prior session's branch, so every push to `arena/01a0e863-slumdog` touching the script this session triggered nothing, silently.
 
@@ -156,6 +174,7 @@ So: full run logs and artifacts ARE readable in this sandbox, for the cost of on
 Net effect: a workflow's trigger list and its `workflow_dispatch` inputs are edit-once, owner-only surfaces from this sandbox. An agent can write and test the *script* a workflow calls (ordinary `contents: write`, unaffected), but cannot add itself to a push trigger, add a new `workflow_dispatch` input, or fire one by hand — any of those needs the owner's own GitHub write access, either to apply a diff or to dispatch directly.
 
 - **Never edit the workflow.** All probe logic goes in the script. Workflow files are owner-authored; a needed workflow change is a paste prepared under `docs/owner_paste/` plus a contract test (see `tests/test_workflow_persist_contract.py`).
+- **Once the owner applies a staged `docs/owner_paste/*.yml` fix directly to `main`, pull it in with `git merge origin/main` and push the merge — do not leave the branch permanently stale relative to `main`'s workflow files.** Confirmed 2026-09-28: pushing a merge commit that brings in a `.github/workflows/*.yml` change *already committed by the owner on `main`* succeeds under this bot's restricted token, even though authoring a fresh diff to that same path directly is rejected (the `workflows` permission error above). The distinction GitHub's check is making is "who authored this content," not "does this push touch this path" — a merge just carries someone else's already-authorized commit forward.
 - Read results back with `gh`, not by opening logs:
   ```bash
   gh api repos/6ixtyn9-sudo/Slumdog/actions/runs?per_page=1 --jq '.workflow_runs[]|"\(.id) \(.status)"'

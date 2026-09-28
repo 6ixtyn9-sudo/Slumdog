@@ -1367,3 +1367,237 @@ class TestCaptureTimingStderrLogging:
         err = capsys.readouterr().err
         assert "refresh:2026-09-23" in err
         assert "rugby" in err
+
+
+# ---------------------------------------------------------------------------
+# Check-run annotations (owner-verified 2026-09-28: raw run logs/artifacts
+# need a repo ADMIN's signed URL even on a public repo — 403 "Must have
+# admin rights to Repository" for an anonymous request — while check-run
+# annotations are anonymous-readable with no credential at all. This is why
+# run 36426785929 (Forward Shadow #33) is permanently unreadable: it emitted
+# none. Standing rule from that finding: every phase must announce its own
+# result THE MOMENT it finishes, not get bundled into one end-of-run print,
+# because the run that most needs this is the one that gets killed midway.
+# ---------------------------------------------------------------------------
+
+class TestEmitNotice:
+    def test_silent_outside_github_actions(self, monkeypatch, capsys):
+        import scripts.forward_shadow_batch as fsb
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+        fsb.emit_notice("settlement", {"count": 3})
+        out = capsys.readouterr().out
+        assert out == ""
+
+    def test_prints_a_notice_command_inside_github_actions(
+            self, monkeypatch, capsys):
+        import scripts.forward_shadow_batch as fsb
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        fsb.emit_notice("settlement", {"count": 3, "settled": 2})
+        out = capsys.readouterr().out
+        assert out.startswith("::notice title=forward_shadow:settlement::")
+        assert '"count": 3' in out
+        assert '"settled": 2' in out
+
+    def test_empty_payload_emits_nothing(self, monkeypatch, capsys):
+        import scripts.forward_shadow_batch as fsb
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        fsb.emit_notice("refresh", {})
+        fsb.emit_notice("refresh", [])
+        fsb.emit_notice("refresh", None)
+        assert capsys.readouterr().out == ""
+
+    def test_escapes_workflow_command_metacharacters(self, monkeypatch, capsys):
+        import scripts.forward_shadow_batch as fsb
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        # json.dumps already turns a real newline into the two literal
+        # characters "\n" before _annotation_escape ever sees it, so the
+        # metacharacters this needs to prove get escaped are the ones JSON
+        # leaves untouched: "::" (workflow-command delimiter) and "%".
+        fsb.emit_notice("event_day", {"error": "line1\nline2::boom%done"})
+        out = capsys.readouterr().out
+        assert out.count("\n") == 1  # only the trailing print() newline
+        assert "%3A%3A" in out
+        assert "%25" in out
+        assert "::boom" not in out
+
+    def test_escapes_a_literal_embedded_newline(self):
+        # json.dumps() never hands emit_notice a raw newline (it escapes
+        # them itself), but _annotation_escape is a small pure function in
+        # its own right — pin its behavior directly too.
+        import scripts.forward_shadow_batch as fsb
+        assert fsb._annotation_escape("a\nb\rc::d%e") == "a%0Ab%0Dc%3A%3Ad%25e"
+
+    def test_truncates_to_the_annotation_char_cap(self, monkeypatch, capsys):
+        import scripts.forward_shadow_batch as fsb
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        huge = {"dates": [f"2026-10-{i:02d}" for i in range(1, 400)]}
+        fsb.emit_notice("forward_date", huge)
+        out = capsys.readouterr().out
+        blob = out.split("::", 2)[-1]
+        assert len(blob) <= fsb.MAX_NOTICE_CHARS + len(
+            "\ntitle=forward_shadow:forward_date::")
+
+
+class TestSummarizeCaptureTiming:
+    def test_empty_input(self):
+        import scripts.forward_shadow_batch as fsb
+        summary = fsb.summarize_capture_timing(None)
+        assert summary == {
+            "sports": 0, "total_requests": 0,
+            "total_elapsed_seconds": 0.0, "by_outcome": {},
+        }
+
+    def test_totals_and_outcome_families(self):
+        import scripts.forward_shadow_batch as fsb
+        entries = [
+            {"sport": "football", "elapsed_seconds": 1.2, "requests": 3,
+             "outcome": "CAPTURED:relay_columns"},
+            {"sport": "hockey", "elapsed_seconds": 2.3, "requests": 1,
+             "outcome": "CAPTURED:direct"},
+            {"sport": "rugby", "elapsed_seconds": 0.5, "requests": 2,
+             "outcome": "COVERAGE_GAP"},
+            {"sport": "cricket", "elapsed_seconds": 0.1, "requests": 1,
+             "outcome": "REFUSED:circuit_breaker"},
+        ]
+        summary = fsb.summarize_capture_timing(entries)
+        assert summary["sports"] == 4
+        assert summary["total_requests"] == 7
+        assert summary["total_elapsed_seconds"] == 4.1
+        # Grouped by the family before ":" — both CAPTURED variants collapse.
+        assert summary["by_outcome"] == {
+            "CAPTURED": 2, "COVERAGE_GAP": 1, "REFUSED": 1,
+        }
+
+
+class TestProcessDateCarriesCaptureTimingSummary:
+    def test_capture_timing_from_the_receipt_is_rolled_up_into_the_result(
+            self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+
+        def _fake_run_capture(target_date, repo_root, *, pause_seconds=62,
+                              timeout=45):
+            return {
+                "target_date": target_date,
+                "captured": [{"sport": "football", "sha256": "x"}],
+                "failures": [],
+                "capture_timing": [
+                    {"sport": "football", "elapsed_seconds": 1.0,
+                     "requests": 2, "outcome": "CAPTURED:relay_columns"},
+                ],
+            }
+
+        def _fake_evaluator(target_date, repo_root, **kwargs):
+            return {"run_status": "SHADOW_NO_SELECTION",
+                    "artifact_dir": str(tmp_path)}
+
+        monkeypatch.setattr(fsb, "run_capture", _fake_run_capture)
+        monkeypatch.setattr(fsb, "run_evaluator", _fake_evaluator)
+        result = fsb.process_date("2026-09-10", tmp_path)
+        assert result["capture_timing_summary"] == {
+            "sports": 1, "total_requests": 2,
+            "total_elapsed_seconds": 1.0,
+            "by_outcome": {"CAPTURED": 1},
+        }
+
+
+class TestPhaseAnnotationOrdering:
+    """The property the owner asked to have test-enforced: a phase's
+    ::notice is on the wire before the NEXT phase's work begins, so a run
+    killed between phases still shows everything that finished. Verified
+    by recording call order from both sides (the phase functions AND
+    emit_notice itself) rather than trusting stdout/stderr interleaving,
+    which pytest's capsys does not preserve across streams.
+    """
+
+    def test_settlement_notice_precedes_the_completion_pass(
+            self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+        order: list[str] = []
+
+        def _fake_settlement(*a, **k):
+            order.append("run:settlement")
+            return []
+
+        def _fake_completion(*a, **k):
+            order.append("run:completion")
+            return []
+
+        def _fake_refresh(*a, **k):
+            order.append("run:refresh")
+            return []
+
+        real_emit_notice = fsb.emit_notice
+
+        def _tracking_emit_notice(title, payload):
+            order.append(f"notice:{title}")
+            return real_emit_notice(title, payload)
+
+        monkeypatch.setattr(fsb, "run_settlement_backlog", _fake_settlement)
+        monkeypatch.setattr(fsb, "run_completion_backlog", _fake_completion)
+        monkeypatch.setattr(fsb, "run_refresh_backlog", _fake_refresh)
+        monkeypatch.setattr(fsb, "emit_notice", _tracking_emit_notice)
+
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "1", "--dry-run",
+            "--skip-event-day",
+        ])
+        assert rc == 0
+        assert order.index("run:settlement") < order.index("notice:settlement")
+        assert order.index("notice:settlement") < order.index("run:completion")
+        assert order.index("run:completion") < order.index("notice:completion")
+        assert order.index("notice:completion") < order.index("run:refresh")
+        assert order.index("run:refresh") < order.index("notice:refresh")
+
+    def test_each_forward_dates_notice_precedes_the_next_dates_capture(
+            self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+        order: list[str] = []
+
+        def _fake_process_date(target_date, repo_root, **kwargs):
+            order.append(f"process_date:{target_date}")
+            return {"target_date": target_date, "status": "SKIPPED_EXISTING",
+                    "run_id": None, "bundle_verified": False, "error": None}
+
+        real_emit_notice = fsb.emit_notice
+
+        def _tracking_emit_notice(title, payload):
+            order.append(f"notice:{title}")
+            return real_emit_notice(title, payload)
+
+        monkeypatch.setattr(fsb, "process_date", _fake_process_date)
+        monkeypatch.setattr(fsb, "emit_notice", _tracking_emit_notice)
+
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "3", "--pause-seconds", "0",
+            "--skip-settlement", "--skip-refresh", "--skip-event-day",
+        ])
+        assert rc == 0
+        date_notices = [e for e in order if e.startswith("notice:forward_date:")]
+        assert len(date_notices) == 3
+        # The killer property: date 1's notice is already out before date
+        # 2's process_date call even begins (and likewise 2 before 3) — a
+        # run cancelled between dates leaves every finished date behind.
+        first_date_notice_idx = order.index(date_notices[0])
+        second_date_start_idx = order.index(
+            [e for e in order if e.startswith("process_date:")][1])
+        assert first_date_notice_idx < second_date_start_idx
+        second_date_notice_idx = order.index(date_notices[1])
+        third_date_start_idx = order.index(
+            [e for e in order if e.startswith("process_date:")][2])
+        assert second_date_notice_idx < third_date_start_idx
+
+    def test_summary_notice_is_last(self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+        order: list[str] = []
+        real_emit_notice = fsb.emit_notice
+
+        def _tracking_emit_notice(title, payload):
+            order.append(title)
+            return real_emit_notice(title, payload)
+
+        monkeypatch.setattr(fsb, "emit_notice", _tracking_emit_notice)
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "1", "--dry-run",
+        ])
+        assert rc == 0
+        assert order[-1] == "summary"

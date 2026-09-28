@@ -51,6 +51,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -94,6 +95,85 @@ def _capture_timing_logger(phase: str, target_date: str):
             file=sys.stderr,
         )
     return _log
+
+
+def _annotation_escape(text: str) -> str:
+    """Escape a value for a GitHub Actions workflow command.
+
+    Ported from ``scripts/probe_kickoff_timezone.py`` — same tool, same
+    escaping rules, no reason for two implementations to drift apart.
+    """
+    return (text.replace("%", "%25").replace("\r", "%0D")
+                .replace("\n", "%0A").replace("::", "%3A%3A"))
+
+
+#: Run 36426785929 (Forward Shadow #33) is unreadable to this day: its only
+#: annotations are the two GitHub adds automatically on cancellation
+#: ("The run was canceled by @owner"). Everything it actually did — which
+#: date, which sport, how long, captured or refused — lived only in stdout
+#: and the 30-day artifact, both of which need a repo ADMIN's own signed URL
+#: to read (confirmed 2026-09-28: an ANONYMOUS request to
+#: /actions/runs/<id>/logs on this public repo gets 403 "Must have admin
+#: rights to Repository" — repo visibility never mattered, only who can
+#: mint that specific URL). Annotations, by contrast, are anonymous-
+#: readable forever (`/check-runs/<job_id>/annotations`, verified the same
+#: day with no credential at all) — exactly what scripts/probe_kickoff_
+#: timezone.py already relies on via its own ``emit_section``. This gives
+#: the batch driver the same property: one ::notice per phase as it
+#: finishes, so a run killed at the 15-minute (probe) or job-timeout
+#: (batch) wall — or cancelled outright — still leaves a readable trail
+#: nobody needs to ask for.
+MAX_NOTICE_CHARS = 2600
+
+
+def emit_notice(title: str, payload) -> None:
+    """Print one GitHub Actions ``::notice`` the moment ``payload`` exists.
+
+    A no-op outside Actions (``GITHUB_ACTIONS`` unset), so local runs and
+    tests without that env var stay silent by default — set it to exercise
+    this in a test. Truncates like the probe does: a single annotation
+    silently truncates around a few thousand characters, and the useful
+    part of a phase's result is usually the summary counts near the front,
+    not whatever list happens to be longest.
+    """
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    if not payload:
+        return
+    blob = json.dumps(payload, sort_keys=True, default=str)[:MAX_NOTICE_CHARS]
+    print(f"::notice title=forward_shadow:{title}::{_annotation_escape(blob)}",
+          flush=True)
+
+
+def summarize_capture_timing(entries: list[dict] | None) -> dict:
+    """Roll up one date's per-sport ``capture_timing`` into one small dict.
+
+    A single target date can capture a dozen-plus sports; annotating each
+    one for every one of the forward pass's several target dates would
+    blow well past what a job's annotations can usefully carry. This is
+    the "compact roll-up" — total requests and elapsed time (the two
+    numbers Priority 1's cost regression is actually about) plus a count
+    per outcome family, not a full per-sport breakdown. The per-sport
+    detail still exists: it is what ``_capture_timing_logger`` already
+    prints to stderr, one line per sport as it finishes.
+    """
+    entries = entries or []
+    by_outcome: dict[str, int] = {}
+    for entry in entries:
+        outcome = str(entry.get("outcome", "UNKNOWN"))
+        # Group by outcome FAMILY (the part before ":"), not the exact
+        # string — "CAPTURED:relay_columns" and "CAPTURED:direct" are the
+        # same answer to "did this sport-date produce something usable".
+        family = outcome.split(":", 1)[0]
+        by_outcome[family] = by_outcome.get(family, 0) + 1
+    return {
+        "sports": len(entries),
+        "total_requests": sum(e.get("requests", 0) or 0 for e in entries),
+        "total_elapsed_seconds": round(
+            sum(e.get("elapsed_seconds", 0.0) or 0.0 for e in entries), 1),
+        "by_outcome": by_outcome,
+    }
+
 
 # Single source of truth for every SMALL evidence file this pipeline can
 # write and that must survive the runner (the scoped git waiver in AGENTS.md:
@@ -1287,6 +1367,12 @@ def process_date(
             "captured": captured_count,
             "failures": failure_count,
         }
+        # The receipt already carries capture_timing (Priority 1, this
+        # session) — roll it up here so a killed run's per-date annotation
+        # (see main()'s forward-pass loop) shows the cost, not just the
+        # counts.
+        result["capture_timing_summary"] = summarize_capture_timing(
+            capture_receipt.get("capture_timing"))
 
         if captured_count == 0:
             result["status"] = "NO_CAPTURES"
@@ -1390,6 +1476,14 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"    Error: {sr['error']}", file=sys.stderr)
         else:
             print("Settlement backlog: nothing overdue", file=sys.stderr)
+        emit_notice("settlement", {
+            "count": len(settlement_results),
+            "settled": sum(1 for r in settlement_results
+                          if r["status"] == "SETTLED"),
+            "failed": sum(1 for r in settlement_results
+                         if r["status"] == "SETTLEMENT_FAILED"),
+            "dates": [r["target_date"] for r in settlement_results],
+        })
 
         # Completion pass second: revisit recently settled runs whose
         # one-shot D+1 grade left rows UNSETTLED/UNRESOLVED (typically
@@ -1425,6 +1519,17 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"    Error: {cr['error']}", file=sys.stderr)
         else:
             print("Settlement completion: nothing due", file=sys.stderr)
+        emit_notice("completion", {
+            "count": len(completion_results),
+            "supplements_written": sum(
+                1 for r in completion_results
+                if r["status"] == "SUPPLEMENT_WRITTEN"),
+            "resolved_successes": sum(
+                r.get("resolved_successes", 0) for r in completion_results),
+            "resolved_failures": sum(
+                r.get("resolved_failures", 0) for r in completion_results),
+            "dates": [r["target_date"] for r in completion_results],
+        })
 
         # Delta settlement third: one-shot grade of the selections_delta_*
         # payloads the daily refresh appended to the runs settled above.
@@ -1459,6 +1564,12 @@ def main(argv: list[str] | None = None) -> int:
                      if dr.get("deltas_graded") is not None and
                      dr["status"] == "DELTAS_GRADED" else ""),
                   file=sys.stderr)
+        emit_notice("delta_settlement", {
+            "count": len(delta_settlement_results),
+            "graded": sum(r.get("deltas_graded", 0)
+                         for r in delta_settlement_results),
+            "dates": [r["target_date"] for r in delta_settlement_results],
+        })
 
     # Daily refresh (near-term re-capture, owner directive 2026-09-22):
     # re-snapshot the T+1..T+N dates that already hold a completed run so
@@ -1482,6 +1593,13 @@ def main(argv: list[str] | None = None) -> int:
                 + (f" [{rr['error']}]" if rr.get("error") else ""),
                 file=sys.stderr,
             )
+        emit_notice("refresh", {
+            "count": len(refresh_results),
+            "deltas_written": sum(1 for r in refresh_results
+                                  if r["status"] == "DELTA_WRITTEN"),
+            "new_events": sum(r.get("new_events", 0) for r in refresh_results),
+            "dates": [r["target_date"] for r in refresh_results],
+        })
 
     # Event-day track (owner decision 2026-09-26). Runs BEFORE the
     # forward pass: today's picks are the time-critical ones, and the forward
@@ -1519,6 +1637,15 @@ def main(argv: list[str] | None = None) -> int:
             + (f" [{entry['error']}]" if entry.get("error") else ""),
             file=sys.stderr,
         )
+        emit_notice("event_day", {
+            "settlement_count": len(event_day_settlement),
+            "target_date": entry.get("target_date"),
+            "status": entry.get("status"),
+            "r1_count": entry.get("r1_count"),
+            "sports_with_r1": entry.get("sports_with_r1"),
+            "selection_count": entry.get("selection_count"),
+            "error": entry.get("error"),
+        })
 
     targets = compute_target_dates(args.dates)
     print(f"Forward shadow batch: {len(targets)} dates starting from {targets[0]}", file=sys.stderr)
@@ -1544,6 +1671,21 @@ def main(argv: list[str] | None = None) -> int:
             print("  Bundle: VERIFIED", file=sys.stderr)
         if result.get("error"):
             print(f"  Error: {result['error']}", file=sys.stderr)
+        # One notice per date, emitted the instant this date is done —
+        # this is the forward pass's own stage (Forward Shadow #33 ran for
+        # 1h56m and left zero trace of which date/sport it had reached
+        # when it was killed). Do NOT move this after the loop: a run
+        # killed on date 3 of 5 must still show dates 1-2 happened.
+        emit_notice(f"forward_date:{target_date}", {
+            "date_index": f"{i + 1}/{len(targets)}",
+            "target_date": target_date,
+            "status": result.get("status"),
+            "run_id": result.get("run_id"),
+            "bundle_verified": result.get("bundle_verified"),
+            "capture": result.get("capture"),
+            "capture_timing": result.get("capture_timing_summary"),
+            "error": result.get("error"),
+        })
 
     # Write batch receipt
     batch_receipt = {
@@ -1622,6 +1764,10 @@ def main(argv: list[str] | None = None) -> int:
     receipt_path.write_text(json.dumps(batch_receipt, indent=2, sort_keys=True))
     print(f"\nBatch receipt: {receipt_path}", file=sys.stderr)
     print(json.dumps(batch_receipt["summary"], indent=2, sort_keys=True))
+    # Last notice of the run — everything above already went out phase by
+    # phase, so this is a convenience roll-up for a run that finished
+    # cleanly, not the primary source of truth for one that didn't.
+    emit_notice("summary", batch_receipt["summary"])
     return 0
 
 
