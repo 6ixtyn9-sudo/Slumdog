@@ -3538,10 +3538,12 @@ def main(argv: list[str] | None = None) -> int:
               "recorded explicitly. One or two requests, one annotation, "
               "exit — seconds, not the full multi-stage sweep's ~13 "
               "minutes. Read-only: no capture, no evidence tree, no disk "
-              "writes beyond --out. The staged cron "
-              "(docs/owner_paste/probe_canary_cron.yml) uses this mode "
-              "every two hours to build a which-path-is-open availability "
-              "map."))
+              "writes beyond --out. Folded into the `canary` job in "
+              "docs/owner_paste/pipeline.yml (2026-09-28, superseding an "
+              "earlier standalone-cron staging that duplicated this "
+              "workflow's own schedule) — it uses this mode on every "
+              "pipeline run to build a which-path-is-open availability "
+              "map without adding a schedule of its own."))
     parser.add_argument(
         "--direct-vs-relay-only", action="store_true",
         help=("PRIORITY, owner directive 2026-09-28, updated after run "
@@ -3641,10 +3643,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"::notice title=probe:canary::{_annotation_escape(blob)}",
                   flush=True)
         # Non-zero on an unhealthy sample is deliberate, not incidental:
-        # a cron run of THIS mode alone turns Actions' own green/red run
-        # history into a free, readable-without-a-paste availability map
-        # (see docs/owner_paste/probe_canary_cron.yml) — a failed run IS
-        # the finding, not a probe defect.
+        # a run of THIS mode alone turns Actions' own green/red run history
+        # into a free, readable-without-a-paste availability map (see the
+        # `canary` job in docs/owner_paste/pipeline.yml, which runs this
+        # mode on every pipeline trigger instead of a standalone cron) — a
+        # failed run IS the finding, not a probe defect.
         return 0 if report["canary"].get("healthy") else 1
 
     if args.circuit_breaker_probe:

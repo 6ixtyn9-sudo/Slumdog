@@ -116,131 +116,68 @@ without an owner paste.
 Priority 1 breaker measurement are both settled for good.** It is a
 diagnostic, not part of the pipeline.
 
-## `probe_canary_cron.yml` — staged 2026-09-28, UN-PAUSED, dual-path: continuous availability sampling
 
-**Un-paused (2026-09-28, same day it was first paused).** It was held
-because a server-side fetch got a REAL response direct from `forebet.com`
-at the exact moment a relay (`r.jina.ai`) fetch of the identical URL
-returned a challenge page, and this job's sample — like
-`sample_canary`/`_canary_state` on a GitHub runner at the time — went via
-the relay only. The runner-side follow-up (`--direct-vs-relay-only`, run
-`36470920157`) then showed the pause's own premise was incomplete: direct
-FAILED OUTRIGHT from a GitHub runner (no response at all), relay at least
-got a real, challenged, response — neither path alone was the "true"
-availability signal. `sample_canary`/`_canary_state` were made **dual-path**
-instead (relay first, direct fallback attempted once only if relay fails,
-the fact of which path served recorded rather than assumed), and this
-staged cron inherits that behaviour for free via `--canary-only`. A red
-cron run now means both paths were blocked this sample; a green run
-records which one served. See also `_CANARY_PATH_BLOCKED_PREFIX` /
-`_mark_canary_path_blocked` in `src/slumdog/forebet.py` for the matching
-relabeling in the production canary code path, and `HANDOFF.md`'s
-"MEASURED ROUTING REPLACES HARDCODED ROUTING" entry for the full change.
+## `pipeline.yml` — staged 2026-09-28, OPTIONAL: canary sampling + R1 backtest, folded into the existing pipeline
 
-**Why it exists:** two consecutive site-wide WAF blocks this session
-(`36455080098`, `36461512749`), the same afternoon that had served cleanly
-that morning (run `36419041728` graded 18 rows; run a5e5720 captured 13
-events) — same code, same relay, same runner provider. The owner's
-reframe: "we've been optimising how much we ask, when the binding
-constraint may be when we ask." You cannot catch a healthy window by luck
-with a handful of 13-minute probe runs; you need continuous, cheap
-sampling. `scripts/probe_kickoff_timezone.py --canary-only` (added this
-session, made dual-path this pass) answers in one or two requests —
-football's tz=0 JSON via the relay, then direct only if the relay leg
-failed, classified, one annotation, exit — instead of sharing a budget
-scheduler with the full multi-stage sweep.
+**Incident, same day:** an earlier version of this staging (then named
+`pipeline_backtest_step.yml`, a full copy of `pipeline.yml` plus one job)
+and a separate `probe_canary_cron.yml` (a brand-new cron'd workflow) were
+both wrong shapes, and the first one caused real damage. The owner applied
+`pipeline_backtest_step.yml` by *adding* it to `.github/workflows/` rather
+than *replacing* `pipeline.yml` with it — a reasonable reading of a file
+whose name didn't say "this replaces pipeline.yml". The result on `main`
+was a second, complete "Slumdog · Forebet Depth Pipeline" workflow: same
+`name:`, the same two `cron:` schedules, the same `slumdog-depth-build`
+concurrency group — a full second 11-sport Depth Build queued behind the
+first on every trigger, doubling load on the exact relay whose IP
+reputation was the day's open incident. The owner deleted it (`main`
+commit `b7236fb`). Separately, `probe_canary_cron.yml`'s own premise (a
+`schedule:`-triggered workflow) was also wrong: GitHub's `schedule` trigger
+is best-effort and silently skips runs, and this repo's workflows are
+triggered externally instead, so a standalone cron'd sampler would be
+exactly as unreliable as the thing it exists to measure.
 
-**What is staged:** a brand-new, separate workflow file
-(`docs/owner_paste/probe_canary_cron.yml`), not an edit to
-`probe_kickoff_timezone.yml`. Running the full sweep on a cron would cost
-13 minutes per sample and defeat the point; this job costs one HTTP
-request. It runs on `schedule: cron: '17 */2 * * *'` (every two hours) plus
-`workflow_dispatch` for manual testing, `permissions: contents: read`, a
-3-minute timeout, and fails the job (`exit 1`) on an unhealthy sample —
-deliberately, so Actions' own green/red run history becomes a readable
-availability map with no owner paste and no annotation fetch required
-(the `probe:canary` annotation still carries the machine-readable reason
-for anyone who wants it).
+**The fix, both parts:** this file is now named **exactly** for the file
+it replaces — `docs/owner_paste/pipeline.yml`, matching
+`.github/workflows/pipeline.yml` byte-for-byte apart from two new jobs —
+so the only sane instruction is **REPLACE .github/workflows/pipeline.yml**,
+never "add" or "create a new file". And the cron sampler is gone entirely;
+its function (dual-path availability sampling, `scripts/probe_kickoff_timezone.py
+--canary-only`) is now a `canary` job *inside* this same file, with no
+`needs:` and nothing depending on it, so it rides whatever trigger already
+fires this workflow instead of adding one of its own. A `backtest` job
+(the R1-rule replay this repo's evidence already supports — see
+`src/slumdog/backtest.py`) is added the same way: `needs: [history]`, a
+job-level `permissions: contents: write` override (the workflow default
+stays `contents: read`), and a persist step that commits only
+`data/reports/r1_backtest_*.{json,md}` — a few KB — the same
+small-evidence pattern `forward_shadow.yml` already uses.
+`tests/test_owner_paste_pipeline_contract.py` pins every one of these
+properties: the file's name, that the README here says REPLACE, that the
+diff against the live file is exactly these two jobs (nothing about any
+existing job, the workflow's own `name:`, its trigger, or its
+concurrency group may change), that neither new job declares an
+`on.schedule` of its own, that the canary job has no `needs` and nothing
+needs it, and that the backtest job's git commit step only ever touches
+its own two file globs and pushes without `--force`.
 
-**Why this one cannot simply be pushed like the probe script itself:**
-`schedule` triggers only fire from the repository's **default branch**
-(`main`) — pasted onto any session branch, it would parse correctly and
-simply never run. It must go through the same owner-paste-onto-`main` path
-as `probe_kickoff_timezone.yml`'s trigger fix, not a session-branch push.
+**To apply:** open `docs/owner_paste/pipeline.yml` on this branch, copy
+the whole file, **REPLACE `.github/workflows/pipeline.yml`** on `main` in
+the GitHub web UI with it (not "add a new file" — paste over the existing
+one), commit. Then delete the staged copy (git history is the record, same
+as every cycle above) and migrate
+`test_owner_paste_pipeline_contract.py`'s checks onto the live file the
+way `test_probe_workflow_persist_contract.py` did for the probe's trigger
+fix. Also verify against a freshly fetched `main`, not a stale local
+checkout, before re-staging anything like this again — this session's own
+local clone went stale more than once.
 
-**To apply:** open `docs/owner_paste/probe_canary_cron.yml` on this
-branch, create a new file at the same path under `.github/workflows/` on
-`main` in the GitHub web UI, paste the contents, commit. No merge needed
-into this branch beyond deleting the staged copy afterward (same as the
-`probe_kickoff_timezone.yml` cycle above) —
-`tests/test_probe_canary_cron_contract.py` guards the staged file's safety
-properties now and should migrate onto the live file the same way
-`test_probe_workflow_persist_contract.py` did once applied.
+**This is optional, not mandatory** — same standing as everything else in
+this file: it answers two different questions (is the source reachable
+right now; does the R1 rule have any edge) that the owner can decide to
+want independently, and staging it here does not paste it anywhere.
 
-**This is optional, not mandatory** — the owner asked whether a recurring
-job was wanted at all before it was added; staging it here does not paste
-it anywhere. If the owner would rather not run a cron, this file can stay
-staged indefinitely or be deleted, and the same `--canary-only` mode is
-still available for opportunistic manual sampling (slower to build a full
-map, but zero standing footprint).
-
-**Delete this staged file (and, once applied, the live workflow) once the
-availability map answers the scheduling question well enough to pick a
-serving window for event-day capture, or once Forebet's block clears for
-good.** It is a measurement job, not part of the pipeline.
-
-## `pipeline_backtest_step.yml` — staged 2026-09-28, OPTIONAL: run the R1 backtest where the ledgers already are
-
-**Why it exists:** `data/reports/history_<sport>.jsonl.gz` ledgers are
-CI-only artifacts by design (seeded per job, never committed to `main`),
-so no sandbox session can ever reach them to run `slumdog r1-backtest`
-itself — see `HANDOFF.md`'s network-reachability entries. Committing all
-11 gzipped ledgers to git to work around that would break this repo's own
-evidence-hygiene rule (full evidence stays as an artifact; only small,
-derived evidence gets committed). The fix inverts the transfer instead:
-run the backtest inside the job that already has the ledgers, and commit
-only its output — a few KB of JSON/markdown, the same size class as
-`r1_scorecard_*` — alongside the existing small-evidence commit pattern
-(`forward_shadow.yml`'s "Persist small evidence to git" step).
-
-**What is staged:** a full copy of `.github/workflows/pipeline.yml` plus
-one new job, `backtest`, inserted after `history` and before `aggregate`.
-It `needs: [history]`, runs on every history build (daily, weekly, and
-manual dispatch — not gated to the weekly run like `aggregate`/`research`,
-since this job makes no network request at all), assembles the sport
-ledger artifacts exactly the way the existing `research` job already
-does, then runs `python -m slumdog.cli r1-backtest --root .`, publishes
-the markdown to the job summary, commits `data/reports/r1_backtest_*.{json,md}`
-to `main`, and uploads the pair as an artifact too. Every other job in the
-file, and the workflow-level trigger and `permissions: contents: read`
-default, are untouched — the new job gets its own job-level
-`permissions: contents: write` override, scoped to nothing wider than that
-one commit. `tests/test_pipeline_backtest_step_contract.py` pins all of
-this: the diff from the live file is exactly one added job, the write
-permission is job-level only, the persist step's `git add` only ever
-touches the two `r1_backtest_*` globs, the push only ever targets
-`origin HEAD:main` with no force flag, and the run step cannot fail the
-job (no `set -e`, ends in `exit 0` — `slumdog r1-backtest` is already
-internally defensive per sport and reports "0/N sports have a ledger"
-plainly rather than raising when the corpus is thin or absent).
-
-**To apply:** open `docs/owner_paste/pipeline_backtest_step.yml` on this
-branch, copy the whole file, paste it over
-`.github/workflows/pipeline.yml` on `main` in the GitHub web UI, commit.
-Then delete the staged copy (git history is the record, same as every
-cycle above) and migrate `test_pipeline_backtest_step_contract.py`'s
-checks onto the live file the way `test_probe_workflow_persist_contract.py`
-did for the probe's trigger fix.
-
-**This is optional, not mandatory** — same standing as
-`probe_canary_cron.yml` below: it answers a different question (does the
-R1 rule have any edge, versus when the source is reachable) and the owner
-should decide independently whether either, both, or neither cron/step is
-wanted. Staging it here does not paste it anywhere.
-
-**Delete this staged file (and, once applied, the new live job) once the
-R1-rule edge question is answered well enough that a fresh backtest run on
-every pipeline cycle stops being useful** — e.g. once the corpus has been
-graded once, the contamination verdict is settled, and any rule change
-based on it has already shipped. It is a measurement job, not part of the
-pipeline's core capture/settle/train loop.
+**Delete this staged file (and, once applied, the two live jobs) once
+both questions are answered well enough that a canary sample and a fresh
+backtest on every pipeline run stop being useful.** They are measurement
+jobs, not part of the pipeline's core capture/settle/train loop.

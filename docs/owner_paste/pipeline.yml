@@ -23,6 +23,51 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  canary:
+    name: Canary — dual-path availability sample (2 requests, non-blocking)
+    # Folded in here rather than a separate cron'd workflow (owner
+    # directive, 2026-09-28): GitHub's own `schedule:` trigger is
+    # best-effort and silently skips runs, and this repo's workflows are
+    # triggered externally instead, so a standalone cron'd sampler would be
+    # exactly as unreliable as the thing it exists to measure. This job
+    # rides whatever already fires this workflow (the two schedules below,
+    # or workflow_dispatch) instead of adding a trigger of its own — no new
+    # workflow file, no new schedule. It has no `needs:` and nothing
+    # `needs:` it: a red canary here never blocks or slows down
+    # census/history/aggregate/research, it only records. See
+    # scripts/probe_kickoff_timezone.py's ``--canary-only`` mode and
+    # ``forebet.sample_canary`` for the dual-path (relay first, direct
+    # fallback only if relay fails) contract this reuses unchanged.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TZ: 'Africa/Johannesburg'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e .
+      - name: Dual-path canary sample (relay first, direct fallback only if relay fails)
+        run: |
+          # Exits 1 on an unhealthy sample, deliberately: this job's own
+          # green/red run history becomes a readable availability map with
+          # no owner paste and no annotation fetch required (the
+          # `probe:canary` annotation still carries the machine-readable
+          # reason). This is isolated to THIS job -- it cannot fail or
+          # delay any other job in this workflow.
+          SAMPLE_DATE="$(date +%F)"
+          python scripts/probe_kickoff_timezone.py \
+            --canary-only --date "$SAMPLE_DATE" --out canary_report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: slumdog-canary-${{ github.run_id }}
+          path: canary_report.json
+          retention-days: 14
+          if-no-files-found: warn
+
   census:
     name: Census — current board, all sports
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 1'
@@ -186,7 +231,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: python -m pip install --no-cache-dir .
+      - run: python -m pip install -e .
       - uses: actions/download-artifact@v4
         with:
           pattern: slumdog-history-*
@@ -312,8 +357,8 @@ jobs:
 # clock in TZ Africa/Johannesburg (census today, history through yesterday).
 # History ledgers are rolling and resumable per sport. Esoccer is
 # prospective-only. No model training or suggestion emission occurs here.
-# The `backtest` job runs after every history build (not just the weekly
-# one): it makes zero network requests, reads only the ledgers this same
-# workflow just assembled, and commits its few-KB r1_backtest report the
-# same way forward_shadow.yml commits shadow evidence -- the corpus itself
-# never leaves CI, only the report does.
+# The `canary` job (dual-path availability sample) and the `backtest` job
+# (R1-rule replay over the ledgers this same run just built) both ride this
+# workflow's existing triggers rather than adding any schedule or file of
+# their own -- no new workflow, no new cron. Neither gates nor is gated by
+# census/history/aggregate/research; each reports independently.
