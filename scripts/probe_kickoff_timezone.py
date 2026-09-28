@@ -1025,14 +1025,27 @@ def render_clock_probe(date: str, *, timeout: int, pause: float,
     record: dict[str, Any] = {"target_date": date}
     started = time.monotonic()
     guard = slice_guard(slice_seconds)
+    # Both channels have to answer in the SAME run, and each is being
+    # served a bot-check page perhaps half the time: run 36400033744 got
+    # 139 matches, run 36401440850 got 272 bytes of "Performing security
+    # verification". Joint success on single attempts is a coin flip on a
+    # coin flip, so each channel retries inside the slice.
+    instants: dict[str, str] = {}
+    attempts = 0
     try:
-        instants = {
-            f"football:{match_id}": moment.strftime("%Y-%m-%d %H:%M:%S")
-            for match_id, moment in football_utc_kickoffs(
-                date, timeout=timeout).items()
-        }
+        for attempts in range(1, 4):
+            instants = {
+                f"football:{match_id}": moment.strftime("%Y-%m-%d %H:%M:%S")
+                for match_id, moment in football_utc_kickoffs(
+                    date, timeout=timeout).items()
+            }
+            if instants:
+                break
+            guard()
+            pace(min(pause, 6))
     except BudgetExhausted as exc:
         return {"verdict": f"stopped: {exc}"}
+    record["json_attempts"] = attempts
     record["json_matches"] = len(instants)
     record["json_seconds"] = round(time.monotonic() - started, 1)
     if not instants:

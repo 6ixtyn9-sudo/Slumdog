@@ -360,8 +360,18 @@ def unwrap_reader(raw: bytes | str, expected_url: str) -> bytes:
 # lenient label check let it through, so challenge pages were being stored as
 # genuine captures. Reject them explicitly rather than relying on a
 # coincidence.
+# 2026-09-28: a SECOND wording appeared, and on the tz=0 JSON endpoint
+# rather than an HTML board — 272 bytes of "Performing security
+# verification ... protect against malicious bots", captured live by the
+# probe (run 36401440850). It matched none of the markers below. It failed
+# closed anyway, by the same coincidence this list exists to stop relying
+# on: the JSON parse threw, and an HTML board would have missed its sport
+# label. Name it instead.
 _CHALLENGE_MARKERS = (
     b"just a moment",
+    b"performing security verification",
+    b"security service to protect against malicious bots",
+    b"verifying you are human",
     b"challenge-platform",
     b"cf_chl_opt",
     b"cf-chl",
