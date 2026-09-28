@@ -56,6 +56,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from bs4 import BeautifulSoup  # noqa: E402
 
+from slumdog.forebet import board_url  # noqa: E402
 from slumdog.forebet import (  # noqa: E402
     RELAY_BASE,
     fetch_with_fallback,
@@ -1060,7 +1061,8 @@ def render_clock_probe(date: str, *, timeout: int, pause: float,
             record["json_error"] = str(FETCH_ERRORS[-1])[:200]
         return record
     pace(min(pause, 3))
-    url = f"https://www.forebet.com/en/{SPORTS['football'].path}/predictions/{date}"
+    url = board_url(SPORTS["football"], date)
+    record["board_url"] = url
     try:
         column_started = time.monotonic()
         # One attempt, a short read timeout and a stage slice: the football

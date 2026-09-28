@@ -883,7 +883,7 @@ def calibrate_event_day_clock(
     calibration — football only.
     """
     from slumdog.capture_loader import load_capture_records
-    from slumdog.forebet import ForebetCollector, source_url
+    from slumdog.forebet import ForebetCollector, board_url
     from slumdog.relay_columns import (
         event_id_from_url,
         fetch_column,
@@ -917,7 +917,7 @@ def calibrate_event_day_clock(
         # cell that carries the match link and its rendered time. Every
         # other column would be a request spent on something the
         # measurement cannot use.
-        url = source_url(SPORTS["football"], target_date)
+        url = board_url(SPORTS["football"], target_date)
         cells = fetch_column(url, scoped(".tnms"), timeout=timeout,
                              column="link", attempts=2, backoff=5.0)
         rendered: dict[str, str] = {}

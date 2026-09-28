@@ -337,6 +337,26 @@ def source_url(spec: SportSpec, target_date: str) -> str:
     return f"https://www.forebet.com/en/{spec.path}/predictions/{target_date}"
 
 
+def board_url(spec: SportSpec, target_date: str) -> str:
+    """The HUMAN board for a sport — the page the renderer reads.
+
+    Not the same thing as :func:`source_url`, and the difference is not
+    cosmetic. For football, ``source_url`` is the tz=0 JSON endpoint; there
+    is no board markup there at all. For every other sport the two agree.
+
+    Getting this wrong is silent: the renderer answers HTTP 422 for "your
+    selector matched nothing", which is indistinguishable from throttling,
+    so a wrong URL reads as a site that is refusing you. Run 36402990164
+    spent 108 seconds and three attempts proving exactly that against
+    ``/en/football-tips-and-predictions/predictions/...``, a page that does
+    not exist.
+    """
+    if spec.key == "football":
+        return ("https://www.forebet.com/en/football-predictions/"
+                f"predictions-1x2/{target_date}")
+    return source_url(spec, target_date)
+
+
 def unwrap_reader(raw: bytes | str, expected_url: str) -> bytes:
     """Legacy Markdown-wrapper validator retained for forensic tests."""
     text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
