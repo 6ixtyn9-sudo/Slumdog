@@ -238,7 +238,8 @@ def align_columns(columns: dict[str, list[str]], *,
 
 def fetch_column(board_url: str, selector: str, *, timeout: int = 60,
                  opener=None, column: str = "", attempts: int = 3,
-                 backoff: float = 8.0, sleep=time.sleep) -> list[str]:
+                 backoff: float = 8.0, sleep=time.sleep,
+                 before_request=None) -> list[str]:
     """Fetch a single column through the renderer, retrying a refusal.
 
     Throttling is the last thing standing between this route and daily
@@ -249,6 +250,12 @@ def fetch_column(board_url: str, selector: str, *, timeout: int = 60,
 
     Only the transport is retried. A bot-check body is not a transient
     failure and is never retried into looking like data.
+
+    ``before_request`` is called before every attempt and may raise to stop
+    the capture. A caller under a wall-clock cap needs a say here: eight
+    columns times three attempts times a minute-long timeout outlives any
+    job, and run 36386778571 was killed at the 15-minute wall with nothing
+    reported because this loop answered to no one.
     """
     request = urllib.request.Request(
         RELAY_BASE + board_url,
@@ -264,6 +271,8 @@ def fetch_column(board_url: str, selector: str, *, timeout: int = 60,
     open_url = opener or urllib.request.urlopen
     last: ColumnFetchError | None = None
     for attempt in range(max(1, attempts)):
+        if before_request is not None:
+            before_request()
         if attempt:
             sleep(backoff * attempt)
         try:
@@ -286,8 +295,8 @@ def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
                         attempts: int = 3, backoff: float = 8.0,
                         sleep=time.sleep,
                         selectors: dict[str, str] | None = None,
-                        required: tuple[str, ...] | None = None
-                        ) -> BoardColumns:
+                        required: tuple[str, ...] | None = None,
+                        before_request=None) -> BoardColumns:
     """Fetch every column for a board and validate that they agree.
 
     Raises rather than returning a half-built board: a throttled render can
@@ -303,7 +312,8 @@ def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
             columns[name] = fetch_column(board_url, scoped(selector),
                                          timeout=timeout, opener=opener,
                                          column=name, attempts=attempts,
-                                         backoff=backoff, sleep=sleep)
+                                         backoff=backoff, sleep=sleep,
+                                         before_request=before_request)
         except ColumnFetchError as exc:
             failures.append(str(exc))
 
@@ -569,7 +579,8 @@ def capture_board(board_url: str, sport: str, target_date: str, *,
                   attempts: int = 3, backoff: float = 8.0,
                   sleep=time.sleep,
                   selectors: dict[str, str] | None = None,
-                  required: tuple[str, ...] | None = None) -> BoardCapture:
+                  required: tuple[str, ...] | None = None,
+                  before_request=None) -> BoardCapture:
     """Capture one board, returning an outcome instead of raising.
 
     Policy decisions, and why:
@@ -610,7 +621,8 @@ def capture_board(board_url: str, sport: str, target_date: str, *,
                                     timeout=timeout, opener=opener,
                                     attempts=attempts, backoff=backoff,
                                     sleep=sleep, selectors=selectors,
-                                    required=required)
+                                    required=required,
+                                    before_request=before_request)
     except (ColumnFetchError, ColumnAlignmentError) as exc:
         return BoardCapture(status=COVERAGE_GAP, sport=sport,
                             target_date=target_date, source_url=board_url,

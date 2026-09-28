@@ -776,3 +776,65 @@ class TestWhatCountsAsRequiredDependsOnTheJob:
         aligned = align_columns(self._columns([]),
                                 required=SETTLEMENT_REQUIRED_COLUMNS)
         assert aligned["score"] == []
+
+
+class TestTheCaptureAnswersToItsCaller:
+    """Run 36386778571 was killed at the 15-minute wall with nothing
+    reported: eight columns, three attempts each, none of them asking
+    whether there was still time."""
+
+    def _opener(self, calls):
+        class _Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b"[x](https://f/m/a/1111)"
+
+        def opener(request, timeout=0):
+            calls.append(timeout)
+            return _Response()
+
+        return opener
+
+    def test_the_guard_runs_before_every_attempt(self):
+        calls: list[int] = []
+        seen = {"n": 0}
+
+        def guard():
+            seen["n"] += 1
+
+        fetch_column("https://f/", ".tnms", opener=self._opener(calls),
+                     column="link", before_request=guard)
+        assert seen["n"] == 1
+
+    def test_a_raising_guard_stops_the_capture_rather_than_retrying(self):
+        class Stop(RuntimeError):
+            pass
+
+        def guard():
+            raise Stop("out of time")
+
+        with pytest.raises(Stop):
+            fetch_column("https://f/", ".tnms", column="link",
+                         before_request=guard,
+                         opener=self._opener([]), sleep=lambda _s: None)
+
+    def test_the_guard_reaches_every_column_of_a_board(self):
+        calls: list[int] = []
+        seen = {"n": 0}
+
+        def guard():
+            seen["n"] += 1
+
+        with pytest.raises(Exception):
+            # The fake body yields one row per column, which will not
+            # satisfy alignment — the point is only that the guard ran.
+            fetch_board_columns("https://f/", "hockey", "2026-09-29",
+                                opener=self._opener(calls),
+                                before_request=guard,
+                                sleep=lambda _s: None)
+        assert seen["n"] >= len(COLUMN_SELECTORS)

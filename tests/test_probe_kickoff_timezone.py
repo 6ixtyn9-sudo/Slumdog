@@ -2142,6 +2142,16 @@ class TestCoverageSweep:
 
 
 class TestAnnotationsAreTheOnlyChannel:
+    @pytest.fixture(autouse=True)
+    def _fresh_emit_state(self):
+        """Sections published mid-run must not suppress the final report
+        of an unrelated run."""
+        import scripts.probe_kickoff_timezone as probe
+
+        probe.EMITTED_SECTIONS.clear()
+        yield
+        probe.EMITTED_SECTIONS.clear()
+
     """Run logs and artifacts are served from blob storage, which the agent
     sandbox cannot reach; annotations come from api.github.com. Run
     36343604474 emitted none while reporting success, and there was no way
@@ -2418,3 +2428,43 @@ class TestSettlementProbe:
                     - dt.timedelta(days=1)).isoformat()
         assert seen == [expected]
         assert seen[0] != "2026-12-31"  # not the day before the target
+
+
+class TestAStageReportsBeforeTheWallIsHit:
+    """Run 36386778571 was cancelled at 15 minutes and reported nothing:
+    every annotation waited for the last stage to finish."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        probe.EMITTED_SECTIONS.clear()
+        yield
+        probe.EMITTED_SECTIONS.clear()
+
+    def test_a_finished_stage_publishes_immediately(self, capsys):
+        import scripts.probe_kickoff_timezone as probe
+
+        probe.emit_section("r1_coverage", {"hockey": {"rows": 61}})
+        out = capsys.readouterr().out
+        assert "::notice title=probe:r1_coverage::" in out
+        assert "61" in out
+
+    def test_the_final_report_does_not_repeat_it(self, capsys, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+        report = {"r1_coverage": {"hockey": {"rows": 61}},
+                  "columns": {"link": ".tnms"}}
+        probe.emit_section("r1_coverage", report["r1_coverage"])
+        capsys.readouterr()
+        emitted = probe.emit_annotations(report, ["verdict line"])
+        assert not any("title=probe:r1_coverage" in line for line in emitted)
+        assert any("title=probe:columns" in line for line in emitted)
+
+    def test_an_empty_stage_is_not_announced(self, capsys):
+        import scripts.probe_kickoff_timezone as probe
+
+        probe.emit_section("settlement_probe", {})
+        assert capsys.readouterr().out == ""

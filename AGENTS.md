@@ -200,6 +200,22 @@ contest.
   (`UNEXPECTED_DRAW_FOR_TWO_WAY`): there, a level result means the parse is
   wrong, not that the match tied.
 
+## A Stage Reports As It Finishes
+
+Run 36386778571 was cancelled at the workflow's 15-minute wall and reported
+nothing whatsoever, because every annotation was emitted after the final
+stage. Two rules now hold:
+
+- `emit_section(key, value)` publishes a stage's result the moment the
+  stage returns; `emit_annotations` skips whatever is already published.
+  An overrun costs only the stages that had not run.
+- Every network call inside a capture takes a `before_request` callback,
+  and the probe passes `check_budget`. Without it the column route answered
+  to nobody: eight columns times three attempts times a minute-long timeout
+  outlives any job, whatever the probe's own deadline says. A stage that
+  runs out catches `BudgetExhausted` and records `stopped: ...` rather than
+  taking the run down with it.
+
 ## Documentation Governance
 
 - `docs/STATE.md` is canonical current truth, not append-only diary. Git history is history.

@@ -932,10 +932,15 @@ def horizon_coverage(date: str, *, timeout: int, pause: float,
         # lost its kickoff column and cricket its home column to 422s while
         # everything else came back clean. The refusals move between runs,
         # so spend the retries here rather than lose the whole board.
-        result = capture_board(url, sport, target,
-                               captured_at=date + "T00:00:00Z",
-                               timeout=timeout, attempts=3, backoff=7.0,
-                               sleep=pace)
+        try:
+            result = capture_board(
+                url, sport, target, captured_at=date + "T00:00:00Z",
+                timeout=timeout, attempts=3, backoff=7.0, sleep=pace,
+                before_request=check_budget)
+        except BudgetExhausted as exc:
+            out[sport] = {"horizon_date": target,
+                          "verdict": f"stopped: {exc}"}
+            break
         record: dict[str, Any] = {
             "horizon_date": target,
             "days_ahead": (dt.date.fromisoformat(target)
@@ -987,12 +992,17 @@ def settlement_probe(date: str, *, timeout: int, pause: float,
             continue
         url = f"https://www.forebet.com/en/{spec.path}/predictions/{yesterday}"
         pace(min(pause, 3))
-        result = capture_board(url, sport, yesterday,
-                               captured_at=date + "T00:00:00Z",
-                               timeout=timeout, attempts=3, backoff=7.0,
-                               sleep=pace,
-                               selectors=SETTLEMENT_COLUMN_SELECTORS,
-                               required=SETTLEMENT_REQUIRED_COLUMNS)
+        try:
+            result = capture_board(
+                url, sport, yesterday, captured_at=date + "T00:00:00Z",
+                timeout=timeout, attempts=3, backoff=7.0, sleep=pace,
+                selectors=SETTLEMENT_COLUMN_SELECTORS,
+                required=SETTLEMENT_REQUIRED_COLUMNS,
+                before_request=check_budget)
+        except BudgetExhausted as exc:
+            out[sport] = {"settled_date": yesterday, "url": url,
+                          "verdict": f"stopped: {exc}"}
+            break
         record: dict[str, Any] = {
             "settled_date": yesterday,
             "url": url,
@@ -1045,9 +1055,14 @@ def r1_coverage(date: str, *, timeout: int, pause: float,
             continue
         url = f"https://www.forebet.com/en/{spec.path}/predictions/{date}"
         pace(min(pause, 3))
-        result = capture_board(
-            url, sport, date, captured_at=date + "T00:00:00Z",
-            timeout=timeout, attempts=2, backoff=6.0, sleep=pace)
+        try:
+            result = capture_board(
+                url, sport, date, captured_at=date + "T00:00:00Z",
+                timeout=timeout, attempts=2, backoff=6.0, sleep=pace,
+                before_request=check_budget)
+        except BudgetExhausted as exc:
+            out[sport] = {"verdict": f"stopped: {exc}"}
+            break
         record: dict[str, Any] = {
             "status": result.status,
             "rows": result.row_count,
@@ -1776,8 +1791,27 @@ def probe_routes(board_url: str, *, timeout: int, pause: float) -> dict[str, Any
     return out
 
 
+#: Sections already written to the log as they were produced. Run
+#: 36386778571 was cancelled at the 15-minute wall and reported nothing at
+#: all, because every annotation was emitted after the last stage. A stage
+#: that finishes now publishes its own result immediately, so an overrun
+#: costs only the stages that had not run.
+EMITTED_SECTIONS: set[str] = set()
+
+
+def emit_section(key: str, value: Any) -> None:
+    """Publish one stage's result the moment it exists."""
+    if not value or key in EMITTED_SECTIONS:
+        return
+    EMITTED_SECTIONS.add(key)
+    blob = json.dumps(value, sort_keys=True)[:2600]
+    print(f"::notice title=probe:{key}::{_annotation_escape(blob)}",
+          flush=True)
+
+
 def run_probe(date: str, *, sport: str, timeout: int, pause: float,
               run_hunt: bool = False, run_browser: bool = False) -> dict[str, Any]:
+    EMITTED_SECTIONS.clear()
     report: dict[str, Any] = {
         "probed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "target_date": date,
@@ -1808,6 +1842,7 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
     # ahead of sports that re-prove themselves every run.
     report["settlement_probe"] = settlement_probe(
         date, timeout=timeout, pause=pause)
+    emit_section("settlement_probe", report["settlement_probe"])
 
     # Cricket is left out until its partially-rendered kickoff column is
     # handled: it fails the same way every run and teaches nothing new,
@@ -1815,12 +1850,15 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
     report["horizon_coverage"] = horizon_coverage(
         date, timeout=timeout, pause=pause,
         sports=("rugby", "mma"))
+    emit_section("horizon_coverage", report["horizon_coverage"])
 
     report["r1_coverage"] = r1_coverage(date, timeout=timeout, pause=pause)
+    emit_section("r1_coverage", report["r1_coverage"])
 
     if time_left() > 300:
         report["coverage_sweep"] = coverage_sweep(date, timeout=timeout,
                                                   pause=pause)
+        emit_section("coverage_sweep", report["coverage_sweep"])
     json_kickoffs = football_utc_kickoffs(date, timeout=timeout)
     report["football_json_matches"] = len(json_kickoffs)
 
@@ -2556,7 +2594,7 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     room = MAX_SECTION_ANNOTATIONS
     for key in sections:
         value = report.get(key)
-        if not value or room <= 0:
+        if not value or room <= 0 or key in EMITTED_SECTIONS:
             continue
         room -= 1
         blob = json.dumps(value, sort_keys=True)[:2600]
