@@ -192,3 +192,43 @@ class TestTheCollectorAnswersToItsCaller:
 
     def test_production_passes_nothing_and_is_unchanged(self, tmp_path):
         assert ForebetCollector(tmp_path).before_request is None
+
+
+class TestTheHtmlAttemptIsOneAttempt:
+    """Since 2026-09-22 the non-football board has answered a bot-check to
+    everything CI can send. Three retries of a 42KB page buy nothing, and
+    in run 36419041728 the column requests that followed them came back
+    403 while the same relay served a settlement capture seconds later."""
+
+    def test_the_html_probe_does_not_retry(self, monkeypatch, tmp_path):
+        seen = {}
+
+        def fake_fetch(relay, target, timeout=45, max_retries=3):
+            seen["max_retries"] = max_retries
+            return BOT_CHECK, "relay"
+
+        monkeypatch.setattr(forebet, "fetch_with_fallback", fake_fetch)
+        board = _board()
+        monkeypatch.setattr("slumdog.relay_columns.capture_board",
+                            lambda *a, **k: _column_capture(board))
+        ForebetCollector(tmp_path)._fetch("hockey", "2026-09-29")
+        assert seen["max_retries"] == 1
+
+    def test_football_keeps_its_retries(self, monkeypatch, tmp_path):
+        """Football's JSON route does succeed, and intermittently — its
+        retries are the reason it produces picks at all."""
+        seen = {"n": 0}
+
+        def fake_markdown(*a, **k):
+            seen["n"] += 1
+            raise RuntimeError("challenge page")
+
+        monkeypatch.setattr(forebet, "relay_get_markdown", fake_markdown)
+        monkeypatch.setattr(
+            forebet, "fetch_with_fallback",
+            lambda *a, **k: (json.dumps([[{"DATE_BAH": "x"}] * 40]).encode(),
+                             "relay"))
+        monkeypatch.setattr(forebet, "validate_capture_body",
+                            lambda *a, **k: None)
+        ForebetCollector(tmp_path)._fetch("football", "2026-09-29")
+        assert seen["n"] == 1  # markdown first, then the fallback succeeded

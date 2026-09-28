@@ -198,6 +198,28 @@ match the whole document), and a range resolves to the day it **begins** —
 a pick frozen 24h before the last day of a Test would be frozen three days
 after the match started.
 
+## Settling Is Not Ranking
+
+Proven live, run 36419041728: 22 volleyball rows for 2026-09-27, all
+`FT`, **18 graded** in 22 seconds — `volleyball:109541 Iran vs Kyrgyzstan
+3-0`. The four ungraded rows belong to the neighbouring day and are
+skipped by the row's own-day check, which is the rule working.
+
+Three things had to be separated from the ranking route before that
+worked, and each had been misread as throttling:
+
+- **Scope.** `ROW_SCOPE` demands `.fprc`, because a row without a
+  prediction cannot become a pick. A finished match is not being picked.
+  `SETTLEMENT_ROW_SCOPE` (`.rcnt:has(.lscr_td)`) asks for a row with a
+  score. With the wrong scope the board returned 42,670 bytes of real
+  content and every column returned 422.
+- **Columns.** Settlement reads five: link, home, away, score, status. It
+  was fetching eight. A column is a request.
+- **Verdict.** A settlement capture has no probabilities and therefore
+  can never produce events, so "no events" cannot mean "no fixtures on
+  this date". Those captures are judged by how many rows carry the target
+  date.
+
 ## Market Shape Is Not Outcome Space
 
 `SportSpec.draw_possible` says how many outcomes the board **prices**.

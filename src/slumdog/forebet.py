@@ -516,8 +516,19 @@ class ForebetCollector:
         else:
             body_format = "html"
             try:
+                # ONE attempt, not three. Since 2026-09-22 this board has
+                # answered a bot-check page to everything CI can send, and
+                # it has never once succeeded since - so the three retries
+                # inside fetch_with_fallback buy nothing and cost three
+                # full-page renders of a 42KB document. In run 36419041728
+                # the column requests that followed them came back 403
+                # while the same relay served a five-column settlement
+                # capture seconds later. One attempt is enough to detect a
+                # bot-check; the retries were paying for the privilege of
+                # being rate-limited.
                 body, route = fetch_with_fallback(relay, target,
-                                                  timeout=self.timeout)
+                                                  timeout=self.timeout,
+                                                  max_retries=1)
                 validate_capture_body(body, sport, target_date, route)
             except ValueError:
                 # From 2026-09-22 the HTML boards answer a bot-check page to
