@@ -1254,6 +1254,16 @@ def collector_end_to_end(date: str, *, timeout: int, pause: float,
                 repo_root=root)
             records = list(loaded.records)
             record["parsed_events"] = len(records)
+            # When a capture is written and yields nothing, the accounting
+            # says whether the body failed to parse, the snapshots were
+            # rejected, or the parser simply emitted none. Reading that out
+            # of a zero took two runs the first time.
+            record["capture_accounting"] = {
+                k: v for k, v in
+                (loaded.capture_accounting or {}).items() if v}
+            record["snapshot_accounting"] = {
+                k: v for k, v in
+                (loaded.snapshot_accounting or {}).items() if v}
             if records:
                 best = max(records, key=lambda r: max(
                     r.probability_1 or 0.0, r.probability_2 or 0.0))

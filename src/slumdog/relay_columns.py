@@ -808,7 +808,10 @@ def serialise_columns(board: BoardColumns) -> bytes:
         "row_count": board.row_count,
         "partial": board.partial,
         "columns": board.columns,
-    }, indent=2, sort_keys=True).encode()
+        # Not key-sorted: the format marker leads, so what a body IS can
+        # be seen in its first bytes by a human or a hexdump, even though
+        # looks_like_columns_body no longer depends on that.
+    }, indent=2).encode()
 
 
 def deserialise_columns(body: bytes) -> BoardColumns:
@@ -828,9 +831,24 @@ def deserialise_columns(body: bytes) -> BoardColumns:
 
 
 def looks_like_columns_body(body: bytes) -> bool:
-    """Cheap check used to route a stored capture to the right parser."""
-    head = body[:200].lstrip()
-    return head.startswith(b"{") and BODY_FORMAT.encode() in body[:400]
+    """Is this stored body a column capture?
+
+    Answered by READING the body, not by hoping a marker lands early in
+    it. The first version searched the first 400 bytes for the format
+    string; a real ten-row volleyball board puts it at byte 1406, because
+    the JSON is key-sorted and "columns" sorts before "format". Run
+    36421154844 captured that board correctly through the production
+    collector, wrote 3,032 good bytes to disk, and then parsed it as HTML
+    and produced nothing - a capture that is written and unreadable is
+    worse than one that fails, because it looks like a quiet day.
+    """
+    if not body[:200].lstrip().startswith(b"{"):
+        return False
+    try:
+        payload = json.loads(body.decode("utf-8", "replace"))
+    except (ValueError, UnicodeDecodeError):
+        return False
+    return isinstance(payload, dict) and payload.get("format") == BODY_FORMAT
 
 
 def _score_pair(cell: str) -> tuple[float, float] | None:

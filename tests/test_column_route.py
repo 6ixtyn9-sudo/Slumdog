@@ -232,3 +232,66 @@ class TestTheHtmlAttemptIsOneAttempt:
                             lambda *a, **k: None)
         ForebetCollector(tmp_path)._fetch("football", "2026-09-29")
         assert seen["n"] == 1  # markdown first, then the fallback succeeded
+
+
+class TestAWrittenCaptureMustBeReadableAtAnySize:
+    """Run 36421154844 captured a volleyball board correctly through the
+    production collector, wrote 3,032 good bytes to disk, and parsed it
+    as HTML to nothing. The detector searched the first 400 bytes for the
+    format marker; a real ten-row board puts it at byte 1406, because the
+    JSON was key-sorted and 'columns' sorts before 'format'.
+
+    A capture that is written and unreadable is worse than one that
+    fails: it looks like a quiet day."""
+
+    def _board_of(self, rows):
+        from slumdog.relay_columns import BoardColumns
+
+        return BoardColumns(
+            sport="volleyball", target_date="2026-09-29", source_url="u",
+            columns={
+                "link": [f"[A{i} B{i} 29/09/2026 7:00 PM]"
+                         f"(https://f/m/a{i}/{109540 + i})"
+                         for i in range(rows)],
+                "home": [f"A{i}" for i in range(rows)],
+                "away": [f"B{i}" for i in range(rows)],
+                "kickoff": ["19:00"] * rows,
+                "probabilities": ["62 38"] * rows,
+                "pick": ["1"] * rows,
+            }, row_count=rows)
+
+    @pytest.mark.parametrize("rows", [1, 10, 64, 200])
+    def test_a_board_of_any_size_is_recognised(self, rows):
+        from slumdog.relay_columns import (
+            looks_like_columns_body,
+            serialise_columns,
+        )
+
+        assert looks_like_columns_body(serialise_columns(self._board_of(rows)))
+
+    def test_a_big_board_still_parses_to_events(self, tmp_path):
+        from slumdog.relay_columns import serialise_columns
+
+        (tmp_path / "body.txt").write_bytes(
+            serialise_columns(self._board_of(64)))
+        events = parse_capture({
+            "body_path": "body.txt", "sport": "volleyball",
+            "target_date": "2026-09-29",
+            "captured_at": "2026-09-29T06:00:00+00:00",
+            "source_url": "u", "sha256": "abc"}, root=tmp_path)
+        assert len(events) == 64
+
+    def test_the_marker_still_leads_the_body_for_a_human(self):
+        from slumdog.relay_columns import serialise_columns
+
+        body = serialise_columns(self._board_of(64))
+        assert b"columns_v1" in body[:120]
+
+    def test_html_and_json_are_still_told_apart(self):
+        from slumdog.relay_columns import looks_like_columns_body
+
+        assert not looks_like_columns_body(
+            b"<html><body><div class='rcnt'></div></body></html>")
+        assert not looks_like_columns_body(b'[[{"id": 1}]]')
+        assert not looks_like_columns_body(b'{"format": "something_else"}')
+        assert not looks_like_columns_body(b"{ truncated")
