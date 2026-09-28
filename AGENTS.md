@@ -251,6 +251,15 @@ channels in the same run, and the same renderer serves every other sport
 from the same egress, so the offset measured on football is a measurement
 of the renderer — not an assumption about hockey.
 
+**Measured live, run 36404825813 (2026-09-28):** offset **-120 minutes**
+(UTC-2), 40 joined matches, 10 distinct rendered hours, no scatter. The
+red-team finding two days earlier measured **-300** (UTC-5) on the same
+endpoint. The renderer's clock moved three hours between runs, which is
+the whole argument for never carrying a calibration forward: a cached
+offset would have placed every kickoff three hours from where it is, and
+a pick would have been admitted as "pre-event" against a match already
+under way.
+
 It refuses unless all of the following hold, because a wrong offset does
 not look wrong: it yields a kickoff that parses, sorts and prints
 perfectly while admitting a match that has already started.
