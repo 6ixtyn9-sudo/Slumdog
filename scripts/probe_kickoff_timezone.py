@@ -1170,7 +1170,9 @@ def relay_get_selector(url: str, selector: str, *, timeout: int) -> bytes:
 
 def collector_end_to_end(date: str, *, timeout: int, pause: float,
                          sport: str = "hockey",
-                         slice_seconds: float = 240.0) -> dict[str, Any]:
+                         slice_seconds: float = 240.0,
+                         circuit_breaker_columns: int = 0,
+                         circuit_breaker_attempts: int = 1) -> dict[str, Any]:
     """Drive the PRODUCTION capture path, not a probe-shaped copy of it.
 
     Everything proven about the column route so far was proven by calling
@@ -1204,11 +1206,20 @@ def collector_end_to_end(date: str, *, timeout: int, pause: float,
         root = Path(tmp)
         receipt = f"capture_probe_{date}.json"
         try:
-            collector = ForebetCollector(root=root, timeout=timeout,
-                                         workers=1, before_request=guard)
+            collector = ForebetCollector(
+                root=root, timeout=timeout, workers=1, before_request=guard,
+                circuit_breaker_columns=circuit_breaker_columns,
+                circuit_breaker_attempts=circuit_breaker_attempts)
+            # pause_seconds must be > 0 (not literally 0) to route through
+            # capture_selected's TIMED serial path rather than its untimed
+            # parallel one — that is what populates the receipt's
+            # capture_timing (elapsed/requests/outcome), which this probe
+            # needs to report and which is otherwise silently empty. A
+            # single-sport list never actually pauses (pause_seconds only
+            # applies between the 2nd+ sport in one call), so this is free.
             collector.capture_selected(date, [sport], force=True,
                                        receipt_name=receipt,
-                                       pause_seconds=0)
+                                       pause_seconds=0.001)
         except Exception as exc:  # noqa: BLE001 - reported, not raised
             record["verdict"] = f"capture failed: {type(exc).__name__}: {exc}"[:240]
             # One coarse request to separate "the renderer refused us" from
@@ -1230,6 +1241,12 @@ def collector_end_to_end(date: str, *, timeout: int, pause: float,
         captured = payload.get("captured") or []
         record["captured"] = len(captured)
         record["failures"] = (payload.get("failures") or [])[:2]
+        # Priority 1 (2026-09-28): the per-sport-date timing this stage's
+        # single sport went through, straight from the production receipt
+        # (elapsed_seconds/requests/outcome) — the same field the forward
+        # pass writes, so this is a live measurement of the actual code
+        # path, not a re-derivation of it.
+        record["capture_timing"] = payload.get("capture_timing") or []
         # 403 and 422 are different animals wearing one failure string:
         # 422 is "your selector matched nothing", 403 is "you are being
         # refused". Counting them per run is how the difference between a
@@ -1284,6 +1301,88 @@ def collector_end_to_end(date: str, *, timeout: int, pause: float,
                 f"capture unreadable: {type(exc).__name__}: {exc}"[:240])
     record["seconds"] = round(time.monotonic() - started, 1)
     return record
+
+
+def circuit_breaker_measurement(date: str, *, timeout: int, pause: float,
+                                sport: str = "volleyball",
+                                far_offset_days: int = 5,
+                                slice_seconds: float = 240.0
+                                ) -> dict[str, Any]:
+    """Measure the circuit breaker (Priority 1, scoped 2026-09-28) live,
+    against the real relay, instead of re-dispatching the 350-minute
+    Forward Shadow job to find out.
+
+    Unit tests already prove the retry arithmetic deterministically against
+    a fake opener (tests/test_relay_columns.py::TestCircuitBreaker); what
+    they cannot prove is whether the real source's live refusal behaviour
+    matches the assumptions the breaker is built on. Two things are not
+    yet known live, and both matter before the forward pass is allowed to
+    rely on this:
+
+    1. On a board that almost certainly does NOT exist yet (``date`` +
+       ``far_offset_days``, mirroring the forward pass's D+2..D+6 reach),
+       does the breaker actually abort cheaply (~2-3 requests), or does the
+       live refusal not look like the clean HTTP 422 the breaker is scoped
+       to trip on?
+    2. On a board that almost certainly DOES exist (``date`` itself — this
+       probe already runs against "tomorrow" by default), does turning the
+       breaker on cost a FALSE ABORT — the exact failure mode Section 1 of
+       the owner's correction was about?
+
+    Both go through ``collector_end_to_end``, i.e. the real production
+    path (``ForebetCollector.capture_selected`` -> ``capture_board`` ->
+    ``fetch_board_columns``), with ``circuit_breaker_columns=2`` explicitly
+    opted in — exactly as ``forward_shadow_batch.run_capture`` does — so
+    this is a measurement of the shipped code, not a probe-shaped copy of
+    it. Each half's ``capture_timing`` (elapsed/requests/outcome) comes
+    straight from the production receipt.
+    """
+    far_date = (dt.date.fromisoformat(date)
+               + dt.timedelta(days=far_offset_days)).isoformat()
+    out: dict[str, Any] = {"near_date": date, "far_date": far_date,
+                           "sport": sport}
+    half_budget = max(60.0, slice_seconds / 2)
+
+    if time_left() < 90:
+        out["verdict"] = "skipped: out of time budget"
+        return out
+
+    out["near"] = collector_end_to_end(
+        date, timeout=timeout, pause=pause, sport=sport,
+        slice_seconds=min(half_budget, time_left() - 30),
+        circuit_breaker_columns=2, circuit_breaker_attempts=1)
+    pace(min(pause, 5))
+
+    if time_left() < 60:
+        out["far"] = {"verdict": "skipped: out of time budget"}
+    else:
+        out["far"] = collector_end_to_end(
+            far_date, timeout=timeout, pause=pause, sport=sport,
+            slice_seconds=min(half_budget, time_left() - 20),
+            circuit_breaker_columns=2, circuit_breaker_attempts=1)
+
+    near_timing = (out["near"].get("capture_timing") or [{}])[0]
+    far_timing = (out["far"].get("capture_timing") or [{}])[0]
+    # The two questions this function exists to answer, read straight off
+    # the timing this run actually produced — not inferred, not assumed.
+    out["comparison"] = {
+        "near_requests": near_timing.get("requests"),
+        "near_outcome": near_timing.get("outcome"),
+        "near_false_abort": bool(
+            near_timing.get("outcome", "").startswith("COVERAGE_GAP")
+            and "circuit breaker" in "; ".join(out["near"].get("failures") or [])),
+        "far_requests": far_timing.get("requests"),
+        "far_outcome": far_timing.get("outcome"),
+        "far_breaker_tripped": "circuit breaker" in "; ".join(
+            out["far"].get("failures") or []),
+        # Static reference, not re-measured live: the documented,
+        # test-verified cost of the SAME board with the breaker off
+        # (len(selectors) * attempts, 8 * 3 by default). Requests are
+        # actually counted for the "on" side above; this is only context
+        # for how much a trip would have saved, not a live comparison run.
+        "no_breaker_reference_requests": 24,
+    }
+    return out
 
 
 def settlement_probe(date: str, *, timeout: int, pause: float,
@@ -3099,11 +3198,64 @@ def main(argv: list[str] | None = None) -> int:
                              "the job be killed before it can report")
     parser.add_argument("--out", type=Path, default=None,
                         help="write the full JSON report here")
+    parser.add_argument(
+        "--circuit-breaker-probe", action="store_true",
+        help=("Priority 1 (2026-09-28): measure the column-route circuit "
+              "breaker live instead of running the full diagnostic sweep "
+              "or re-dispatching the 350-minute Forward Shadow job. "
+              "Captures --date (likely published) and --date plus "
+              "--far-offset-days (likely absent), both with the breaker "
+              "opted in, and reports capture_timing for each."))
+    parser.add_argument(
+        "--far-offset-days", type=int, default=5,
+        help="days past --date for the likely-absent half of "
+             "--circuit-breaker-probe (default 5, mirroring the forward "
+             "pass's D+2..D+6 reach)")
     args = parser.parse_args(argv)
 
     dt.date.fromisoformat(args.date)
     set_deadline(args.budget_seconds)
     emit_heartbeat(args.date, args.sport)
+
+    if args.circuit_breaker_probe:
+        # Deliberately bypasses run_probe()'s dozens of legacy stages: this
+        # is a small, targeted, fast measurement (2 real captures), not
+        # another claimant on the multi-stage budget scheduler those
+        # stages already share tightly.
+        report = {
+            "probed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "target_date": args.date,
+            "mode": "circuit_breaker_probe",
+        }
+        try:
+            report["circuit_breaker_measurement"] = circuit_breaker_measurement(
+                args.date, timeout=args.timeout, pause=args.pause,
+                sport=args.sport if args.sport in SPORTS else "volleyball",
+                far_offset_days=args.far_offset_days,
+                slice_seconds=min(args.budget_seconds - 60, 240.0))
+        except Exception as exc:  # a crashed probe must still report
+            import traceback
+            report["crashed"] = f"{type(exc).__name__}: {exc}"
+            report["traceback"] = traceback.format_exc()[-1500:]
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(json.dumps(report, indent=2, sort_keys=True))
+        print(json.dumps(report, indent=2, sort_keys=True))
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            blob = json.dumps(
+                report.get("circuit_breaker_measurement") or {},
+                sort_keys=True)[:2600]
+            print(f"::notice title=probe:circuit_breaker_measurement::"
+                  f"{_annotation_escape(blob)}", flush=True)
+        # Exit 0 whenever both halves produced a receipt-backed verdict
+        # (capture_timing present), whatever that verdict was — a false
+        # abort or a failed trip is itself the answer, not a probe failure.
+        measurement = report.get("circuit_breaker_measurement") or {}
+        answered = bool(
+            (measurement.get("near") or {}).get("capture_timing")
+            and (measurement.get("far") or {}).get("capture_timing"))
+        return 0 if answered else 1
+
     try:
         report = run_probe(args.date, sport=args.sport, timeout=args.timeout,
                               pause=args.pause, run_hunt=args.hunt,

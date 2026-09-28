@@ -2764,6 +2764,209 @@ class TestTheProductionPathIsDrivenEndToEnd:
         assert Path("data/reports/capture_probe_2026-09-29.json").exists() is False
 
 
+class TestCollectorEndToEndReportsCaptureTiming:
+    """Priority 1 (2026-09-28), item (iii) of the owner's follow-up: this
+    probe must surface capture_selected's capture_timing, not just the
+    receipt's captured/failures counts, and must use pause_seconds>0 (not
+    literally 0) to actually populate it."""
+
+    def test_pause_seconds_is_nonzero_so_the_timed_path_is_used(
+            self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        seen = {}
+
+        class _Collector:
+            def __init__(self, root=None, **kwargs):
+                self.root = Path(root)
+
+            def capture_selected(self, target_date, sports=None,
+                                 force=False, receipt_name=None,
+                                 pause_seconds=0, **kwargs):
+                seen["pause_seconds"] = pause_seconds
+                reports = self.root / "data" / "reports"
+                reports.mkdir(parents=True, exist_ok=True)
+                (reports / receipt_name).write_text(json.dumps(
+                    {"captured": [], "failures": []}))
+                return []
+
+        monkeypatch.setattr("slumdog.forebet.ForebetCollector", _Collector)
+        probe.collector_end_to_end("2026-09-29", timeout=1, pause=0)
+        assert seen["pause_seconds"] > 0
+
+    def test_capture_timing_is_read_from_the_receipt(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        class _Collector:
+            def __init__(self, root=None, **kwargs):
+                self.root = Path(root)
+
+            def capture_selected(self, target_date, sports=None,
+                                 force=False, receipt_name=None,
+                                 pause_seconds=0, **kwargs):
+                reports = self.root / "data" / "reports"
+                reports.mkdir(parents=True, exist_ok=True)
+                (reports / receipt_name).write_text(json.dumps({
+                    "captured": [], "failures": ["x:ValueError:boom"],
+                    "capture_timing": [{
+                        "sport": "volleyball", "elapsed_seconds": 1.5,
+                        "requests": 2, "outcome": "COVERAGE_GAP"}],
+                }))
+                return []
+
+        monkeypatch.setattr("slumdog.forebet.ForebetCollector", _Collector)
+        record = probe.collector_end_to_end("2026-09-29", timeout=1, pause=0)
+        assert record["capture_timing"] == [{
+            "sport": "volleyball", "elapsed_seconds": 1.5,
+            "requests": 2, "outcome": "COVERAGE_GAP"}]
+
+    def test_circuit_breaker_columns_is_forwarded_to_the_collector(
+            self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        seen = {}
+
+        class _Collector:
+            def __init__(self, root=None, circuit_breaker_columns=0,
+                        circuit_breaker_attempts=1, **kwargs):
+                seen["circuit_breaker_columns"] = circuit_breaker_columns
+                seen["circuit_breaker_attempts"] = circuit_breaker_attempts
+                self.root = Path(root)
+
+            def capture_selected(self, target_date, sports=None,
+                                 force=False, receipt_name=None,
+                                 pause_seconds=0, **kwargs):
+                reports = self.root / "data" / "reports"
+                reports.mkdir(parents=True, exist_ok=True)
+                (reports / receipt_name).write_text(json.dumps(
+                    {"captured": [], "failures": []}))
+                return []
+
+        monkeypatch.setattr("slumdog.forebet.ForebetCollector", _Collector)
+        probe.collector_end_to_end(
+            "2026-09-29", timeout=1, pause=0, circuit_breaker_columns=2)
+        assert seen["circuit_breaker_columns"] == 2
+
+
+class TestCircuitBreakerMeasurement:
+    """The live, two-capture measurement the owner asked for instead of a
+    re-dispatch of the 350-minute Forward Shadow job: does the breaker
+    abort a likely-absent board cheaply, and does it NOT falsely abort a
+    likely-published one."""
+
+    def _stub(self, monkeypatch, *, near, far):
+        import scripts.probe_kickoff_timezone as probe
+        calls = []
+
+        def _fake_e2e(date, *, timeout, pause, sport, slice_seconds,
+                     circuit_breaker_columns=0, circuit_breaker_attempts=1):
+            calls.append({"date": date,
+                          "circuit_breaker_columns": circuit_breaker_columns})
+            return near if len(calls) == 1 else far
+
+        monkeypatch.setattr(probe, "collector_end_to_end", _fake_e2e)
+        monkeypatch.setattr(probe, "pace", lambda *a, **k: None)
+        monkeypatch.setattr(probe, "time_left", lambda: 600.0)
+        return calls
+
+    def test_the_far_date_is_offset_from_the_near_date(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        calls = self._stub(
+            monkeypatch,
+            near={"capture_timing": [{"requests": 24,
+                                      "outcome": "CAPTURED:relay_columns"}],
+                  "failures": []},
+            far={"capture_timing": [{"requests": 2,
+                                     "outcome": "COVERAGE_GAP"}],
+                 "failures": ["v 2026-10-03: circuit breaker tripped"]})
+        out = probe.circuit_breaker_measurement(
+            "2026-09-29", timeout=5, pause=0, far_offset_days=5)
+        assert out["near_date"] == "2026-09-29"
+        assert out["far_date"] == "2026-10-04"
+        assert calls[0]["date"] == "2026-09-29"
+        assert calls[1]["date"] == "2026-10-04"
+        # The forward pass's exact opt-in, on both halves.
+        assert calls[0]["circuit_breaker_columns"] == 2
+        assert calls[1]["circuit_breaker_columns"] == 2
+
+    def test_a_cheap_trip_on_the_far_board_is_recognised(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        self._stub(
+            monkeypatch,
+            near={"capture_timing": [{"requests": 24,
+                                      "outcome": "CAPTURED:relay_columns"}],
+                  "failures": []},
+            far={"capture_timing": [{"requests": 2,
+                                     "outcome": "COVERAGE_GAP"}],
+                 "failures": ["v 2026-10-04: circuit breaker tripped — ..."]})
+        out = probe.circuit_breaker_measurement(
+            "2026-09-29", timeout=5, pause=0)
+        assert out["comparison"]["far_requests"] == 2
+        assert out["comparison"]["far_breaker_tripped"] is True
+        assert out["comparison"]["near_false_abort"] is False
+
+    def test_a_false_abort_on_the_near_board_is_recognised(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        self._stub(
+            monkeypatch,
+            near={"capture_timing": [{"requests": 2,
+                                      "outcome": "COVERAGE_GAP"}],
+                  "failures": ["v 2026-09-29: circuit breaker tripped — ..."]},
+            far={"capture_timing": [{"requests": 2,
+                                     "outcome": "COVERAGE_GAP"}],
+                 "failures": ["v 2026-10-04: circuit breaker tripped — ..."]})
+        out = probe.circuit_breaker_measurement(
+            "2026-09-29", timeout=5, pause=0)
+        assert out["comparison"]["near_false_abort"] is True
+
+    def test_skips_cleanly_when_the_budget_is_already_gone(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        monkeypatch.setattr(probe, "time_left", lambda: 10.0)
+        out = probe.circuit_breaker_measurement(
+            "2026-09-29", timeout=5, pause=0)
+        assert "skipped" in out["verdict"]
+
+
+class TestCircuitBreakerProbeCLI:
+    def test_the_flag_bypasses_the_full_diagnostic_sweep(
+            self, monkeypatch, capsys):
+        import scripts.probe_kickoff_timezone as probe
+
+        def _boom(*a, **k):
+            raise AssertionError("run_probe must not run under --circuit-breaker-probe")
+
+        monkeypatch.setattr(probe, "run_probe", _boom)
+        monkeypatch.setattr(
+            probe, "circuit_breaker_measurement",
+            lambda *a, **k: {
+                "near_date": "2026-09-29", "far_date": "2026-10-04",
+                "near": {"capture_timing": [{"outcome": "CAPTURED:direct"}]},
+                "far": {"capture_timing": [{"outcome": "COVERAGE_GAP"}]},
+                "comparison": {"far_breaker_tripped": True,
+                              "near_false_abort": False}})
+        rc = probe.main([
+            "--date", "2026-09-29", "--circuit-breaker-probe",
+            "--budget-seconds", "300",
+        ])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "circuit_breaker_measurement" in out
+        assert "far_breaker_tripped" in out
+
+    def test_an_unanswered_probe_exits_nonzero(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "run_probe", lambda *a, **k: {})
+        monkeypatch.setattr(
+            probe, "circuit_breaker_measurement",
+            lambda *a, **k: {"verdict": "skipped: out of time budget"})
+        rc = probe.main([
+            "--date", "2026-09-29", "--circuit-breaker-probe",
+            "--budget-seconds", "300",
+        ])
+        assert rc == 1
+
+
 class TestTheOpenQuestionsAreAskedInPasses:
     """Run 36407370005 spent three stages' slices retrying refusals that
     were still in force seconds later, and answered nothing. The refusals
