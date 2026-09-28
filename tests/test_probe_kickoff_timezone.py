@@ -8,7 +8,6 @@ No test here touches the network.
 from __future__ import annotations
 
 import time
-import urllib.error
 import datetime as dt
 import json
 
@@ -2269,3 +2268,43 @@ class TestHorizonCoverage:
             assert "out of time" in out["rugby"]["verdict"]
         finally:
             probe.set_deadline(None)
+
+
+class TestTargetDateAnchorsTheOrder:
+    """Rugby was lost to an unreadable date order: its board held 10/01 and
+    10/02, both readable either way. The board URL settles it — a board
+    fetched for a date is mostly that date's matches, so the reading that
+    reproduces the date asked for is the board's order. No extra request."""
+
+    def test_the_requested_date_settles_an_ambiguous_board(self):
+        from slumdog.relay_columns import MONTH_FIRST, infer_date_order
+
+        cells = ["[A B 10/01/2026 3:00 PM](u)", "[C D 10/02/2026 1:00 PM](u)"]
+        assert infer_date_order(cells) is None
+        assert infer_date_order(cells, "2026-10-01") == MONTH_FIRST
+
+    def test_a_day_first_board_anchors_the_other_way(self):
+        from slumdog.relay_columns import DAY_FIRST, infer_date_order
+
+        cells = ["[A B 01/10/2026 3:00 PM](u)"]
+        assert infer_date_order(cells, "2026-10-01") == DAY_FIRST
+
+    def test_shape_evidence_still_wins_over_the_anchor(self):
+        from slumdog.relay_columns import MONTH_FIRST, infer_date_order
+
+        cells = ["[A B 09/27/2026](u)", "[C D 10/01/2026](u)"]
+        assert infer_date_order(cells, "2026-01-10") == MONTH_FIRST
+
+    def test_a_date_that_reads_both_ways_settles_nothing(self):
+        from slumdog.relay_columns import infer_date_order
+
+        # 05/05 is the same date under either reading, so it proves nothing
+        # about the board; a caller must still refuse.
+        assert infer_date_order(["[A B 05/05/2026](u)"], "2026-05-05") is None
+
+    def test_an_anchor_that_matches_nothing_settles_nothing(self):
+        from slumdog.relay_columns import infer_date_order
+
+        assert infer_date_order(["[A B 03/04/2026](u)"], "2026-12-25") is None
+
+

@@ -534,12 +534,14 @@ class TestDateOrderIsMeasuredNotAssumed:
         assert event_day_from_kickoff("30/09/2026", MONTH_FIRST) is None
 
     def test_a_board_with_no_readable_order_is_refused(self):
+        # Every date reads both ways AND the anchor is symmetric (05/05),
+        # so neither the board nor the URL settles the order.
         bodies = _full_board(2)
         bodies[scoped(".tnms")] = (
-            b"[A B 05/06/2026 2:00 AM](https://f/m/a-1)\n"
+            b"[A B 05/05/2026 2:00 AM](https://f/m/a-1)\n"
             b"[C D 07/08/2026 2:00 AM](https://f/m/c-2)")
-        result = capture_board(BOARD, "basketball", "2026-05-06",
-                               captured_at="2026-05-05T04:00:00Z",
+        result = capture_board(BOARD, "basketball", "2026-05-05",
+                               captured_at="2026-05-04T04:00:00Z",
                                opener=_opener(bodies),
                                sleep=lambda _s: None)
         assert result.status == COVERAGE_GAP

@@ -69,6 +69,8 @@ from slumdog.relay_columns import (  # noqa: E402
     capture_board,
 )
 from slumdog.relay_columns import (  # noqa: E402
+    DAY_FIRST,
+    MONTH_FIRST,
     ROW_SCOPE,
     event_day_from_kickoff,
     infer_date_order,
@@ -822,7 +824,8 @@ UNPROBED_SPORTS: tuple[str, ...] = (
 
 
 def coverage_sweep(date: str, *, timeout: int, pause: float,
-                   sports: tuple[str, ...] = UNPROBED_SPORTS) -> dict[str, Any]:
+                   sports: tuple[str, ...] = UNPROBED_SPORTS,
+                   order: str | None = None) -> dict[str, Any]:
     """One row-scoped request per sport: does this route reach it at all?
 
     The scope ':has(.fprc):has(.tnms)' only matches if the board uses the
@@ -861,16 +864,24 @@ def coverage_sweep(date: str, *, timeout: int, pause: float,
         text = strip_wrapper(body)
         links = re.findall(r"\[([^\]]{3,120})\]\((https?://[^)]+)\)", text)
         labels = [label for label, _href in links]
-        order = infer_date_order(labels)
+        order = order or infer_date_order(labels)
         days = Counter()
+        either = set()
         for label in labels:
             day = event_day_from_kickoff(label, order) if order else None
             if day:
                 days[day] += 1
+            # Candidate dates under either reading, for boards that cannot
+            # settle their own order.
+            for candidate in (MONTH_FIRST, DAY_FIRST):
+                both = event_day_from_kickoff(label, candidate)
+                if both:
+                    either.add(both)
         out[sport] = {
             "bytes": len(body),
             "links": len(links),
             "date_order": order or "AMBIGUOUS",
+            "dates_either": sorted(either)[:8],
             "dates": dict(days.most_common(5)),
             "on_target_date": days.get(date, 0),
             "sample": links[0][0][:90] if links else text[:120],
@@ -901,7 +912,12 @@ def horizon_coverage(date: str, *, timeout: int, pause: float,
         sweep = coverage_sweep(date, timeout=timeout, pause=pause,
                                sports=(sport,))
         found = sweep.get(sport, {})
-        dates = sorted(d for d in (found.get("dates") or {}) if d >= date)
+        # A board whose dates all read both ways yields nothing here. The
+        # capture resolves that for itself: it anchors on the date it asked
+        # for. So consider candidates under both readings and let the
+        # capture reject the wrong one.
+        dates = sorted({d for d in (found.get("dates_either") or
+                                    found.get("dates") or {}) if d >= date})
         if not dates:
             out[sport] = {"verdict": "no future dates on the board",
                           "sweep": found}

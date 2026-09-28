@@ -328,7 +328,8 @@ MONTH_FIRST = "MDY"
 DAY_FIRST = "DMY"
 
 
-def infer_date_order(cells: list[str]) -> str | None:
+def infer_date_order(cells: list[str],
+                     target_date: str | None = None) -> str | None:
     """Work out whether a board renders month-first or day-first.
 
     Assuming month-first was a live bug waiting to happen. Basketball
@@ -358,7 +359,23 @@ def infer_date_order(cells: list[str]) -> str | None:
         return MONTH_FIRST
     if day_first:
         return DAY_FIRST
-    return None
+
+    # Nothing on the board settles it — every date reads both ways, which
+    # is the normal case in the first twelve days of a month. Rugby was
+    # lost exactly here: its board held 10/01 and 10/02 and was refused as
+    # unreadable, though it was perfectly reachable.
+    #
+    # The URL is the anchor. A board fetched for a given date is mostly
+    # that date's matches, so whichever reading reproduces the date we
+    # asked for is the board's order. If both readings can produce it
+    # (2026-05-05) or neither does, nothing has been settled and the
+    # caller must still refuse.
+    if not target_date:
+        return None
+    matches = {order for order in (MONTH_FIRST, DAY_FIRST)
+               if any(event_day_from_kickoff(cell, order) == target_date
+                      for cell in cells)}
+    return matches.pop() if len(matches) == 1 else None
 
 
 def event_day_from_kickoff(value: str, order: str = MONTH_FIRST) -> str | None:
@@ -421,7 +438,8 @@ def rows_to_events(board: BoardColumns, *, captured_at: str,
     not trustworthy enough to reassign one.
     """
     spec = SPORTS[board.sport]
-    order = infer_date_order(board.columns.get("link", []))
+    order = infer_date_order(board.columns.get("link", []),
+                             board.target_date)
     if order is None:
         raise ColumnAlignmentError(
             f"{board.sport} {board.target_date}: cannot tell whether this "
@@ -505,7 +523,8 @@ class BoardCapture:
 
 
 def observed_dates(columns: dict[str, list[str]],
-                   order: str | None = None) -> tuple[str, ...]:
+                   order: str | None = None,
+                   target_date: str | None = None) -> tuple[str, ...]:
     """Distinct dates the board rendered, earliest first.
 
     This is the measurement that tells us how far ahead each sport
@@ -513,7 +532,7 @@ def observed_dates(columns: dict[str, list[str]],
     it is recorded even when it contains nothing for the requested date.
     """
     cells = columns.get("link", [])
-    order = order or infer_date_order(cells)
+    order = order or infer_date_order(cells, target_date)
     if order is None:
         return ()
     seen = {day for cell in cells if (day := event_day_from_kickoff(cell, order))}
@@ -570,7 +589,7 @@ def capture_board(board_url: str, sport: str, target_date: str, *,
                             target_date=target_date, source_url=board_url,
                             reason=str(exc))
 
-    days = observed_dates(board.columns)
+    days = observed_dates(board.columns, target_date=target_date)
     try:
         events = rows_to_events(board, captured_at=captured_at,
                                 raw_sha256=raw_sha256)
