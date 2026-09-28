@@ -1723,13 +1723,16 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
     # Coverage is the question in hand and gets the budget first. The sweep
     # has already answered reachability for every sport, so it only reruns
     # when there is time to spare; row_blocks is retired for the same reason.
-    report["r1_coverage"] = r1_coverage(date, timeout=timeout, pause=pause)
-
-    # The four above are proven; these publish further out and need their
-    # own horizon captured before the mandate can claim them.
+    # Whatever is still unanswered goes first. Basketball, hockey, handball
+    # and volleyball are proven; rugby, mma and cricket are reachable but
+    # have never been captured at the dates they actually publish, and in
+    # run 36379077488 they were skipped entirely because the proven four
+    # spent the budget re-proving themselves.
     report["horizon_coverage"] = horizon_coverage(
         date, timeout=timeout, pause=pause,
         sports=("rugby", "mma", "cricket"))
+
+    report["r1_coverage"] = r1_coverage(date, timeout=timeout, pause=pause)
 
     if time_left() > 300:
         report["coverage_sweep"] = coverage_sweep(date, timeout=timeout,
