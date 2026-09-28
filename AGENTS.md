@@ -179,6 +179,25 @@ that must not be relaxed:
   row's own rendered day is the day being settled. A live or postponed row
   is skipped, never graded on whatever numbers are showing.
 
+## Identity Across Routes
+
+A column capture emits `"<sport>:<id>"`, the same identity
+`parsers.parse_football_json` and `settlement._base_row` use. A bare id
+looks correct in isolation and never joins to its own settlement row, so
+the capture and the grade would silently describe different matches.
+
+## Fixtures Longer Than A Day
+
+Cricket's kickoff column came back 8 rows long on a 13-row board every
+run, and a short required column discards the board. The five missing rows
+were multi-day matches: a Test renders a RANGE (`.dtrange`,
+`08/05 - 11/05/2026`) where a one-day fixture renders a start
+(`.date_bah`). `SPORT_COLUMN_OVERRIDES` asks for both, `scoped()` scopes
+every part of a selector list (scoping only the first would let the rest
+match the whole document), and a range resolves to the day it **begins** —
+a pick frozen 24h before the last day of a Test would be frozen three days
+after the match started.
+
 ## Market Shape Is Not Outcome Space
 
 `SportSpec.draw_possible` says how many outcomes the board **prices**.

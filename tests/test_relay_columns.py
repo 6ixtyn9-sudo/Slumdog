@@ -244,7 +244,8 @@ class TestEventConversion:
         events = rows_to_events(self._board(3), captured_at="2026-09-27T04:00:00Z")
         assert len(events) == 3
         first = events[0]
-        assert first.event_id == "2500000"
+        # "<sport>:<id>" — the identity the rest of the system joins on.
+        assert first.event_id == "basketball:2500000"
         assert (first.participant_1, first.participant_2) == ("Team0", "Rival0")
         assert first.sport == "basketball" and first.event_date == "2026-09-27"
         assert first.probability_1 == 0.71 and first.probability_2 == 0.29
@@ -263,7 +264,7 @@ class TestEventConversion:
         board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
                                     sleep=lambda _s: None, opener=_opener(bodies))
         events = rows_to_events(board, captured_at="2026-09-27T04:00:00Z")
-        assert [e.event_id for e in events] == ["1111"]
+        assert [e.event_id for e in events] == ["basketball:1111"]
 
     def test_an_unreadable_probability_drops_the_row_rather_than_guessing(self):
         bodies = _full_board(2)
@@ -561,7 +562,7 @@ class TestDateOrderIsMeasuredNotAssumed:
                                opener=_opener(bodies),
                                sleep=lambda _s: None)
         assert result.status == CAPTURED
-        assert [e.event_id for e in result.events] == ["1111"]
+        assert [e.event_id for e in result.events] == ["basketball:1111"]
         assert result.observed_dates == ("2026-09-28", "2026-09-30")
 
 
@@ -724,7 +725,7 @@ class TestSettlementNeedsAFinalScore:
     def test_final_rows_are_graded(self):
         rows = settled_rows(self._board(["FT"], ["3 - 1"]))
         assert len(rows) == 1
-        assert rows[0]["event_id"] == "387410"
+        assert rows[0]["event_id"] == "hockey:387410"
         assert (rows[0]["score_1"], rows[0]["score_2"]) == (3.0, 1.0)
         assert rows[0]["winner_index"] == 1
 
@@ -747,8 +748,9 @@ class TestSettlementNeedsAFinalScore:
         board = self._board(["FT"], ["3 - 1"])
         captured = rows_to_events(board, captured_at="2026-09-29T06:00:00Z")
         settled = settled_rows(board)
-        assert [event.event_id.split(":")[-1] for event in captured] == \
+        assert [event.event_id for event in captured] == \
             [row["event_id"] for row in settled]
+        assert captured[0].event_id.startswith("hockey:")
 
     def test_a_row_from_another_day_is_not_graded(self):
         board = self._board(["FT"], ["3 - 1"])
@@ -838,3 +840,60 @@ class TestTheCaptureAnswersToItsCaller:
                                 before_request=guard,
                                 sleep=lambda _s: None)
         assert seen["n"] >= len(COLUMN_SELECTORS)
+
+
+class TestAMatchThatLastsMoreThanADay:
+    """Cricket returned a kickoff column 8 rows long on a 13-row board,
+    every run, and a short required column discards the whole board. The
+    five missing rows were multi-day matches, which render a date RANGE
+    instead of a start time."""
+
+    def test_both_date_markups_are_asked_for(self):
+        from slumdog.relay_columns import selectors_for
+
+        assert selectors_for("cricket")["kickoff"] == ".date_bah, .dtrange"
+        assert selectors_for("hockey")["kickoff"] == ".date_bah"
+
+    def test_every_part_of_a_selector_list_is_scoped(self):
+        """Scoping only the first part would let the rest match the whole
+        document — the exact leak the row scope exists to close."""
+        out = scoped(".date_bah, .dtrange")
+        assert out.count(ROW_SCOPE) == 2
+        assert out == f"{ROW_SCOPE} .date_bah, {ROW_SCOPE} .dtrange"
+
+    def test_a_range_resolves_to_the_day_it_begins(self):
+        """A pick frozen 24h before the LAST day of a Test would be frozen
+        three days after the match started."""
+        assert event_day_from_kickoff("08/05 - 11/05/2026",
+                                      DAY_FIRST) == "2026-05-08"
+        assert event_day_from_kickoff("05/08 - 05/11/2026",
+                                      MONTH_FIRST) == "2026-05-08"
+
+    def test_an_en_dash_range_reads_the_same(self):
+        assert event_day_from_kickoff("08/05 \u2013 11/05/2026",
+                                      DAY_FIRST) == "2026-05-08"
+
+    def test_an_impossible_range_start_is_refused(self):
+        assert event_day_from_kickoff("40/05 - 11/05/2026", DAY_FIRST) is None
+
+    def test_a_single_day_fixture_is_unaffected(self):
+        assert event_day_from_kickoff("29/09/2026 19:00",
+                                      DAY_FIRST) == "2026-09-29"
+
+    def test_a_mixed_board_keeps_its_rows_aligned(self):
+        """One row per match either way: a selector list returns matches in
+        document order, so ranges and start times interleave correctly."""
+        board = BoardColumns(
+            sport="cricket", target_date="2026-05-08", source_url="u",
+            columns={
+                "link": ["[A B 08/05 - 11/05/2026](https://f/m/a-b/51396)",
+                         "[C D 08/05/2026 10:00](https://f/m/c-d/51397)"],
+                "home": ["A", "C"], "away": ["B", "D"],
+                "kickoff": ["08/05 - 11/05/2026", "08/05/2026 10:00"],
+                "probabilities": ["50 20 30", "40 25 35"],
+                "pick": ["1", "2"],
+            }, row_count=2)
+        events = rows_to_events(board, captured_at="2026-05-07T00:00:00Z")
+        assert [e.event_id for e in events] == ["cricket:51396",
+                                                "cricket:51397"]
+        assert {e.event_date for e in events} == {"2026-05-08"}

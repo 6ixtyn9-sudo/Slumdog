@@ -61,8 +61,17 @@ ROW_SCOPE = ".rcnt:has(.fprc):has(.tnms)"
 
 
 def scoped(selector: str, scope: str = ROW_SCOPE) -> str:
-    """A field selector restricted to complete rows."""
-    return f"{scope} {selector}" if scope else selector
+    """A field selector restricted to complete rows.
+
+    A comma-separated selector is scoped part by part. Scoping only the
+    first part would leave the rest matching the whole document — which
+    reads as a column longer than the board and fails alignment, or worse,
+    quietly pulls in rows the scope exists to exclude.
+    """
+    if not scope:
+        return selector
+    return ", ".join(f"{scope} {part.strip()}"
+                     for part in selector.split(",") if part.strip())
 
 
 COLUMN_SELECTORS: dict[str, str] = {
@@ -78,6 +87,29 @@ COLUMN_SELECTORS: dict[str, str] = {
     "predicted_score": ".ex_sc",
     "average": ".avg_sc",
 }
+
+# Per-sport selector differences, measured rather than guessed.
+#
+# Cricket returned kickoff for 8 of 13 rows on every run while every other
+# column returned 13, and a required column that short is fatal — so the
+# whole board was discarded. The five missing rows are multi-day matches:
+# a Test spans four days, so the board renders a RANGE (".dtrange",
+# "08/05 - 11/05/2026") where a one-day fixture renders a start
+# (".date_bah"). Both are the row's date; only the markup differs, which
+# settlement already knew (see settlement._base_row). A selector list
+# preserves document order, so the rows still line up one-to-one.
+SPORT_COLUMN_OVERRIDES: dict[str, dict[str, str]] = {
+    "cricket": {"kickoff": ".date_bah, .dtrange"},
+}
+
+
+def selectors_for(sport: str,
+                  base: dict[str, str] | None = None) -> dict[str, str]:
+    """The column selectors to use for one sport."""
+    merged = dict(base if base is not None else COLUMN_SELECTORS)
+    merged.update(SPORT_COLUMN_OVERRIDES.get(sport, {}))
+    return merged
+
 
 # Fields without which a row cannot be a pick: who is playing and when.
 # Without any one of these a row cannot become a ranked pick, so losing one
@@ -303,7 +335,7 @@ def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
     hand back a genuine-looking but partial listing, and a short board
     frozen as a complete one is indistinguishable from a quiet fixture day.
     """
-    selectors = selectors or COLUMN_SELECTORS
+    selectors = selectors_for(sport, selectors)
     required = required or REQUIRED_COLUMNS
     columns: dict[str, list[str]] = {}
     failures: list[str] = []
@@ -409,6 +441,12 @@ def infer_date_order(cells: list[str],
     return matches.pop() if len(matches) == 1 else None
 
 
+# A multi-day fixture renders as a range: "08/05 - 11/05/2026". Only the
+# end carries the year, so a plain search finds the LAST day.
+_DATE_RANGE = re.compile(
+    r"(\d{1,2})/(\d{1,2})\s*[-\u2013]\s*(\d{1,2})/(\d{1,2})/(\d{4})")
+
+
 def event_day_from_kickoff(value: str, order: str = MONTH_FIRST) -> str | None:
     """ISO day from a rendered kickoff such as ``09/27/2026 2:00 AM``.
 
@@ -416,7 +454,22 @@ def event_day_from_kickoff(value: str, order: str = MONTH_FIRST) -> str | None:
     read. Only the day is taken; the clock is deliberately ignored, because
     the renderer emits it in a timezone derived from the relay's egress IP
     rather than UTC.
+
+    A multi-day fixture (a cricket Test spans four days) resolves to the
+    day it BEGINS. The end date is the wrong answer in the way that
+    matters: a pick frozen "24 hours before" the last day of a Test would
+    be frozen three days after the match started, which is not a
+    prediction. Taking the start makes the freeze claim true or the row
+    excluded, never silently late.
     """
+    ranged = _DATE_RANGE.search(value)
+    if ranged:
+        first, second, _, _, year = ranged.groups()
+        month, day = ((first, second) if order == MONTH_FIRST
+                      else (second, first))
+        if 1 <= int(month) <= 12 and 1 <= int(day) <= 31:
+            return f"{year}-{int(month):02d}-{int(day):02d}"
+        return None
     match = _EVENT_DAY.search(value)
     if not match:
         return None
@@ -493,7 +546,11 @@ def rows_to_events(board: BoardColumns, *, captured_at: str,
         pick = row.get("pick", "").strip()
         totals = _NUMBER.findall(row.get("average", ""))
         events.append(EventSnapshot(
-            event_id=event_id_from_url(url),
+            # "<sport>:<id>", the identity every other route in this
+            # system uses (parsers.parse_football_json,
+            # settlement._base_row). A bare id here would look right in
+            # isolation and never join to its own settlement row.
+            event_id=f"{board.sport}:{event_id_from_url(url)}",
             sport=board.sport,
             event_date=board.target_date,
             captured_at=captured_at,
@@ -755,7 +812,7 @@ def settled_rows(board: BoardColumns) -> list[dict[str, Any]]:
             continue
         score_1, score_2 = scores
         out.append({
-            "event_id": event_id_from_url(url),
+            "event_id": f"{board.sport}:{event_id_from_url(url)}",
             "participant_1": row.get("home", "").strip(),
             "participant_2": row.get("away", "").strip(),
             "score_1": score_1,

@@ -2381,7 +2381,7 @@ class TestSettlementProbe:
         assert "score" in SETTLEMENT_REQUIRED_COLUMNS
         assert record["graded"] == 2
         assert record["sample"][0]["score"] == "3-1"
-        assert record["sample"][0]["event_id"] == "387400"
+        assert record["sample"][0]["event_id"] == "hockey:387400"
         assert record["sample"][1]["winner_index"] == 2
 
     def test_unfinished_matches_are_counted_but_not_graded(self, monkeypatch):
