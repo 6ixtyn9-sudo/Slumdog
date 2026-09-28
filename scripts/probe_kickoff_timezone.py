@@ -1053,9 +1053,13 @@ def render_clock_probe(date: str, *, timeout: int, pause: float,
         # One attempt, a short read timeout and a stage slice: the football
         # board is the largest page on the site, and a relay render that
         # drips bytes outlives a per-read timeout however small it is.
+        # Refusals move between minutes: the same column 422s on one
+        # request and answers on the next. One attempt was too stingy for
+        # the one measurement that unblocks every sport, and the slice
+        # bounds the cost either way.
         cells = fetch_column(url, scoped(".tnms"),
                              timeout=min(timeout, 40),
-                             column="link", attempts=1,
+                             column="link", attempts=3, backoff=6.0,
                              sleep=pace, before_request=guard)
         record["column_seconds"] = round(time.monotonic() - column_started, 1)
     except BudgetExhausted as exc:
@@ -1063,7 +1067,10 @@ def render_clock_probe(date: str, *, timeout: int, pause: float,
         record["seconds"] = round(time.monotonic() - started, 1)
         return record
     except Exception as exc:  # noqa: BLE001 - reported, not raised
-        record["verdict"] = f"rendered column unavailable: {type(exc).__name__}"
+        # The type alone is not the finding: a 422 from the renderer and a
+        # socket timeout are different problems wearing one exception.
+        record["verdict"] = (
+            f"rendered column unavailable: {type(exc).__name__}: {exc}"[:200])
         record["seconds"] = round(time.monotonic() - started, 1)
         return record
     rendered: dict[str, str] = {}
@@ -1172,7 +1179,7 @@ def settlement_probe(date: str, *, timeout: int, pause: float,
 
 def r1_coverage(date: str, *, timeout: int, pause: float,
                 sports: tuple[str, ...] = COVERAGE_SPORTS,
-                slice_seconds: float = 90.0) -> dict[str, Any]:
+                slice_seconds: float = 60.0) -> dict[str, Any]:
     """Can each sport produce a rankable field for this date?
 
     This calls the production capture path rather than a probe-local copy
