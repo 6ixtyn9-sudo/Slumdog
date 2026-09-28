@@ -49,6 +49,12 @@ near/far breaker probes, the repeated 422-everywhere runs) came from requesting 
 gate → 4. (iii) the valid breaker trial, taken during a window the availability map says is healthy → 5. (iv) request budget.** **Forward Shadow stays undispatched until 1 and 3 are in** — 1 landed this entry; 3
 has not started.
 
+**This push itself (`a426b50`) auto-triggered the probe again (run `36467771961`) — a THIRD consecutive invalid trial, same signature.** `canary.healthy=false`, `reason: "football tz=0 JSON looked like
+'challenge_page' (272 bytes)"`, `trial_valid=false` — the exact result the gate is supposed to produce, working correctly a third straight time rather than needing a third fix. Three site-wide-blocked runs now
+span this session's timeline; the morning's runs (`36419041728`, a5e5720) served cleanly. **This is itself the reframe's own evidence accumulating in real time**: the block is not a one-off, it has held for at
+least the span between `36455080098` and `36467771961` today, which is exactly the kind of pattern the staged cron (`docs/owner_paste/probe_canary_cron.yml`) exists to characterise precisely instead of by
+accident. Item (iii): three invalid trials on record (`36455080098`, `36461512749`, `36467771961`), zero valid ones — still open, unchanged conclusion from above.
+
 **2026-09-28 (same session, continued a fourth time) — RETRACTION: "3 vs 24 requests" WAS NOT A VALID CIRCUIT-BREAKER RESULT; ITEM (iii) IS NOT COMPLETE; A CANARY NOW LANDS IN EVERY RUN'S RECEIPT.**
 
 **Retracting the "3 vs 24 requests... real, measured request savings" line from the entry directly below this one.** That run (`36455080098`) was a **site-wide Cloudflare WAF challenge for its entire duration** — the
