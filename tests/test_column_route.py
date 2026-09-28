@@ -137,3 +137,58 @@ class TestAColumnCaptureIsReadBackAsEvents:
     def test_an_html_capture_is_not_sent_to_the_column_parser(self, tmp_path):
         html = b"<html><body><div class='rcnt'></div></body></html>"
         assert self._capture(tmp_path, html, body_format="html") == []
+
+
+class TestTheCollectorAnswersToItsCaller:
+    """Run 36409134160: one board cost 500 seconds inside a stage holding
+    a 110-second budget. A first HTML attempt plus eight column requests
+    with retries outlives any cap the caller thinks it has, unless the
+    caller is asked."""
+
+    def test_the_hook_runs_before_a_board_is_fetched(self, monkeypatch,
+                                                     tmp_path):
+        seen = {"n": 0}
+        monkeypatch.setattr(forebet, "fetch_with_fallback",
+                            lambda *a, **k: (b"x" * 400, "relay"))
+        monkeypatch.setattr(forebet, "validate_capture_body",
+                            lambda *a, **k: None)
+        collector = ForebetCollector(
+            tmp_path, before_request=lambda: seen.__setitem__("n", seen["n"] + 1))
+        collector._fetch("hockey", "2026-09-29")
+        assert seen["n"] == 1
+
+    def test_a_raising_hook_stops_the_capture(self, tmp_path, monkeypatch):
+        class OutOfTime(RuntimeError):
+            pass
+
+        def guard():
+            raise OutOfTime("slice spent")
+
+        called = {"n": 0}
+        monkeypatch.setattr(
+            forebet, "fetch_with_fallback",
+            lambda *a, **k: (called.__setitem__("n", called["n"] + 1),
+                             (b"", "relay"))[1])
+        with pytest.raises(OutOfTime):
+            ForebetCollector(tmp_path, before_request=guard)._fetch(
+                "hockey", "2026-09-29")
+        assert called["n"] == 0
+
+    def test_the_hook_reaches_the_column_fallback(self, monkeypatch,
+                                                  tmp_path):
+        _reject_html(monkeypatch)
+        seen = {}
+
+        def fake_capture(*args, **kwargs):
+            seen["before_request"] = kwargs.get("before_request")
+            return _column_capture(_board())
+
+        monkeypatch.setattr("slumdog.relay_columns.capture_board",
+                            fake_capture)
+        guard = lambda: None  # noqa: E731
+        ForebetCollector(tmp_path, before_request=guard)._fetch(
+            "hockey", "2026-09-29")
+        assert seen["before_request"] is guard
+
+    def test_production_passes_nothing_and_is_unchanged(self, tmp_path):
+        assert ForebetCollector(tmp_path).before_request is None

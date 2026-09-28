@@ -1158,7 +1158,7 @@ def collector_end_to_end(date: str, *, timeout: int, pause: float,
         receipt = f"capture_probe_{date}.json"
         try:
             collector = ForebetCollector(root=root, timeout=timeout,
-                                         workers=1)
+                                         workers=1, before_request=guard)
             collector.capture_selected(date, [sport], force=True,
                                        receipt_name=receipt,
                                        pause_seconds=0)

@@ -469,12 +469,22 @@ def validate_capture_body(body: bytes, sport: str, target_date: str, route: str)
 
 
 class ForebetCollector:
-    def __init__(self, root: Path | str = ".", timeout: int = 35, workers: int = 4):
+    def __init__(self, root: Path | str = ".", timeout: int = 35,
+                 workers: int = 4, before_request=None):
         self.root = Path(root)
         self.timeout = timeout
         self.workers = max(1, min(int(workers), 6))
+        # Optional callback invoked before each board is fetched and before
+        # each column request inside the fallback. A caller under a
+        # wall-clock cap needs a say: one board can cost a first HTML
+        # attempt plus eight column requests with retries, which outlived
+        # a 110-second budget by a factor of four in run 36409134160.
+        # Production passes nothing and is unchanged.
+        self.before_request = before_request
 
     def _fetch(self, sport: str, target_date: str) -> RawCapture:
+        if self.before_request is not None:
+            self.before_request()
         body_format = "html"
         spec = SPORTS[sport]
         target = source_url(spec, target_date)
@@ -524,7 +534,8 @@ class ForebetCollector:
                 result = capture_board(
                     target, sport, target_date,
                     captured_at=datetime.now(timezone.utc).isoformat(),
-                    timeout=self.timeout)
+                    timeout=self.timeout,
+                    before_request=self.before_request)
                 if result.status != CAPTURED:
                     raise ValueError(
                         f"{sport} {target_date}: html capture rejected and "
