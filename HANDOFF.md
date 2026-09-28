@@ -30,6 +30,26 @@ dispatch needed for future probe measurements.
 
 Full repo gate after all of the above: `pytest` — 1623 passed, 0 failed. `pyflakes`/`py_compile`/`git diff --check` on all touched files — clean. `scripts/check_workflow_evidence_globs.py` — 24/24 covered.
 
+**Unplanned but real: the `3de1b98` merge push itself auto-triggered the probe workflow, and its annotations were read back with zero owner involvement — the design this whole session has been building toward,
+working end to end for the first time.** `gh run list --branch arena/01a0e863-slumdog` shows run `36455080098` (`push`, `1348ded`'s workflow-file content now live on this branch), `job=probe` id `109039256770`,
+`conclusion=success`. `gh api repos/6ixtyn9-sudo/Slumdog/check-runs/109039256770/annotations` (no auth beyond the sandbox's own `gh` token, which is not repo-admin) returned all nine of the probe's sections —
+`probe:circuit_breaker_comparison`, `probe:stage_seconds`, `probe:passes_used`, `probe:render_clock`, `probe:settlement_probe`, `probe:collector_end_to_end`, `probe:circuit_breaker_far`, `probe:started`, and the two
+free-text "Kickoff timezone report"/"verdict" sections — confirming the anonymous-annotations claim is not just a theoretical 403-vs-200 test but actually works for this repo's own runs today.
+
+**The circuit-breaker comparison itself, from that run:**
+```
+circuit_breaker_comparison: far_breaker_tripped=true far_outcome=COVERAGE_GAP far_requests=3
+                             near_false_abort=true    near_outcome=COVERAGE_GAP near_requests=3
+                             no_breaker_worst_case_requests=24
+```
+Both the near (D+1) and far (D+6) boards refused with HTTP 422 on the first two columns and the breaker tripped both, costing 3 requests each instead of the 24-request worst case (2 columns × up to 4 attempts ×
+some retry factor, per `no_breaker_worst_case_requests`) — real, measured request savings. **But read this specific run's result with its actual cause attached, not as a clean validation:** `browser_probe.looks_like`,
+the board bytes, and the football-JSON parse attempts in the same run all show `"looks_like": "challenge_page"` / `is_challenge: true` / `JSONDecodeError: Expecting value` — Forebet's Cloudflare WAF was
+bot-challenging this runner's IP for the whole run, not selectively refusing an unpublished board. `near_false_abort=true` here means the near-term (usually-published) board ALSO got the same HTTP 422 refusal
+signal the breaker uses for "not published yet" — i.e., **the breaker's HTTP-422-means-not-published assumption cannot currently distinguish a genuine publication gap from a temporary whole-site WAF block**, and this
+run is live proof both causes produce an identical signal to the breaker. This is a real, previously-undocumented risk for item (iii)/(v) (publication-horizon gate): a WAF-challenge day would make every sport look
+`COVERAGE_GAP`, near and far alike, and the breaker (correctly, given what it can see) treats that the same as "far board not published" — worth a follow-up but not a blocker to any item already in flight.
+
 **2026-09-28 (same session, continued a second time) — RUN a5e5720 IS THE FIRST LIVE PROOF THE WHOLE LOOP WORKS; R1_COVERAGE'S FLAT SLICE AND THE PROBE'S CIRCUIT-BREAKER MEASUREMENT BOTH FIXED.**
 
 **The baseline every later change is measured against**, read directly from
