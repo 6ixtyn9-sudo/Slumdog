@@ -572,3 +572,102 @@ class TestCanaryDiscriminatesSiteWideRefusalFromPublicationGap:
             .read_text())
         assert receipt["canary"]["checked"] is True
         assert receipt["canary"]["healthy"] is False
+
+
+class TestSampleCanaryStandalone:
+    """``sample_canary`` is the pre-flight version of ``_canary_state``:
+    one direct request, callable BEFORE any per-sport capture has spent a
+    single request — the check ``forward_shadow_batch.py`` now runs before
+    (and periodically during) its forward pass so a site-wide WAF block
+    never again grinds ~70 sport-dates through their full retry budgets
+    against a wall (run 36426785929).
+    """
+
+    def test_healthy_when_the_json_parses_cleanly(self, monkeypatch):
+        from slumdog.forebet import sample_canary
+
+        monkeypatch.setattr(
+            "slumdog.forebet.relay_get_markdown",
+            lambda *a, **k: b'[[{"id": 1}]]')
+        result = sample_canary("2026-09-29", timeout=5)
+        assert result == {
+            "sport": "football", "checked": True, "healthy": True,
+            "reason": None, "sampled_at": result["sampled_at"],
+        }
+        # sampled_at is a real UTC timestamp, not a placeholder.
+        assert result["sampled_at"].endswith("+00:00")
+
+    def test_unhealthy_when_the_body_is_a_challenge_page(self, monkeypatch):
+        from slumdog.forebet import sample_canary
+
+        challenge = (
+            b"Performing security verification This website uses a "
+            b"security service to protect against malicious bots."
+        )
+        monkeypatch.setattr(
+            "slumdog.forebet.relay_get_markdown", lambda *a, **k: challenge)
+        result = sample_canary("2026-09-29", timeout=5)
+        assert result["checked"] is True
+        assert result["healthy"] is False
+        assert "challenge page" in result["reason"]
+        assert str(len(challenge)) in result["reason"]
+
+    def test_unhealthy_when_the_fetch_itself_raises(self, monkeypatch):
+        from slumdog.forebet import sample_canary
+
+        def _boom(*a, **k):
+            raise TimeoutError("relay timed out")
+
+        monkeypatch.setattr("slumdog.forebet.relay_get_markdown", _boom)
+        result = sample_canary("2026-09-29", timeout=5)
+        assert result["checked"] is True
+        assert result["healthy"] is False
+        assert "TimeoutError" in result["reason"]
+
+    def test_unhealthy_when_the_body_is_not_challenge_but_still_unparseable(
+            self, monkeypatch):
+        from slumdog.forebet import sample_canary
+
+        monkeypatch.setattr(
+            "slumdog.forebet.relay_get_markdown",
+            lambda *a, **k: b"not json at all and not a challenge page")
+        result = sample_canary("2026-09-29", timeout=5)
+        assert result["checked"] is True
+        assert result["healthy"] is False
+        assert "failed to parse" in result["reason"]
+
+    def test_only_one_attempt_is_made_no_retry_on_a_refusal(self, monkeypatch):
+        # Owner instruction, 2026-09-28: "Do not add retries or backoff to
+        # cope with the WAF. It is a refusal, not congestion." The canary
+        # must ask relay_get_markdown for exactly one attempt.
+        from slumdog.forebet import sample_canary
+
+        seen_kwargs = {}
+
+        def fake_relay_get_markdown(url, expected_url, timeout=45,
+                                    max_retries=3):
+            seen_kwargs["max_retries"] = max_retries
+            return b'[[{"id": 1}]]'
+
+        monkeypatch.setattr(
+            "slumdog.forebet.relay_get_markdown", fake_relay_get_markdown)
+        sample_canary("2026-09-29", timeout=5)
+        assert seen_kwargs["max_retries"] == 1
+
+    def test_defaults_to_todays_date_when_none_given(self, monkeypatch):
+        from slumdog.forebet import sample_canary
+
+        seen = {}
+
+        def fake_relay_get_markdown(url, expected_url, timeout=45,
+                                    max_retries=3):
+            seen["expected_url"] = expected_url
+            return b'[[{"id": 1}]]'
+
+        monkeypatch.setattr(
+            "slumdog.forebet.relay_get_markdown", fake_relay_get_markdown)
+        import datetime as _dt
+        result = sample_canary(timeout=5)
+        today = _dt.date.today().isoformat()
+        assert today in seen["expected_url"]
+        assert result["healthy"] is True

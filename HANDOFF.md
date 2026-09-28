@@ -1,5 +1,54 @@
 # Slumdog Living Handoff
 
+**2026-09-28 (same session, continued a fifth time) — THE REFRAME: SITE AVAILABILITY, NOT REQUEST COUNT, MAY BE THE BINDING CONSTRAINT. CANARY-FIRST ABORT IN THE FORWARD PASS; `--canary-only` MODE; A CRON STAGED TO MAP WHEN FOREBET SERVES.**
+
+**The entry directly below this one closed two invalid trials honestly — the owner's response was to redirect on what the canary had actually revealed.** Clean service this morning (run `36419041728` graded 18
+rows; run a5e5720 captured 13 events, settlement 18, clock offset -120 proven), a site-wide WAF challenge this afternoon (`36455080098`, `36461512749`) — same code, same relay, same runner provider. **This also
+very likely explains run 36426785929's two hours**: if the WAF was up when it started, every one of ~70 sport-dates spent its full retry budget grinding against a wall, and no per-request tuning (items iv/v as
+originally scoped) would have helped. Two consequences landed this session, both ahead of (iv)/(v) in priority:
+
+**1. `forward_shadow_batch.py` now samples the canary before every forward-pass date and aborts on a site-wide refusal, keeping earlier phases intact.** `canary_gate()` (thin wrapper around
+`slumdog.forebet.sample_canary`, kept as its own module-level name purely so tests can monkeypatch it the way they already monkeypatch `process_date`) is called immediately before each date in the forward-pass
+loop — the first call covers "before the forward pass" (nothing spent yet), each later call covers "periodically during it". A `healthy: False` sample stops the loop immediately: `emit_notice("canary_abort", ...)`
+fires with the reason, the sample time, how many dates already completed, and which dates were never attempted; the batch receipt gets a new `canary_gate` section (`samples`, `aborted`, `abort`) so a run can say
+"abandoned on a site-wide refusal" explicitly instead of grinding to a `NO_ROWS_FOR_DATE`-shaped silence. Settlement/completion/refresh/event-day — everything that already ran before the forward-pass loop starts —
+is untouched and still written to the receipt; only the forward pass itself is gated. Skipped entirely in `--dry-run` (no capture budget is at risk there, and it keeps every dry-run test written before this gate
+existed passing unmodified). New tests (`tests/test_forward_shadow_batch.py::TestCanaryGateInDriverMain`, 5 tests): the load-bearing one asserts **zero `process_date` calls** when the canary is down from the
+first date — the literal "no per-sport captures at all" property the owner asked to be tested — plus a mid-run-abort test (first date completes, second is never attempted), a healthy-throughout no-op test, an
+annotation-emission test, and a dry-run-never-samples test.
+
+**2. `scripts/probe_kickoff_timezone.py` gained `--canary-only`: one request, one annotation, exit — seconds, not the ~13-minute sweep.** Bypasses every other stage, including `--circuit-breaker-probe`'s two
+captures, on purpose: this mode is meant to run far more often (a cron sample) on a far tighter budget, never sharing a scheduler with anything heavier. Exit code is deliberately meaningful — `0` healthy, `1`
+unhealthy — so a cron of this mode alone turns Actions' own green/red run history into a readable-without-a-paste availability map; the `probe:canary` annotation still carries the machine-readable reason for
+anyone who wants it. New tests (`tests/test_probe_kickoff_timezone.py::TestCanaryOnlyMode`, 5 tests) cover healthy/unhealthy/crashed exit codes, that it never touches `run_probe`/`circuit_breaker_measurement`, and
+`--out` file writing.
+
+**Shared plumbing for both:** `slumdog.forebet.sample_canary(target_date=None, *, timeout=20)` — one direct, standalone request to football's tz=0 JSON, reusing `looks_like_challenge_page`/
+`validate_football_json_body`, never raising (a fetch failure or unparseable body IS an unhealthy canary). Deliberately **one attempt** (`relay_get_markdown(..., max_retries=1)`) — per the owner's explicit
+instruction this session, *"do not add retries or backoff to cope with the WAF; it is a refusal, not congestion, and retrying it harder is how the two-hour run happened."* A canary that itself retried would just
+be a slower, quieter version of that exact mistake. This is distinct from `_canary_state` (post-hoc, reads results an in-progress `capture_selected` call already fetched, free); `sample_canary` is the pre-flight
+version, usable before any capture has started. New tests: `tests/test_forebet.py::TestSampleCanaryStandalone` (6 tests: healthy, challenge-page, fetch-raises, unparseable-but-not-challenge, exactly-one-attempt,
+default-to-today's-date).
+
+**3. A cron to build the availability map is staged, not applied — offered as optional, not forced.** `docs/owner_paste/probe_canary_cron.yml`: a brand-new, separate workflow (not an edit to
+`probe_kickoff_timezone.yml` — running the full sweep on a cron would cost 13 minutes per sample and defeat the point), `schedule: cron: '17 */2 * * *'` (every two hours) plus `workflow_dispatch`,
+`permissions: contents: read`, 3-minute timeout, one request per run. `schedule` triggers only fire from the repository's default branch, so — same as every other workflow-file change this session — this cannot
+be pushed from a session branch and must go through the owner-paste-onto-`main` path documented in `docs/owner_paste/README.md`. Guarded by a new contract test,
+`tests/test_probe_canary_cron_contract.py` (9 tests): schedule cadence, `workflow_dispatch` present, only `--canary-only` is invoked (never `--circuit-breaker-probe`/`--hunt`), no capture/evidence-tree code path,
+read-only permissions, pinned actions matching the rest of the repo, fails the job on an unhealthy sample (the green/red-map property), and the file documents its own deletion once the map has answered the
+scheduling question. **If the owner would rather not run a recurring job, this file can stay staged indefinitely or be deleted** — `--canary-only` remains available for manual/opportunistic sampling either way,
+just slower to build a full picture from.
+
+**Full repo gate after all of the above:** `pytest` — 1664 passed, 0 failed (up from 1639: +11 in `test_forebet.py`/`test_forward_shadow_batch.py` for the canary-first gate and `sample_canary`, +5 in
+`test_probe_kickoff_timezone.py` for `--canary-only`, +9 new in `test_probe_canary_cron_contract.py`). `pyflakes`/`py_compile` — clean on every touched file. `scripts/check_workflow_evidence_globs.py` — 24/24
+covered, unaffected (this session touched no persist-step globs).
+
+**Revised order from here, per owner instruction — (v) publication-horizon gate now sits before (iv) request budget, with reasoning stated:** most of the request cost actually incurred this session (the
+near/far breaker probes, the repeated 422-everywhere runs) came from requesting boards whose publication status was never genuinely in question — (v) would skip those requests before they are ever sent, where
+(iv) only caps damage after the fact. Full order: **1. canary-first abort in `forward_shadow_batch.py`** (done, this entry) **→ 2. `--canary-only` + staged cron** (done, this entry) **→ 3. (v) publication-horizon
+gate → 4. (iii) the valid breaker trial, taken during a window the availability map says is healthy → 5. (iv) request budget.** **Forward Shadow stays undispatched until 1 and 3 are in** — 1 landed this entry; 3
+has not started.
+
 **2026-09-28 (same session, continued a fourth time) — RETRACTION: "3 vs 24 requests" WAS NOT A VALID CIRCUIT-BREAKER RESULT; ITEM (iii) IS NOT COMPLETE; A CANARY NOW LANDS IN EVERY RUN'S RECEIPT.**
 
 **Retracting the "3 vs 24 requests... real, measured request savings" line from the entry directly below this one.** That run (`36455080098`) was a **site-wide Cloudflare WAF challenge for its entire duration** — the

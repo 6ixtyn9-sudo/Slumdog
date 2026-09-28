@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -1574,6 +1575,13 @@ class TestPhaseAnnotationOrdering:
 
         monkeypatch.setattr(fsb, "process_date", _fake_process_date)
         monkeypatch.setattr(fsb, "emit_notice", _tracking_emit_notice)
+        # Not --dry-run, so the canary gate (added after this test was
+        # first written) would otherwise sample the network for real —
+        # keep it healthy and out of the way; the gate's own behaviour is
+        # covered by TestCanaryGateInDriverMain below.
+        monkeypatch.setattr(fsb, "canary_gate", lambda **k: {
+            "sport": "football", "checked": True, "healthy": True,
+            "reason": None, "sampled_at": "2026-09-28T00:00:00+00:00"})
 
         rc = fsb.main([
             "--root", str(tmp_path), "--dates", "3", "--pause-seconds", "0",
@@ -1609,3 +1617,169 @@ class TestPhaseAnnotationOrdering:
         ])
         assert rc == 0
         assert order[-1] == "summary"
+
+
+class TestCanaryGateInDriverMain:
+    """Owner directive, 2026-09-28, after two consecutive site-wide WAF
+    blocks: "site availability, not request count, may be the binding
+    constraint." ``forward_shadow_batch.py`` must sample the canary before
+    the forward pass and periodically during it, and a down canary must
+    stop the pass — with the phases that already ran (settlement etc.)
+    left intact — rather than let ~70 sport-dates grind their full retry
+    budgets against a wall the way run 36426785929 did.
+    """
+
+    def _unhealthy_sample(self, reason="football tz=0 JSON looked like "
+                                        "'challenge_page' (272 bytes)"):
+        return {"sport": "football", "checked": True, "healthy": False,
+                "reason": reason, "sampled_at": "2026-09-28T12:00:00+00:00"}
+
+    def _healthy_sample(self):
+        return {"sport": "football", "checked": True, "healthy": True,
+                "reason": None, "sampled_at": "2026-09-28T12:00:00+00:00"}
+
+    def test_a_canary_down_from_the_start_performs_no_per_sport_captures(
+            self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+
+        calls = []
+
+        def _fake_process_date(target_date, repo_root, **kwargs):
+            calls.append(target_date)
+            return {"target_date": target_date, "status": "COMPLETED"}
+
+        monkeypatch.setattr(fsb, "process_date", _fake_process_date)
+        monkeypatch.setattr(fsb, "canary_gate",
+                           lambda **k: self._unhealthy_sample())
+
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "3", "--pause-seconds", "0",
+            "--skip-settlement", "--skip-refresh", "--skip-event-day",
+        ])
+        assert rc == 0
+        # The killer property: zero per-sport captures were attempted.
+        assert calls == []
+        receipt = json.loads(
+            (tmp_path / "data/reports/shadow/forward_batch_receipt.json")
+            .read_text())
+        assert receipt["results"] == []
+        assert receipt["canary_gate"]["aborted"] is True
+        assert receipt["canary_gate"]["abort"]["dates_completed"] == 0
+        assert len(receipt["canary_gate"]["abort"]["dates_skipped"]) == 3
+        assert receipt["canary_gate"]["samples"] == [self._unhealthy_sample()]
+        assert receipt["summary"]["canary_aborted"] is True
+        assert receipt["summary"]["total"] == 0
+
+    def test_a_canary_down_mid_run_keeps_the_dates_already_completed(
+            self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+
+        calls = []
+        samples = [self._healthy_sample(), self._unhealthy_sample()]
+
+        def _fake_process_date(target_date, repo_root, **kwargs):
+            calls.append(target_date)
+            return {"target_date": target_date, "status": "COMPLETED"}
+
+        monkeypatch.setattr(fsb, "process_date", _fake_process_date)
+        monkeypatch.setattr(
+            fsb, "canary_gate", lambda **k: samples[len(calls)])
+
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "3", "--pause-seconds", "0",
+            "--skip-settlement", "--skip-refresh", "--skip-event-day",
+        ])
+        assert rc == 0
+        # First date processed normally; the gate caught the second date's
+        # pre-flight sample and stopped before it (and before the third).
+        assert calls == [calls[0]]
+        receipt = json.loads(
+            (tmp_path / "data/reports/shadow/forward_batch_receipt.json")
+            .read_text())
+        assert len(receipt["results"]) == 1
+        assert receipt["canary_gate"]["aborted"] is True
+        assert receipt["canary_gate"]["abort"]["dates_completed"] == 1
+        assert len(receipt["canary_gate"]["abort"]["dates_skipped"]) == 2
+        assert len(receipt["canary_gate"]["samples"]) == 2
+
+    def test_a_healthy_canary_throughout_never_aborts(
+            self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+
+        calls = []
+
+        def _fake_process_date(target_date, repo_root, **kwargs):
+            calls.append(target_date)
+            return {"target_date": target_date, "status": "COMPLETED"}
+
+        monkeypatch.setattr(fsb, "process_date", _fake_process_date)
+        monkeypatch.setattr(fsb, "canary_gate",
+                           lambda **k: self._healthy_sample())
+
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "3", "--pause-seconds", "0",
+            "--skip-settlement", "--skip-refresh", "--skip-event-day",
+        ])
+        assert rc == 0
+        assert len(calls) == 3
+        receipt = json.loads(
+            (tmp_path / "data/reports/shadow/forward_batch_receipt.json")
+            .read_text())
+        assert receipt["canary_gate"]["aborted"] is False
+        assert receipt["canary_gate"]["abort"] is None
+        assert len(receipt["canary_gate"]["samples"]) == 3
+        assert receipt["summary"]["canary_aborted"] is False
+
+    def test_a_canary_abort_emits_its_own_annotation(
+            self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+
+        os_environ_backup = dict(os.environ)
+        os.environ["GITHUB_ACTIONS"] = "true"
+        try:
+            notices = []
+            real_emit_notice = fsb.emit_notice
+
+            def _tracking(title, payload):
+                notices.append(title)
+                return real_emit_notice(title, payload)
+
+            monkeypatch.setattr(fsb, "process_date",
+                               lambda *a, **k: {"status": "COMPLETED"})
+            monkeypatch.setattr(fsb, "canary_gate",
+                               lambda **k: self._unhealthy_sample())
+            monkeypatch.setattr(fsb, "emit_notice", _tracking)
+
+            rc = fsb.main([
+                "--root", str(tmp_path), "--dates", "2",
+                "--pause-seconds", "0", "--skip-settlement",
+                "--skip-refresh", "--skip-event-day",
+            ])
+            assert rc == 0
+            assert "canary_abort" in notices
+            assert not any(n.startswith("forward_date:") for n in notices)
+        finally:
+            os.environ.clear()
+            os.environ.update(os_environ_backup)
+
+    def test_dry_run_never_samples_the_canary_at_all(
+            self, tmp_path, monkeypatch):
+        # Dry-run spends no capture budget, so there is nothing for the
+        # gate to protect — and every dry-run test written before this
+        # gate existed must keep passing without mocking it.
+        import scripts.forward_shadow_batch as fsb
+
+        def _boom(**k):
+            raise AssertionError("canary_gate must not run in --dry-run")
+
+        monkeypatch.setattr(fsb, "canary_gate", _boom)
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "2", "--dry-run",
+            "--skip-settlement", "--skip-refresh", "--skip-event-day",
+        ])
+        assert rc == 0
+        receipt = json.loads(
+            (tmp_path / "data/reports/shadow/forward_batch_receipt.json")
+            .read_text())
+        assert receipt["canary_gate"]["samples"] == []
+        assert receipt["canary_gate"]["aborted"] is False

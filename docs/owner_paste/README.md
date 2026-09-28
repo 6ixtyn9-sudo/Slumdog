@@ -115,3 +115,56 @@ without an owner paste.
 **Delete the live workflow file entirely once the timezone hold and the
 Priority 1 breaker measurement are both settled for good.** It is a
 diagnostic, not part of the pipeline.
+
+## `probe_canary_cron.yml` — pending, staged 2026-09-28: continuous availability sampling
+
+**Why it exists:** two consecutive site-wide WAF blocks this session
+(`36455080098`, `36461512749`), the same afternoon that had served cleanly
+that morning (run `36419041728` graded 18 rows; run a5e5720 captured 13
+events) — same code, same relay, same runner provider. The owner's
+reframe: "we've been optimising how much we ask, when the binding
+constraint may be when we ask." You cannot catch a healthy window by luck
+with a handful of 13-minute probe runs; you need continuous, cheap
+sampling. `scripts/probe_kickoff_timezone.py --canary-only` (added this
+session) answers in one request — football's tz=0 JSON, classified, one
+annotation, exit — instead of sharing a budget scheduler with the full
+multi-stage sweep.
+
+**What is staged:** a brand-new, separate workflow file
+(`docs/owner_paste/probe_canary_cron.yml`), not an edit to
+`probe_kickoff_timezone.yml`. Running the full sweep on a cron would cost
+13 minutes per sample and defeat the point; this job costs one HTTP
+request. It runs on `schedule: cron: '17 */2 * * *'` (every two hours) plus
+`workflow_dispatch` for manual testing, `permissions: contents: read`, a
+3-minute timeout, and fails the job (`exit 1`) on an unhealthy sample —
+deliberately, so Actions' own green/red run history becomes a readable
+availability map with no owner paste and no annotation fetch required
+(the `probe:canary` annotation still carries the machine-readable reason
+for anyone who wants it).
+
+**Why this one cannot simply be pushed like the probe script itself:**
+`schedule` triggers only fire from the repository's **default branch**
+(`main`) — pasted onto any session branch, it would parse correctly and
+simply never run. It must go through the same owner-paste-onto-`main` path
+as `probe_kickoff_timezone.yml`'s trigger fix, not a session-branch push.
+
+**To apply:** open `docs/owner_paste/probe_canary_cron.yml` on this
+branch, create a new file at the same path under `.github/workflows/` on
+`main` in the GitHub web UI, paste the contents, commit. No merge needed
+into this branch beyond deleting the staged copy afterward (same as the
+`probe_kickoff_timezone.yml` cycle above) —
+`tests/test_probe_canary_cron_contract.py` guards the staged file's safety
+properties now and should migrate onto the live file the same way
+`test_probe_workflow_persist_contract.py` did once applied.
+
+**This is optional, not mandatory** — the owner asked whether a recurring
+job was wanted at all before it was added; staging it here does not paste
+it anywhere. If the owner would rather not run a cron, this file can stay
+staged indefinitely or be deleted, and the same `--canary-only` mode is
+still available for opportunistic manual sampling (slower to build a full
+map, but zero standing footprint).
+
+**Delete this staged file (and, once applied, the live workflow) once the
+availability map answers the scheduling question well enough to pick a
+serving window for event-day capture, or once Forebet's block clears for
+good.** It is a measurement job, not part of the pipeline.

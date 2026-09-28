@@ -3379,11 +3379,58 @@ def main(argv: list[str] | None = None) -> int:
         help="days past --date for the likely-absent half of "
              "--circuit-breaker-probe (default 5, mirroring the forward "
              "pass's D+2..D+6 reach)")
+    parser.add_argument(
+        "--canary-only", action="store_true",
+        help=("Owner directive, 2026-09-28, after two consecutive "
+              "site-wide WAF blocks: measuring HOW MUCH to ask is moot "
+              "if WHEN to ask is the binding constraint. One direct "
+              "request to football's tz=0 JSON, classified, one "
+              "annotation, exit — seconds, not the full multi-stage "
+              "sweep's ~13 minutes. Read-only: no capture, no evidence "
+              "tree, no disk writes beyond --out. Intended for a tight "
+              "cron (see docs/owner_paste/probe_canary_cron.yml) so an "
+              "availability map can be read back from annotations alone, "
+              "without an owner paste per sample."))
     args = parser.parse_args(argv)
 
     dt.date.fromisoformat(args.date)
     set_deadline(args.budget_seconds)
     emit_heartbeat(args.date, args.sport)
+
+    if args.canary_only:
+        # Deliberately bypasses EVERY other stage, including
+        # --circuit-breaker-probe's two captures: this is meant to run
+        # often (a cron sample every couple of hours) and cheaply (one
+        # request), not to share a budget scheduler with anything else.
+        from slumdog.forebet import sample_canary
+        report = {
+            "probed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "target_date": args.date,
+            "mode": "canary_only",
+        }
+        try:
+            report["canary"] = sample_canary(args.date, timeout=args.timeout)
+        except Exception as exc:  # a crashed sample must still report
+            report["canary"] = {
+                "sport": "football", "checked": True, "healthy": False,
+                "reason": f"canary sample crashed: "
+                          f"{type(exc).__name__}: {exc}"[:200],
+                "sampled_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            }
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(json.dumps(report, indent=2, sort_keys=True))
+        print(json.dumps(report, indent=2, sort_keys=True))
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            blob = json.dumps(report["canary"], sort_keys=True)[:2600]
+            print(f"::notice title=probe:canary::{_annotation_escape(blob)}",
+                  flush=True)
+        # Non-zero on an unhealthy sample is deliberate, not incidental:
+        # a cron run of THIS mode alone turns Actions' own green/red run
+        # history into a free, readable-without-a-paste availability map
+        # (see docs/owner_paste/probe_canary_cron.yml) — a failed run IS
+        # the finding, not a probe defect.
+        return 0 if report["canary"].get("healthy") else 1
 
     if args.circuit_breaker_probe:
         # Deliberately bypasses run_probe()'s dozens of legacy stages: this

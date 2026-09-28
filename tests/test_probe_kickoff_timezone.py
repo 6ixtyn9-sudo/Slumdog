@@ -3568,3 +3568,99 @@ class TestTheFailureCodesAreCounted:
                             lambda **k: type("L", (), {"records": []})())
         record = probe.collector_end_to_end("2026-09-29", timeout=1, pause=0)
         assert record["column_http"] == {"403": 2, "422": 1}
+
+
+class TestCanaryOnlyMode:
+    """Owner directive, 2026-09-28: measuring how MUCH to ask is moot if
+    WHEN to ask is the binding constraint. ``--canary-only`` must answer in
+    one request — not share a budget scheduler with any other stage — so it
+    is cheap enough for a tight cron to build an availability map from.
+    """
+
+    def test_a_healthy_sample_prints_a_report_and_exits_zero(
+            self, tmp_path, monkeypatch, capsys):
+        import scripts.probe_kickoff_timezone as probe
+
+        healthy = {"sport": "football", "checked": True, "healthy": True,
+                  "reason": None, "sampled_at": "2026-09-29T00:00:00+00:00"}
+        monkeypatch.setattr(
+            "slumdog.forebet.sample_canary", lambda *a, **k: healthy)
+
+        rc = probe.main(["--date", "2026-09-29", "--canary-only"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        report = json.loads(out.split("\n\n")[0]
+                            if "\n\n" in out else out)
+        assert report["mode"] == "canary_only"
+        assert report["canary"] == healthy
+
+    def test_an_unhealthy_sample_exits_non_zero(
+            self, monkeypatch, capsys):
+        import scripts.probe_kickoff_timezone as probe
+
+        unhealthy = {"sport": "football", "checked": True, "healthy": False,
+                    "reason": "football tz=0 JSON looked like "
+                              "'challenge_page' (272 bytes)",
+                    "sampled_at": "2026-09-29T00:00:00+00:00"}
+        monkeypatch.setattr(
+            "slumdog.forebet.sample_canary", lambda *a, **k: unhealthy)
+
+        rc = probe.main(["--date", "2026-09-29", "--canary-only"])
+        assert rc == 1
+        report = json.loads(capsys.readouterr().out.strip())
+        assert report["canary"]["healthy"] is False
+        assert "challenge_page" in report["canary"]["reason"]
+
+    def test_a_crash_in_the_sample_itself_still_reports_and_fails_closed(
+            self, monkeypatch, capsys):
+        import scripts.probe_kickoff_timezone as probe
+
+        def _boom(*a, **k):
+            raise TimeoutError("relay timed out")
+
+        monkeypatch.setattr("slumdog.forebet.sample_canary", _boom)
+
+        rc = probe.main(["--date", "2026-09-29", "--canary-only"])
+        assert rc == 1
+        report = json.loads(capsys.readouterr().out.strip())
+        assert report["canary"]["healthy"] is False
+        assert "TimeoutError" in report["canary"]["reason"]
+
+    def test_canary_only_never_touches_the_full_sweep_or_the_breaker_probe(
+            self, monkeypatch, capsys):
+        # The killer property: --canary-only must not call run_probe or
+        # circuit_breaker_measurement at all — it is meant to run far more
+        # often than either, on a much tighter budget.
+        import scripts.probe_kickoff_timezone as probe
+
+        def _must_not_run(*a, **k):
+            raise AssertionError("canary-only must not reach this stage")
+
+        monkeypatch.setattr(probe, "run_probe", _must_not_run)
+        monkeypatch.setattr(probe, "circuit_breaker_measurement", _must_not_run)
+        monkeypatch.setattr(
+            "slumdog.forebet.sample_canary",
+            lambda *a, **k: {"sport": "football", "checked": True,
+                             "healthy": True, "reason": None,
+                             "sampled_at": "2026-09-29T00:00:00+00:00"})
+
+        rc = probe.main(["--date", "2026-09-29", "--canary-only"])
+        assert rc == 0
+
+    def test_canary_only_writes_the_out_file_when_given(
+            self, tmp_path, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(
+            "slumdog.forebet.sample_canary",
+            lambda *a, **k: {"sport": "football", "checked": True,
+                             "healthy": True, "reason": None,
+                             "sampled_at": "2026-09-29T00:00:00+00:00"})
+        out_path = tmp_path / "canary.json"
+        rc = probe.main([
+            "--date", "2026-09-29", "--canary-only", "--out", str(out_path),
+        ])
+        assert rc == 0
+        written = json.loads(out_path.read_text())
+        assert written["mode"] == "canary_only"
+        assert written["canary"]["healthy"] is True

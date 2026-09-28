@@ -1,0 +1,81 @@
+name: Forebet canary sample (cron, read-only, one request)
+# Owner directive, 2026-09-28, after two consecutive site-wide WAF blocks in
+# the same afternoon that had served cleanly that morning (run 36419041728,
+# run a5e5720): "we've been optimising how MUCH we ask, when the binding
+# constraint may be WHEN we ask." This job answers that question cheaply and
+# continuously instead of by luck with a 13-minute probe run.
+#
+# Read-only by construction, same as probe_kickoff_timezone.yml:
+# `permissions: contents: read`, nothing committed, no evidence tree, no
+# capture. It makes exactly ONE HTTP request (football's tz=0 JSON, the same
+# discriminator slumdog.forebet.sample_canary/_canary_state already use) and
+# exits. `--canary-only` bypasses every other stage in
+# scripts/probe_kickoff_timezone.py on purpose — this must never share a
+# budget scheduler with the full sweep.
+#
+# The exit code is deliberately meaningful: 0 on a healthy sample, 1 on an
+# unhealthy one. Sampled every two hours, Actions' own green/red run history
+# for this workflow IS the availability map — which UTC hours Forebet serves
+# a GitHub runner — readable at a glance with no owner paste and no
+# annotation fetch required, though the annotation is also emitted
+# (`probe:canary`) for anyone who wants the machine-readable reason.
+#
+# GitHub only fires `schedule` triggers from the repository's default
+# branch — this file has no effect pasted anywhere but `main`. That is why
+# it is staged here rather than authored directly: an agent token cannot
+# push anything under .github/workflows/ (see README.md in this directory),
+# and even if it could, a schedule on a session branch would silently never
+# fire.
+#
+# DELETE THIS FILE once the availability map answers the scheduling
+# question well enough to pick a serving window for event-day capture (or
+# once Forebet's block clears for good and the question stops mattering).
+# It is a measurement job, not part of the pipeline — same lifecycle as
+# probe_kickoff_timezone.yml itself.
+on:
+  schedule:
+    # Every two hours, offset 17 minutes past the hour (avoid the exact-hour
+    # stampede every scheduled Action tends to pile onto). Adjust the
+    # cadence freely; the cost is one request per sample, nothing scales
+    # with how often this runs except how fine-grained the resulting map is.
+    - cron: '17 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      probe_date:
+        description: Board date to sample against (YYYY-MM-DD, blank = tomorrow UTC)
+        required: false
+        default: ""
+permissions:
+  contents: read
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # same pin as forward_shadow.yml
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # same pin as forward_shadow.yml
+        with:
+          python-version: '3.13'
+      - name: Install
+        run: python -m pip install --quiet -e .
+      - name: Sample canary
+        id: canary
+        continue-on-error: true
+        run: |
+          DATE="${{ github.event.inputs.probe_date }}"
+          if [ -z "$DATE" ]; then DATE=$(date -u -d tomorrow +%Y-%m-%d); fi
+          echo "Sampling canary against board date $DATE"
+          python scripts/probe_kickoff_timezone.py \
+            --date "$DATE" --canary-only --timeout 20 \
+            --out canary_report.json
+      - name: Upload sample
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # same pin as forward_shadow.yml
+        with:
+          name: forebet-canary-sample
+          path: canary_report.json
+          if-no-files-found: warn
+      - name: Fail the job on an unhealthy sample
+        if: steps.canary.outcome == 'failure'
+        run: |
+          echo "Canary unhealthy this sample — see the probe:canary annotation and the uploaded artifact." >&2
+          exit 1

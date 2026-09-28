@@ -145,6 +145,22 @@ def emit_notice(title: str, payload) -> None:
           flush=True)
 
 
+def canary_gate(*, timeout: int = 45) -> dict:
+    """One cheap, standalone sample of the site-wide canary (football's
+    tz=0 JSON) — see ``slumdog.forebet.sample_canary``'s docstring for the
+    full rationale. Wrapped here, rather than calling ``sample_canary``
+    directly from ``main()``, purely so a test can monkeypatch
+    ``forward_shadow_batch.canary_gate`` the same way it already
+    monkeypatches ``process_date`` — no import-path knowledge required.
+
+    Local import: this module is meant to import even before ``slumdog``
+    is installed (see the module docstring's constants above); the network
+    call itself only happens when this function actually runs.
+    """
+    from slumdog.forebet import sample_canary
+    return sample_canary(timeout=timeout)
+
+
 def summarize_capture_timing(entries: list[dict] | None) -> dict:
     """Roll up one date's per-sport ``capture_timing`` into one small dict.
 
@@ -1659,8 +1675,41 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Forward shadow batch: {len(targets)} dates starting from {targets[0]}", file=sys.stderr)
     print(f"Repository root: {repo_root}", file=sys.stderr)
 
+    # Canary-first abort (owner directive, 2026-09-28, after two consecutive
+    # site-wide WAF blocks): "site availability, not request count, may be
+    # the binding constraint." Sample before EVERY date this loop is about
+    # to spend a capture budget on — the first sample covers "before the
+    # forward pass" (nothing has been requested yet), each subsequent one
+    # covers "periodically during it". A run 36426785929-style two hours
+    # (every one of ~70 sport-dates grinding its full retry budget against
+    # a wall) is now four minutes and an annotation instead. Skipped in
+    # --dry-run: no capture budget is at risk there, and every existing
+    # dry-run test predates this gate.
+    canary_samples: list[dict] = []
+    canary_abort: dict | None = None
     results = []
     for i, target_date in enumerate(targets):
+        if not args.dry_run:
+            sample = canary_gate(timeout=args.capture_timeout)
+            canary_samples.append(sample)
+            if sample.get("healthy") is False:
+                canary_abort = {
+                    "aborted_before_date": target_date,
+                    "date_index": f"{i + 1}/{len(targets)}",
+                    "dates_completed": len(results),
+                    "dates_skipped": targets[i:],
+                    "canary": sample,
+                }
+                print(
+                    f"Forward pass ABANDONED on a site-wide refusal before "
+                    f"{target_date} ({i + 1}/{len(targets)}): "
+                    f"{sample.get('reason')} — {len(results)} date(s) "
+                    f"already completed are kept; {len(targets) - i} "
+                    "date(s) not attempted.",
+                    file=sys.stderr,
+                )
+                emit_notice("canary_abort", canary_abort)
+                break
         if i > 0:
             # Pause between dates (not between sports — that's handled by the collector)
             time.sleep(args.pause_seconds)
@@ -1708,6 +1757,17 @@ def main(argv: list[str] | None = None) -> int:
         "refresh": refresh_results,
         "event_day": event_day_results,
         "event_day_settlement": event_day_settlement,
+        # Site-wide canary samples taken before every forward-pass date
+        # (see canary_gate() above) plus, when the pass was abandoned on a
+        # site-wide refusal rather than completing/exhausting its target
+        # dates normally, the abort record itself — the "was abandoned on
+        # a site-wide refusal" statement the owner asked every run to be
+        # able to make, with sample times attached.
+        "canary_gate": {
+            "samples": canary_samples,
+            "aborted": canary_abort is not None,
+            "abort": canary_abort,
+        },
         "summary": {
             "total": len(results),
             "completed": sum(1 for r in results if r["status"] == "COMPLETED"),
@@ -1766,6 +1826,8 @@ def main(argv: list[str] | None = None) -> int:
             "event_day_settled": sum(
                 1 for r in event_day_settlement if r["status"] == "SETTLED"
             ),
+            "canary_samples": len(canary_samples),
+            "canary_aborted": canary_abort is not None,
         },
     }
     receipt_path = repo_root / "data" / "reports" / "shadow" / "forward_batch_receipt.json"

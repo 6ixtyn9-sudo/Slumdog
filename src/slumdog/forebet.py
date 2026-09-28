@@ -486,6 +486,57 @@ def _classify_capture_outcome(exc: Exception) -> str:
     return "RAISED"
 
 
+def sample_canary(target_date: str | None = None, *, timeout: int = 20) -> dict[str, Any]:
+    """One standalone, direct request to football's tz=0 JSON.
+
+    ``_canary_state`` below reads this same discriminator for free, but
+    only after a call to :meth:`ForebetCollector.capture_selected` has
+    already fetched football as part of its normal sport selection. This
+    function makes the check available on its own, BEFORE any per-sport
+    capture has started — the pre-flight the owner asked for after two
+    consecutive site-wide WAF blocks (2026-09-28): "we've been optimising
+    how much we ask, when the binding constraint may be when we ask."
+    Callers: ``forward_shadow_batch.py``'s pre-flight/mid-run abort (do not
+    spend a forward pass's capture budget against a wall), and the probe's
+    ``--canary-only`` mode (a few seconds, safe on a tight cron, versus the
+    full multi-stage sweep).
+
+    Deliberately ONE attempt (``relay_get_markdown(..., max_retries=1)``):
+    a WAF challenge is a refusal, not congestion, and retrying it harder is
+    how run 36426785929 spent two hours grinding ~70 sport-dates through
+    their full retry budgets against a wall. A canary that itself retried
+    would only be a slower, quieter version of that same mistake.
+
+    Returns ``{"sport": "football", "checked": True, "healthy": bool,
+    "reason": str | None, "sampled_at": <UTC ISO8601>}``. Never raises: a
+    connection failure or an unparseable body IS an unhealthy canary —
+    that is the entire reason to call this.
+    """
+    target_date = target_date or date.today().isoformat()
+    sampled_at = datetime.now(timezone.utc).isoformat()
+    target = source_url(SPORTS["football"], target_date)
+    relay = RELAY_BASE + target
+    try:
+        body = relay_get_markdown(relay, target, timeout=timeout, max_retries=1)
+    except Exception as exc:
+        return {"sport": "football", "checked": True, "healthy": False,
+                "reason": f"{type(exc).__name__}: {exc}"[:200],
+                "sampled_at": sampled_at}
+    if looks_like_challenge_page(body):
+        return {"sport": "football", "checked": True, "healthy": False,
+                "reason": f"football tz=0 JSON looked like a challenge "
+                          f"page ({len(body)} bytes)",
+                "sampled_at": sampled_at}
+    try:
+        validate_football_json_body(body)
+    except Exception as exc:
+        return {"sport": "football", "checked": True, "healthy": False,
+                "reason": f"football tz=0 JSON failed to parse: {exc}"[:200],
+                "sampled_at": sampled_at}
+    return {"sport": "football", "checked": True, "healthy": True,
+            "reason": None, "sampled_at": sampled_at}
+
+
 def _canary_state(selected: list[str], existing: set[str],
                   captures: "list[RawCapture]",
                   failures: list[str]) -> dict[str, Any]:
