@@ -208,6 +208,14 @@ def align_columns(columns: dict[str, list[str]]) -> dict[str, list[str]]:
     aligned: dict[str, list[str]] = {}
     for name, rows in columns.items():
         count = len(rows)
+        # An optional column that renders nothing, on a board whose
+        # required columns are complete, is a field this sport does not
+        # have — mma has no correct score, and its .ex_sc matched zero
+        # elements while every other column returned ten. This is only
+        # safe because a refusal raises: an empty render and a throttled
+        # one are not confused here, they arrive by different paths.
+        if count == 0 and name not in REQUIRED_COLUMNS:
+            continue
         excess = count - expected
         # Only columns that are not 1:1 with matches may be collapsed. A
         # team-name column that happens to be an exact multiple of the row
@@ -297,6 +305,8 @@ def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
 
     columns = align_columns(columns)
     counts = {name: len(values) for name, values in columns.items()}
+    absent = [name for name in COLUMN_SELECTORS
+              if name not in columns and name not in REQUIRED_COLUMNS]
     distinct = set(counts.values())
     if len(distinct) != 1:
         raise ColumnAlignmentError(
@@ -314,8 +324,9 @@ def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
         source_url=board_url,
         columns=columns,
         row_count=row_count,
-        # Optional columns that failed leave the row thinner than ideal.
-        partial=bool(failures),
+        # A thinner row than ideal, whether the field failed or the sport
+        # simply does not have it.
+        partial=bool(failures) or bool(absent),
     )
 
 

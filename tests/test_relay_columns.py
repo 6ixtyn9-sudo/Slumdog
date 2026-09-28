@@ -620,3 +620,49 @@ class TestCollapsingIsNarrow:
             "home": ["Host", "Lakers", "Heat", "Bulls"],
         })
         assert len(aligned["home"]) == 4
+
+
+class TestFieldsASportDoesNotHave:
+    """MMA's board has no correct-score column: on 2026-10-03 its .ex_sc
+    matched zero elements while every other column returned ten, and the
+    whole board was refused as misaligned. An empty render is only safe to
+    treat this way because a refusal raises — the two arrive by different
+    paths and are never confused."""
+
+    def test_an_empty_optional_column_is_dropped_not_fatal(self):
+        bodies = _full_board(3)
+        bodies[scoped(".ex_sc")] = b""
+        board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                                    sleep=lambda _s: None,
+                                    opener=_opener(bodies))
+        assert board.row_count == 3
+        assert "predicted_score" not in board.columns
+        assert board.partial is True
+
+    def test_the_board_still_converts_without_it(self):
+        bodies = _full_board(2)
+        bodies[scoped(".ex_sc")] = b""
+        board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                                    sleep=lambda _s: None,
+                                    opener=_opener(bodies))
+        events = rows_to_events(board, captured_at="2026-09-27T04:00:00Z")
+        assert len(events) == 2
+        assert all(e.predicted_score == "" for e in events)
+
+    def test_an_empty_required_column_is_still_fatal(self):
+        # No probabilities means nothing to rank, whatever the cause.
+        bodies = _full_board(3)
+        bodies[scoped(".fprc")] = b""
+        with pytest.raises((ColumnFetchError, ColumnAlignmentError)):
+            fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                                sleep=lambda _s: None, opener=_opener(bodies))
+
+    def test_a_refused_column_is_not_mistaken_for_an_absent_field(self):
+        # 422 raises and is recorded as a failure; it never looks like a
+        # sport that simply lacks the field.
+        bodies = _full_board(3)
+        del bodies[scoped(".avg_sc")]
+        board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                                    sleep=lambda _s: None,
+                                    opener=_opener(bodies))
+        assert board.partial is True and "average" not in board.columns
