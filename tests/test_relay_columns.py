@@ -897,3 +897,62 @@ class TestAMatchThatLastsMoreThanADay:
         assert [e.event_id for e in events] == ["cricket:51396",
                                                 "cricket:51397"]
         assert {e.event_date for e in events} == {"2026-05-08"}
+
+
+class TestABoardCapturedForSettlingIsJudgedByItsRows:
+    """A settlement capture carries no probabilities: a finished match is
+    not being ranked. Run 36415677508 rendered 22 volleyball rows and
+    reported 'none on 2026-09-27; dates present: 2026-09-27' — because
+    'no events' was being read as 'no fixtures', and a board with no
+    probabilities can never produce events."""
+
+    def _bodies(self, days):
+        return {
+            scoped(".tnms"): "\n".join(
+                f"[A{i} B{i} {day} 7:00 PM](https://f/m/a{i}/38740{i})"
+                for i, day in enumerate(days)).encode(),
+            scoped(".homeTeam"): "\n".join(
+                f"A{i}" for i in range(len(days))).encode(),
+            scoped(".awayTeam"): "\n".join(
+                f"B{i}" for i in range(len(days))).encode(),
+            scoped(".lscr_td"): "\n".join(
+                ["3 - 1"] * len(days)).encode(),
+            scoped(".scoreLnk"): "\n".join(["FT"] * len(days)).encode(),
+        }
+
+    def _capture(self, days, target):
+        from slumdog.relay_columns import (
+            SETTLEMENT_COLUMN_SELECTORS,
+            SETTLEMENT_REQUIRED_COLUMNS,
+        )
+
+        return capture_board(
+            BOARD, "volleyball", target, captured_at="2026-09-28T06:00:00Z",
+            opener=_opener(self._bodies(days)), sleep=lambda _s: None,
+            selectors=SETTLEMENT_COLUMN_SELECTORS,
+            required=SETTLEMENT_REQUIRED_COLUMNS)
+
+    def test_rows_on_the_target_date_are_captured_without_events(self):
+        result = self._capture(["27/09/2026", "28/09/2026"], "2026-09-27")
+        assert result.status == CAPTURED
+        assert result.events == ()
+        assert result.board is not None
+        assert len(settled_rows(result.board)) == 1
+
+    def test_a_board_with_nothing_on_the_date_is_still_refused(self):
+        result = self._capture(["28/09/2026", "29/09/2026"], "2026-09-27")
+        assert result.status == NO_ROWS_FOR_DATE
+        assert "none on 2026-09-27" in result.reason
+
+    def test_a_ranking_capture_still_needs_events(self):
+        """Unchanged for the normal route: rows whose probabilities cannot
+        be read are not a board, they are an unreadable board."""
+        bodies = _full_board(2)
+        bodies[scoped(".fprc")] = b"-\n-"
+        result = capture_board(BOARD, "basketball", "2026-09-27",
+                               captured_at="2026-09-27T04:00:00Z",
+                               opener=_opener(bodies),
+                               sleep=lambda _s: None)
+        # Either verdict is a refusal; what matters is that it is never
+        # mistaken for a board.
+        assert result.status != CAPTURED

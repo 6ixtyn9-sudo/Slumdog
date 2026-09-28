@@ -695,6 +695,40 @@ def capture_board(board_url: str, sport: str, target_date: str, *,
                             observed_dates=days, row_count=board.row_count,
                             reason=str(exc))
     suspect = bool(expected_rows) and board.row_count * 2 < (expected_rows or 0)
+    # A capture made for SETTLING carries no probabilities, because a
+    # finished match is not being ranked. Such a board can never produce
+    # events, so "no events" cannot mean "no fixtures on this date" for
+    # it — run 36415677508 rendered 22 volleyball rows and reported
+    # "none on 2026-09-27; dates present: 2026-09-27", which is a
+    # contradiction the caller had no way to interpret. Judge those
+    # captures by the rows themselves.
+    ranking = "probabilities" in board.columns
+    if not ranking:
+        order = infer_date_order(board.columns.get("link", []), target_date)
+        on_target = 0 if order is None else sum(
+            1 for cell in board.columns.get("link", [])
+            if event_day_from_kickoff(cell, order) == target_date)
+        if order is None:
+            return BoardCapture(
+                status=COVERAGE_GAP, sport=sport, target_date=target_date,
+                source_url=board_url, observed_dates=days,
+                row_count=board.row_count, partial=board.partial,
+                reason=(f"{sport} {target_date}: date order unreadable, so "
+                        f"no row can be placed on a day"))
+        if on_target == 0:
+            return BoardCapture(
+                status=NO_ROWS_FOR_DATE, sport=sport,
+                target_date=target_date, source_url=board_url,
+                observed_dates=days, row_count=board.row_count,
+                partial=board.partial, suspect_short=suspect,
+                reason=(f"board rendered {board.row_count} rows, none on "
+                        f"{target_date}; dates present: "
+                        f"{', '.join(days) or 'none'}"))
+        return BoardCapture(
+            status=CAPTURED, sport=sport, target_date=target_date,
+            source_url=board_url, events=(), observed_dates=days,
+            row_count=board.row_count, partial=board.partial,
+            suspect_short=suspect, board=board)
     if not events:
         return BoardCapture(
             status=NO_ROWS_FOR_DATE, sport=sport, target_date=target_date,
