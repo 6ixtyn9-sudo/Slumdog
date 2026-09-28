@@ -71,6 +71,7 @@ from slumdog.relay_columns import (  # noqa: E402
     REQUIRED_COLUMNS,
     SETTLEMENT_COLUMN_SELECTORS,
     SETTLEMENT_REQUIRED_COLUMNS,
+    SETTLEMENT_ROW_SCOPE,
     capture_board,
     settled_rows,
 )
@@ -1302,6 +1303,7 @@ def settlement_probe(date: str, *, timeout: int, pause: float,
                 timeout=timeout, attempts=attempts, backoff=7.0, sleep=pace,
                 selectors=SETTLEMENT_COLUMN_SELECTORS,
                 required=SETTLEMENT_REQUIRED_COLUMNS,
+                scope=SETTLEMENT_ROW_SCOPE,
                 before_request=slice_guard(slice_seconds))
         except BudgetExhausted as exc:
             out[sport] = {"settled_date": yesterday, "url": url,
@@ -2196,7 +2198,11 @@ def run_open_questions(date: str, *, timeout: int, pause: float,
         # the run knew which ones would need it. A whole board is eight
         # column requests with retries; 110 seconds was never going to be
         # enough for it, and was more than the calibration ever needed.
-        share = max(90.0, (time_left() - 70) / max(1, len(outstanding)))
+        # The calibration has proven the same offset in three separate
+        # runs on two requests. It is last in the list and it does not get
+        # a share: it runs on what the open questions leave behind.
+        costly = [item for item in outstanding if item[0] != "render_clock"]
+        share = max(90.0, (time_left() - 70) / max(1, len(costly)))
         for name, run in outstanding:
             if time_left() < 80:
                 break

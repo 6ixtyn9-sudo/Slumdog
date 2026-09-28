@@ -956,3 +956,75 @@ class TestABoardCapturedForSettlingIsJudgedByItsRows:
         # Either verdict is a refusal; what matters is that it is never
         # mistaken for a board.
         assert result.status != CAPTURED
+
+
+class TestARowBeingSettledIsNotARowBeingPicked:
+    """ROW_SCOPE demands a prediction cell, because a row without one
+    cannot become a pick. A finished match is not being picked, and
+    requiring .fprc of it asks a results board to look like a fixtures
+    board — run 36417397896 rendered 42,670 bytes of real volleyball
+    board while every scoped column returned 422."""
+
+    def test_the_settlement_scope_asks_for_a_score_not_a_prediction(self):
+        from slumdog.relay_columns import SETTLEMENT_ROW_SCOPE
+
+        assert ".fprc" not in SETTLEMENT_ROW_SCOPE
+        assert ".lscr_td" in SETTLEMENT_ROW_SCOPE
+        assert ".fprc" in ROW_SCOPE  # unchanged for the ranking route
+
+    def test_the_scope_reaches_every_column_request(self):
+        from slumdog.relay_columns import (
+            SETTLEMENT_COLUMN_SELECTORS,
+            SETTLEMENT_ROW_SCOPE,
+        )
+
+        asked: list[str] = []
+
+        class _Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b"[A B 27/09/2026 7:00 PM](https://f/m/a/387400)"
+
+        def opener(request, timeout=0):
+            asked.append(request.headers["X-target-selector"])
+            return _Response()
+
+        try:
+            fetch_board_columns(BOARD, "volleyball", "2026-09-27",
+                                opener=opener, sleep=lambda _s: None,
+                                selectors=SETTLEMENT_COLUMN_SELECTORS,
+                                scope=SETTLEMENT_ROW_SCOPE)
+        except Exception:
+            pass
+        assert asked
+        assert all(selector.startswith(SETTLEMENT_ROW_SCOPE)
+                   for selector in asked)
+
+    def test_the_ranking_route_keeps_its_own_scope(self):
+        asked: list[str] = []
+
+        class _Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b"x"
+
+        def opener(request, timeout=0):
+            asked.append(request.headers["X-target-selector"])
+            return _Response()
+
+        try:
+            fetch_board_columns(BOARD, "hockey", "2026-09-29",
+                                opener=opener, sleep=lambda _s: None)
+        except Exception:
+            pass
+        assert all(selector.startswith(ROW_SCOPE) for selector in asked)

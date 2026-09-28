@@ -59,6 +59,20 @@ from .sports import SPORTS
 # row a board could not predict is never captured at all.
 ROW_SCOPE = ".rcnt:has(.fprc):has(.tnms)"
 
+# The scope for a board being SETTLED rather than ranked.
+#
+# ROW_SCOPE demands a prediction cell, because a row without one cannot
+# become a pick. A finished match is not being picked, and requiring
+# ".fprc" of it asks a results board to look like a fixtures board. Run
+# 36417397896 showed the cost precisely: the volleyball board for
+# 2026-09-27 rendered 42,670 bytes of real content - title "Volleyball
+# predictions for 27/09/2026", no challenge page - while every scoped
+# column returned 422, which reads as throttling and is not.
+#
+# A row that has a score is the row settlement is looking for, and it is
+# a cheaper selector besides.
+SETTLEMENT_ROW_SCOPE = ".rcnt:has(.lscr_td)"
+
 
 def scoped(selector: str, scope: str = ROW_SCOPE) -> str:
     """A field selector restricted to complete rows.
@@ -328,7 +342,8 @@ def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
                         sleep=time.sleep,
                         selectors: dict[str, str] | None = None,
                         required: tuple[str, ...] | None = None,
-                        before_request=None) -> BoardColumns:
+                        before_request=None,
+                        scope: str = ROW_SCOPE) -> BoardColumns:
     """Fetch every column for a board and validate that they agree.
 
     Raises rather than returning a half-built board: a throttled render can
@@ -341,7 +356,7 @@ def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
     failures: list[str] = []
     for name, selector in selectors.items():
         try:
-            columns[name] = fetch_column(board_url, scoped(selector),
+            columns[name] = fetch_column(board_url, scoped(selector, scope),
                                          timeout=timeout, opener=opener,
                                          column=name, attempts=attempts,
                                          backoff=backoff, sleep=sleep,
@@ -637,7 +652,8 @@ def capture_board(board_url: str, sport: str, target_date: str, *,
                   sleep=time.sleep,
                   selectors: dict[str, str] | None = None,
                   required: tuple[str, ...] | None = None,
-                  before_request=None) -> BoardCapture:
+                  before_request=None,
+                  scope: str = ROW_SCOPE) -> BoardCapture:
     """Capture one board, returning an outcome instead of raising.
 
     Policy decisions, and why:
@@ -679,7 +695,8 @@ def capture_board(board_url: str, sport: str, target_date: str, *,
                                     attempts=attempts, backoff=backoff,
                                     sleep=sleep, selectors=selectors,
                                     required=required,
-                                    before_request=before_request)
+                                    before_request=before_request,
+                                    scope=scope)
     except (ColumnFetchError, ColumnAlignmentError) as exc:
         return BoardCapture(status=COVERAGE_GAP, sport=sport,
                             target_date=target_date, source_url=board_url,

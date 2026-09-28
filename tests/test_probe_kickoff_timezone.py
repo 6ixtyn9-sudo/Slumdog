@@ -2907,10 +2907,12 @@ class TestTheBudgetFollowsTheOpenQuestions:
                 shares.__setitem__("settle", slice_seconds),
                 {"hockey": {"graded": 1}})[1])
         probe.run_open_questions("2026-09-29", timeout=1, pause=0)
-        # Three questions, ~600s on the clock, ~70s held back for
-        # reporting: each gets roughly a third rather than a fixed slice.
-        assert 150 < shares["e2e"] < 200
-        assert 150 < shares["settle"] < 200
+        # Two costly questions, ~600s on the clock, ~70s held back for
+        # reporting: each gets about half. The calibration is not in the
+        # split - it has proven the same offset three times on two
+        # requests, and runs on what is left.
+        assert 230 < shares["e2e"] < 290
+        assert 230 < shares["settle"] < 290
 
     def test_a_board_gets_more_than_a_calibration_needs(self, monkeypatch):
         import scripts.probe_kickoff_timezone as probe
