@@ -1123,7 +1123,7 @@ def render_clock_probe(date: str, *, timeout: int, pause: float,
 
 def collector_end_to_end(date: str, *, timeout: int, pause: float,
                          sport: str = "hockey",
-                         slice_seconds: float = 150.0) -> dict[str, Any]:
+                         slice_seconds: float = 240.0) -> dict[str, Any]:
     """Drive the PRODUCTION capture path, not a probe-shaped copy of it.
 
     Everything proven about the column route so far was proven by calling
@@ -2097,13 +2097,13 @@ def run_open_questions(date: str, *, timeout: int, pause: float,
     stages run in between. A stage that has answered is not asked again.
     """
     stages = (
-        ("render_clock", lambda: render_clock_probe(
-            date, timeout=timeout, pause=pause, slice_seconds=70,
-            attempts=1)),
-        ("collector_end_to_end", lambda: collector_end_to_end(
-            date, timeout=timeout, pause=pause, slice_seconds=110)),
-        ("settlement_probe", lambda: settlement_probe(
-            date, timeout=timeout, pause=pause, slice_seconds=110,
+        ("render_clock", lambda budget: render_clock_probe(
+            date, timeout=timeout, pause=pause,
+            slice_seconds=min(budget, 90), attempts=1)),
+        ("collector_end_to_end", lambda budget: collector_end_to_end(
+            date, timeout=timeout, pause=pause, slice_seconds=budget)),
+        ("settlement_probe", lambda budget: settlement_probe(
+            date, timeout=timeout, pause=pause, slice_seconds=budget,
             attempts=1)),
     )
     results: dict[str, Any] = {}
@@ -2114,12 +2114,18 @@ def run_open_questions(date: str, *, timeout: int, pause: float,
                        if not stage_succeeded(item[0], results.get(item[0]))]
         if not outstanding or time_left() < 80:
             break
+        # Split what is left between the questions still unanswered,
+        # rather than holding every stage to a fixed share decided before
+        # the run knew which ones would need it. A whole board is eight
+        # column requests with retries; 110 seconds was never going to be
+        # enough for it, and was more than the calibration ever needed.
+        share = max(90.0, (time_left() - 70) / max(1, len(outstanding)))
         for name, run in outstanding:
             if time_left() < 80:
                 break
             started = time.monotonic()
             try:
-                record = run()
+                record = run(share)
             except Exception as exc:  # noqa: BLE001 - reported, not raised
                 record = {"verdict": f"{type(exc).__name__}: {exc}"[:200]}
             # Meta lives beside the record, never inside it: the

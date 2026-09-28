@@ -2871,3 +2871,64 @@ class TestTheOpenQuestionsAreAskedInPasses:
                                        passes=2)
         assert "relay exploded" in out["render_clock"]["verdict"]
         assert out["collector_end_to_end"]["parsed_events"] == 1
+
+
+class TestTheBudgetFollowsTheOpenQuestions:
+    """A whole board is eight column requests with retries; the
+    calibration is two. Holding both to the same fixed share was decided
+    before the run knew which stages would still need time."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        probe.EMITTED_SECTIONS.clear()
+        probe.set_deadline(None)
+        yield
+        probe.EMITTED_SECTIONS.clear()
+        probe.set_deadline(None)
+
+    def test_the_remaining_budget_is_split_between_what_is_unanswered(
+            self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        shares: dict[str, float] = {}
+        probe.set_deadline(600)
+        monkeypatch.setattr(probe, "render_clock_probe",
+                            lambda *a, **k: {"proven": True})
+        monkeypatch.setattr(
+            probe, "collector_end_to_end",
+            lambda date, timeout=0, pause=0, slice_seconds=0, **k: (
+                shares.__setitem__("e2e", slice_seconds),
+                {"parsed_events": 1})[1])
+        monkeypatch.setattr(
+            probe, "settlement_probe",
+            lambda date, timeout=0, pause=0, slice_seconds=0, **k: (
+                shares.__setitem__("settle", slice_seconds),
+                {"hockey": {"graded": 1}})[1])
+        probe.run_open_questions("2026-09-29", timeout=1, pause=0)
+        # Three questions, ~600s on the clock, ~70s held back for
+        # reporting: each gets roughly a third rather than a fixed slice.
+        assert 150 < shares["e2e"] < 200
+        assert 150 < shares["settle"] < 200
+
+    def test_a_board_gets_more_than_a_calibration_needs(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        seen: dict[str, float] = {}
+        probe.set_deadline(600)
+        monkeypatch.setattr(
+            probe, "render_clock_probe",
+            lambda date, timeout=0, pause=0, slice_seconds=0, **k: (
+                seen.__setitem__("clock", slice_seconds),
+                {"proven": True})[1])
+        monkeypatch.setattr(
+            probe, "collector_end_to_end",
+            lambda date, timeout=0, pause=0, slice_seconds=0, **k: (
+                seen.__setitem__("e2e", slice_seconds),
+                {"parsed_events": 1})[1])
+        monkeypatch.setattr(probe, "settlement_probe",
+                            lambda *a, **k: {"hockey": {"graded": 1}})
+        probe.run_open_questions("2026-09-29", timeout=1, pause=0)
+        assert seen["clock"] <= 90          # two requests never need more
+        assert seen["e2e"] > seen["clock"]  # a whole board does
