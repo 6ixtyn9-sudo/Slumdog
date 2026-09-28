@@ -2932,3 +2932,41 @@ class TestTheBudgetFollowsTheOpenQuestions:
         probe.run_open_questions("2026-09-29", timeout=1, pause=0)
         assert seen["clock"] <= 90          # two requests never need more
         assert seen["e2e"] > seen["clock"]  # a whole board does
+
+
+class TestDiagnosingA422:
+    """The renderer answers 422 for 'matched nothing' — the same answer
+    whether it was throttled, the selector is wrong, or the page it
+    rendered was a bot-check with no board on it. Five runs read it as
+    throttling."""
+
+    def test_a_challenge_page_says_no_selector_could_match(self,
+                                                           monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(
+            probe, "relay_get_selector",
+            lambda *a, **k: b"Just a moment... checking your browser")
+        out = probe.diagnose_board("https://f/board", timeout=1)
+        assert out["is_challenge"] is True
+        assert "no selector can match" in out["verdict"]
+
+    def test_a_real_board_points_at_the_selector_or_the_throttle(
+            self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(
+            probe, "relay_get_selector",
+            lambda *a, **k: b"<div class='rcnt'>Team A vs Team B</div>" * 20)
+        out = probe.diagnose_board("https://f/board", timeout=1)
+        assert out["is_challenge"] is False
+        assert "selector or the throttle" in out["verdict"]
+
+    def test_a_refused_diagnosis_is_reported_not_raised(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        def _boom(*a, **k):
+            raise RuntimeError("HTTP 451")
+
+        monkeypatch.setattr(probe, "relay_get_selector", _boom)
+        assert "451" in probe.diagnose_board("https://f/b", timeout=1)["error"]

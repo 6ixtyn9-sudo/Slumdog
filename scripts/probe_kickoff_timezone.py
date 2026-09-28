@@ -56,7 +56,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from bs4 import BeautifulSoup  # noqa: E402
 
-from slumdog.forebet import board_url  # noqa: E402
+from slumdog.forebet import board_url, looks_like_challenge_page  # noqa: E402
 from slumdog.forebet import (  # noqa: E402
     RELAY_BASE,
     fetch_with_fallback,
@@ -1121,6 +1121,50 @@ def render_clock_probe(date: str, *, timeout: int, pause: float,
     return record
 
 
+def diagnose_board(url: str, *, timeout: int) -> dict[str, Any]:
+    """Is the board refusing our SELECTOR, or refusing US?
+
+    The renderer answers 422 for "matched nothing", which is the same
+    answer whether it was throttled, whether the selector is wrong, or
+    whether the page it rendered was a bot-check interstitial with no
+    board on it at all. Five runs have read 422 as throttling.
+
+    The asymmetry that prompted this: the same ``.tnms`` selector returns
+    in 6.5 seconds on the football 1x2 board and 422s on
+    ``/en/<sport>/predictions/<date>`` in the same run, on the same relay.
+    One coarse request against the whole body says which world we are in.
+    """
+    try:
+        body = relay_get_selector(url, "body", timeout=timeout)
+    except Exception as exc:  # noqa: BLE001 - reported, not raised
+        return {"error": f"{type(exc).__name__}: {exc}"[:160]}
+    report = body_fingerprint(body)
+    report["is_challenge"] = looks_like_challenge_page(body or b"")
+    report["verdict"] = (
+        "the board itself is a bot-check page, so no selector can match"
+        if report["is_challenge"] else
+        "the board rendered; the selector or the throttle is the problem")
+    return report
+
+
+def relay_get_selector(url: str, selector: str, *, timeout: int) -> bytes:
+    """One rendered extract, by selector, with no retry or interpretation."""
+    import urllib.request
+
+    request = urllib.request.Request(
+        "https://r.jina.ai/" + url,
+        headers={
+            "User-Agent": "EdgeFactory/1.0",
+            "Accept": "text/plain",
+            "X-No-Cache": "true",
+            "X-Timeout": "25",
+            "X-Target-Selector": selector,
+        },
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
 def collector_end_to_end(date: str, *, timeout: int, pause: float,
                          sport: str = "hockey",
                          slice_seconds: float = 240.0) -> dict[str, Any]:
@@ -1164,6 +1208,13 @@ def collector_end_to_end(date: str, *, timeout: int, pause: float,
                                        pause_seconds=0)
         except Exception as exc:  # noqa: BLE001 - reported, not raised
             record["verdict"] = f"capture failed: {type(exc).__name__}: {exc}"[:240]
+            # One coarse request to separate "the renderer refused us" from
+            # "the page it rendered had no board on it".
+            try:
+                record["board"] = diagnose_board(
+                    board_url(SPORTS[sport], date), timeout=min(timeout, 30))
+            except Exception:  # noqa: BLE001
+                pass
             record["seconds"] = round(time.monotonic() - started, 1)
             return record
 
