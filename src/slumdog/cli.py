@@ -235,7 +235,7 @@ def main() -> int:
         return 0
     if args.command == "r1-backtest":
         # This step is meant to run unattended inside a CI job that already
-        # built the historical ledgers (see docs/owner_paste/ for the staged
+        # built the historical ledgers (see docs/workflow_staging/ for the staged
         # pipeline.yml step) -- it must never fail that job. r1_backtest()
         # is already internally defensive per-sport, but this is the
         # last-resort net: any unexpected error still exits 0 with an

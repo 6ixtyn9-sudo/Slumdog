@@ -3539,7 +3539,7 @@ def main(argv: list[str] | None = None) -> int:
               "exit — seconds, not the full multi-stage sweep's ~13 "
               "minutes. Read-only: no capture, no evidence tree, no disk "
               "writes beyond --out. Folded into the `canary` job in "
-              "docs/owner_paste/pipeline.yml (2026-09-28, superseding an "
+              "docs/workflow_staging/pipeline.yml (2026-09-28, superseding an "
               "earlier standalone-cron staging that duplicated this "
               "workflow's own schedule) — it uses this mode on every "
               "pipeline run to build a which-path-is-open availability "
@@ -3645,7 +3645,7 @@ def main(argv: list[str] | None = None) -> int:
         # Non-zero on an unhealthy sample is deliberate, not incidental:
         # a run of THIS mode alone turns Actions' own green/red run history
         # into a free, readable-without-a-paste availability map (see the
-        # `canary` job in docs/owner_paste/pipeline.yml, which runs this
+        # `canary` job in docs/workflow_staging/pipeline.yml, which runs this
         # mode on every pipeline trigger instead of a standalone cron) — a
         # failed run IS the finding, not a probe defect.
         return 0 if report["canary"].get("healthy") else 1

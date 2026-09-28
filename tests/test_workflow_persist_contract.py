@@ -7,7 +7,7 @@ and the artifact is written on the runner and discarded at job end. It
 happened: ``selections_delta_*`` was produced on every dispatch from
 2026-09-22 and never committed.
 
-The replacement was staged under ``docs/owner_paste/`` and applied by the
+The replacement was staged under ``docs/workflow_staging/`` and applied by the
 owner on 2026-09-27. These tests now guard the live file directly, so the gap
 cannot reopen quietly, and so a future widening of the globs cannot smuggle in
 a permissions or pinning change alongside it.
@@ -30,7 +30,7 @@ this repo once (`docs/STATE.md`, "A Stage Reports As It Finishes"), now
 found in the batch driver's own workflow.
 
 The fix (`if: always()` on the persist step, nothing else) is staged again
-at ``docs/owner_paste/forward_shadow.yml`` for the owner to paste in. Until
+at ``docs/workflow_staging/forward_shadow.yml`` for the owner to paste in. Until
 it is applied, ``TestTheStagedFixIsNarrowAndCorrect`` below pins the staged
 copy so it cannot drift from "add one line" into something wider; once
 applied, that class's assertions move onto ``live_text`` (see its docstring)
@@ -49,7 +49,7 @@ from scripts.check_workflow_evidence_globs import (
 )
 
 LIVE = Path(".github/workflows/forward_shadow.yml")
-STAGED = Path("docs/owner_paste/forward_shadow.yml")
+STAGED = Path("docs/workflow_staging/forward_shadow.yml")
 PERSIST_STEP_NAME = (
     "      - name: Persist small evidence to git (permanent ledger)\n")
 
@@ -94,7 +94,7 @@ class TestEveryDeclaredArtifactIsPersisted:
 class TestTheStagedFixIsNarrowAndCorrect:
     """Pins the pending owner-paste while it waits to be applied.
 
-    Once the owner pastes ``docs/owner_paste/forward_shadow.yml`` over the
+    Once the owner pastes ``docs/workflow_staging/forward_shadow.yml`` over the
     live file, this class's assertions belong on ``live_text`` instead (drop
     this class, add its two checks to ``TestEveryDeclaredArtifactIsPersisted``
     / ``TestThePersistStepStaysNarrow``, delete the staged file) — exactly

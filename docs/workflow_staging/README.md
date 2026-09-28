@@ -1,4 +1,13 @@
-# Owner paste — files an agent token cannot push
+# Workflow staging — files an agent token cannot push
+
+(Renamed 2026-09-29 from `docs/owner_paste/`, at the owner's request — same
+directory, same mechanism, just a name that isn't "owner_paste". See the
+`pipeline.yml` entry below for the incident that motivated tightening this
+directory's naming discipline in the first place. Older references to
+`docs/owner_paste/...` in `HANDOFF.md` are historical narrative describing
+what existed at the time and are left as written; every *live* reference —
+this file, `AGENTS.md`, `docs/EVENT_DAY_TRACK.md`, code comments, tests —
+now points at `docs/workflow_staging/`.)
 
 GitHub App tokens are refused when a push adds or edits anything under
 `.github/workflows/`:
@@ -55,12 +64,12 @@ Small-evidence writes are already isolated per date and already the narrow,
 vetted glob list from the 2026-09-27 cycle above — running that step
 unconditionally does not widen what gets committed, only whether it runs
 when an earlier step failed or the job was cancelled/timed out. Staged at
-`docs/owner_paste/forward_shadow.yml`; `tests/test_workflow_persist_contract.py`
+`docs/workflow_staging/forward_shadow.yml`; `tests/test_workflow_persist_contract.py`
 (`TestTheStagedFixIsNarrowAndCorrect`) pins that the staged copy differs from
 the live file by exactly that one added line — nothing else — so pasting it
 cannot smuggle in a wider change.
 
-**To apply:** open `docs/owner_paste/forward_shadow.yml` on this branch,
+**To apply:** open `docs/workflow_staging/forward_shadow.yml` on this branch,
 copy the whole file, paste it over `.github/workflows/forward_shadow.yml` on
 `main` in the GitHub web UI, commit. Then delete the staged copy (git history
 is the record, same as the 2026-09-27 paste) and move
@@ -87,7 +96,7 @@ branch picked it up via `git merge origin/main` rather than an authored
 diff — merging in an already owner-committed workflow-file change is
 accepted by the restricted push token even though authoring a fresh diff to
 that path directly is refused; use this pattern for any future
-`docs/owner_paste/*.yml` fix once the owner applies it to `main`.
+`docs/workflow_staging/*.yml` fix once the owner applies it to `main`.
 
 Consequence: any push touching `scripts/probe_kickoff_timezone.py` or the
 workflow file itself, from `main` or any `arena/**` session branch, now
@@ -116,68 +125,60 @@ without an owner paste.
 Priority 1 breaker measurement are both settled for good.** It is a
 diagnostic, not part of the pipeline.
 
+## `pipeline.yml` — APPLIED 2026-09-29, file removed: canary sampling + R1 backtest, folded into the existing pipeline
 
-## `pipeline.yml` — staged 2026-09-28, OPTIONAL: canary sampling + R1 backtest, folded into the existing pipeline
+**Incident, previous day (2026-09-28):** an earlier version of this staging
+(then named `pipeline_backtest_step.yml`, a full copy of `pipeline.yml` plus
+one job) and a separate `probe_canary_cron.yml` (a brand-new cron'd
+workflow) were both wrong shapes, and the first one caused real damage. The
+owner applied `pipeline_backtest_step.yml` by *adding* it to
+`.github/workflows/` rather than *replacing* `pipeline.yml` with it — a
+reasonable reading of a file whose name didn't say "this replaces
+pipeline.yml". The result on `main` was a second, complete "Slumdog ·
+Forebet Depth Pipeline" workflow: same `name:`, the same two `cron:`
+schedules, the same `slumdog-depth-build` concurrency group — a full second
+11-sport Depth Build queued behind the first on every trigger, doubling
+load on the exact relay whose IP reputation was the day's open incident.
+The owner deleted it (`main` commit `b7236fb`). Checked run history and the
+registered-workflows API afterward (`gh run list --workflow pipeline.yml`,
+`gh api repos/.../actions/workflows`): exactly one Depth Build run exists
+for that day, no ghost/disabled registration for the duplicate — no
+evidence the duplicate ever fired before it was caught and removed.
+Separately, `probe_canary_cron.yml`'s own premise (a `schedule:`-triggered
+workflow) was also wrong: GitHub's `schedule` trigger is best-effort and
+silently skips runs, and this repo's workflows are triggered externally
+instead, so a standalone cron'd sampler would be exactly as unreliable as
+the thing it exists to measure.
 
-**Incident, same day:** an earlier version of this staging (then named
-`pipeline_backtest_step.yml`, a full copy of `pipeline.yml` plus one job)
-and a separate `probe_canary_cron.yml` (a brand-new cron'd workflow) were
-both wrong shapes, and the first one caused real damage. The owner applied
-`pipeline_backtest_step.yml` by *adding* it to `.github/workflows/` rather
-than *replacing* `pipeline.yml` with it — a reasonable reading of a file
-whose name didn't say "this replaces pipeline.yml". The result on `main`
-was a second, complete "Slumdog · Forebet Depth Pipeline" workflow: same
-`name:`, the same two `cron:` schedules, the same `slumdog-depth-build`
-concurrency group — a full second 11-sport Depth Build queued behind the
-first on every trigger, doubling load on the exact relay whose IP
-reputation was the day's open incident. The owner deleted it (`main`
-commit `b7236fb`). Separately, `probe_canary_cron.yml`'s own premise (a
-`schedule:`-triggered workflow) was also wrong: GitHub's `schedule` trigger
-is best-effort and silently skips runs, and this repo's workflows are
-triggered externally instead, so a standalone cron'd sampler would be
-exactly as unreliable as the thing it exists to measure.
+**The fix, both parts:** the restaged file was named **exactly** for the
+file it replaced — `pipeline.yml`, matching `.github/workflows/pipeline.yml`
+byte-for-byte apart from two new jobs — so the only sane instruction was
+**REPLACE .github/workflows/pipeline.yml**, never "add" or "create a new
+file". And the cron sampler was dropped entirely; its function (dual-path
+availability sampling, `scripts/probe_kickoff_timezone.py --canary-only`)
+became a `canary` job *inside* this same file, with no `needs:` and nothing
+depending on it, riding whatever trigger already fires this workflow
+instead of adding one of its own. A `backtest` job (the R1-rule replay this
+repo's evidence already supports — see `src/slumdog/backtest.py`) was added
+the same way: `needs: [history]`, a job-level `permissions: contents:
+write` override (the workflow default stays `contents: read`), and a
+persist step that commits only `data/reports/r1_backtest_*.{json,md}` — a
+few KB — the same small-evidence pattern `forward_shadow.yml` already uses.
 
-**The fix, both parts:** this file is now named **exactly** for the file
-it replaces — `docs/owner_paste/pipeline.yml`, matching
-`.github/workflows/pipeline.yml` byte-for-byte apart from two new jobs —
-so the only sane instruction is **REPLACE .github/workflows/pipeline.yml**,
-never "add" or "create a new file". And the cron sampler is gone entirely;
-its function (dual-path availability sampling, `scripts/probe_kickoff_timezone.py
---canary-only`) is now a `canary` job *inside* this same file, with no
-`needs:` and nothing depending on it, so it rides whatever trigger already
-fires this workflow instead of adding one of its own. A `backtest` job
-(the R1-rule replay this repo's evidence already supports — see
-`src/slumdog/backtest.py`) is added the same way: `needs: [history]`, a
-job-level `permissions: contents: write` override (the workflow default
-stays `contents: read`), and a persist step that commits only
-`data/reports/r1_backtest_*.{json,md}` — a few KB — the same
-small-evidence pattern `forward_shadow.yml` already uses.
-`tests/test_owner_paste_pipeline_contract.py` pins every one of these
-properties: the file's name, that the README here says REPLACE, that the
-diff against the live file is exactly these two jobs (nothing about any
-existing job, the workflow's own `name:`, its trigger, or its
-concurrency group may change), that neither new job declares an
-`on.schedule` of its own, that the canary job has no `needs` and nothing
-needs it, and that the backtest job's git commit step only ever touches
-its own two file globs and pushes without `--force`.
+**What was applied:** the owner replaced `.github/workflows/pipeline.yml`
+correctly this time (`main` commit `10ad139`, "Add canary and backtest jobs
+to pipeline") — no duplicate workflow, exactly the two new jobs, everything
+else byte-identical. This branch picked it up via `git merge origin/main`
+(merge commit `f49de40`) rather than an authored diff, the same pattern
+used for the `probe_kickoff_timezone.yml` push-trigger fix above.
 
-**To apply:** open `docs/owner_paste/pipeline.yml` on this branch, copy
-the whole file, **REPLACE `.github/workflows/pipeline.yml`** on `main` in
-the GitHub web UI with it (not "add a new file" — paste over the existing
-one), commit. Then delete the staged copy (git history is the record, same
-as every cycle above) and migrate
-`test_owner_paste_pipeline_contract.py`'s checks onto the live file the
-way `test_probe_workflow_persist_contract.py` did for the probe's trigger
-fix. Also verify against a freshly fetched `main`, not a stale local
-checkout, before re-staging anything like this again — this session's own
-local clone went stale more than once.
+The staged copy is deleted rather than kept as a record — git history is
+the record, same as every cycle above. `tests/test_depth_pipeline_contract.py`
+now guards the live file directly (job shapes, permissions, no drift on
+`name:`/trigger/concurrency), migrated from
+`tests/test_owner_paste_pipeline_contract.py` the way
+`test_probe_workflow_persist_contract.py` did for the probe's trigger fix.
 
-**This is optional, not mandatory** — same standing as everything else in
-this file: it answers two different questions (is the source reachable
-right now; does the R1 rule have any edge) that the owner can decide to
-want independently, and staging it here does not paste it anywhere.
-
-**Delete this staged file (and, once applied, the two live jobs) once
-both questions are answered well enough that a canary sample and a fresh
-backtest on every pipeline run stop being useful.** They are measurement
-jobs, not part of the pipeline's core capture/settle/train loop.
+**These are measurement jobs, not part of the pipeline's core
+capture/settle/train loop** — delete the two live jobs once a canary sample
+and a fresh backtest on every pipeline run stop being useful.

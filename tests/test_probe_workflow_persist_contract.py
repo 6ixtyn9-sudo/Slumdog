@@ -16,7 +16,7 @@ at all. This was exactly the failure shape ``test_workflow_persist_contract
 owner-authored file quietly stops doing what an agent assumed it still did.
 
 The fix (``branches: [main, 'arena/**']``, nothing else) was staged at
-``docs/owner_paste/probe_kickoff_timezone.yml`` and applied by the owner
+``docs/workflow_staging/probe_kickoff_timezone.yml`` and applied by the owner
 directly to `main` (commit ``1348ded``, picked up onto this branch via a
 merge of ``origin/main`` rather than an authored diff — merging in an
 already owner-committed workflow change is accepted by the restricted push
