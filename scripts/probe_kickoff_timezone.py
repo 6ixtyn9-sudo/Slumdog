@@ -67,6 +67,7 @@ from slumdog.relay_columns import (  # noqa: E402
     COLUMN_SELECTORS,
     REQUIRED_COLUMNS,
     SETTLEMENT_COLUMN_SELECTORS,
+    SETTLEMENT_REQUIRED_COLUMNS,
     capture_board,
     settled_rows,
 )
@@ -958,7 +959,8 @@ def horizon_coverage(date: str, *, timeout: int, pause: float,
 
 
 def settlement_probe(date: str, *, timeout: int, pause: float,
-                     sports: tuple[str, ...] = ("hockey", "mma")) -> dict[str, Any]:
+                     sports: tuple[str, ...] = ("hockey",),
+                     settled_date: str | None = None) -> dict[str, Any]:
     """Does a captured pick actually settle the next day, by the same id?
 
     Coverage without settlement is half a system: a rank-1 pick that can
@@ -970,7 +972,14 @@ def settlement_probe(date: str, *, timeout: int, pause: float,
     winning.
     """
     out: dict[str, Any] = {}
-    yesterday = (dt.date.fromisoformat(date) - dt.timedelta(days=1)).isoformat()
+    # The day to settle is yesterday in real time, not the day before the
+    # capture target. Run 36385309872 asked for 2026-09-28 while it was
+    # still 2026-09-28: the board answered with 34 fixtures and no scores
+    # at all, because none of them had been played. A settlement probe must
+    # look at a day that is over.
+    yesterday = settled_date or (
+        dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=1)
+    ).isoformat()
     for sport in sports:
         spec = SPORTS.get(sport)
         if spec is None or time_left() < 120:
@@ -982,9 +991,11 @@ def settlement_probe(date: str, *, timeout: int, pause: float,
                                captured_at=date + "T00:00:00Z",
                                timeout=timeout, attempts=3, backoff=7.0,
                                sleep=pace,
-                               selectors=SETTLEMENT_COLUMN_SELECTORS)
+                               selectors=SETTLEMENT_COLUMN_SELECTORS,
+                               required=SETTLEMENT_REQUIRED_COLUMNS)
         record: dict[str, Any] = {
             "settled_date": yesterday,
+            "url": url,
             "status": result.status,
             "rows": result.row_count,
             "reason": result.reason[:160],
@@ -1792,15 +1803,18 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
     # have never been captured at the dates they actually publish, and in
     # run 36379077488 they were skipped entirely because the proven four
     # spent the budget re-proving themselves.
-    report["horizon_coverage"] = horizon_coverage(
-        date, timeout=timeout, pause=pause,
-        sports=("rugby", "mma", "cricket"))
-
-    # Coverage that cannot be graded is not coverage. Yesterday's board is
-    # the only place the result lives, and the join has never been proven
-    # against a real one.
+    # Coverage that cannot be graded is not coverage, and settlement is now
+    # the only thing never proven against a real board — so it goes first,
+    # ahead of sports that re-prove themselves every run.
     report["settlement_probe"] = settlement_probe(
         date, timeout=timeout, pause=pause)
+
+    # Cricket is left out until its partially-rendered kickoff column is
+    # handled: it fails the same way every run and teaches nothing new,
+    # while costing eight requests that rugby and mma can use.
+    report["horizon_coverage"] = horizon_coverage(
+        date, timeout=timeout, pause=pause,
+        sports=("rugby", "mma"))
 
     report["r1_coverage"] = r1_coverage(date, timeout=timeout, pause=pause)
 
@@ -2044,7 +2058,11 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
         lines.append(f"FETCH FAILURES ({len(errors)}) — the probe could not "
                      "reach part of the source:")
         for err in errors[:6]:
-            lines.append(f"  {err.get('route')} {err.get('url')}: {err.get('error')}")
+            if isinstance(err, dict):
+                lines.append(f"  {err.get('route')} {err.get('url')}: "
+                             f"{err.get('error')}")
+            else:
+                lines.append(f"  {err}")
 
     for key, label in (("football_board_body", "football board"),
                        ("extra_sport_body", "extra sport board")):

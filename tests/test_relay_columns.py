@@ -755,3 +755,24 @@ class TestSettlementNeedsAFinalScore:
         board.columns["link"] = ["[A0 B0 30/09/2026 7:00 PM]"
                                  "(https://f/m/a0/387410)"]
         assert settled_rows(board) == []
+
+
+class TestWhatCountsAsRequiredDependsOnTheJob:
+    """A capture for settlement needs fields a capture for ranking does not."""
+
+    def _columns(self, score):
+        return {"link": ["l"], "home": ["A"], "away": ["B"],
+                "kickoff": ["k"], "probabilities": ["62 38"], "pick": ["1"],
+                "score": list(score), "status": ["FT"]}
+
+    def test_an_empty_optional_column_is_dropped_as_before(self):
+        aligned = align_columns(self._columns([]))
+        assert "score" not in aligned
+        assert aligned["home"] == ["A"]
+
+    def test_an_empty_required_column_is_kept_so_it_fails(self):
+        from slumdog.relay_columns import SETTLEMENT_REQUIRED_COLUMNS
+
+        aligned = align_columns(self._columns([]),
+                                required=SETTLEMENT_REQUIRED_COLUMNS)
+        assert aligned["score"] == []

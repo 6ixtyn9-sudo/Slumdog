@@ -2345,7 +2345,8 @@ class TestSettlementProbe:
 
         monkeypatch.setattr(probe, "capture_board", fake_capture)
         out = probe.settlement_probe("2026-09-28", timeout=1, pause=0,
-                                     sports=("hockey",))
+                                     sports=("hockey",),
+                                     settled_date="2026-09-27")
         return out["hockey"], seen
 
     def test_it_reads_yesterdays_board_with_the_result_columns(
@@ -2363,6 +2364,11 @@ class TestSettlementProbe:
         target, kwargs = seen[0]
         assert target == "2026-09-27"
         assert kwargs["selectors"] == SETTLEMENT_COLUMN_SELECTORS
+        # An empty score column is a refusal, not a sport without scores.
+        from slumdog.relay_columns import SETTLEMENT_REQUIRED_COLUMNS
+
+        assert kwargs["required"] == SETTLEMENT_REQUIRED_COLUMNS
+        assert "score" in SETTLEMENT_REQUIRED_COLUMNS
         assert record["graded"] == 2
         assert record["sample"][0]["score"] == "3-1"
         assert record["sample"][0]["event_id"] == "387400"
@@ -2388,3 +2394,27 @@ class TestSettlementProbe:
         assert record["status"] == COVERAGE_GAP
         assert "graded" not in record
         assert "disagree" in record["reason"]
+
+    def test_the_day_settled_is_a_day_that_has_finished(self, monkeypatch):
+        """Run 36385309872 asked today's board for today's results and got
+        34 fixtures with no scores, because none had been played."""
+        import datetime as dt
+
+        import scripts.probe_kickoff_timezone as probe
+        from slumdog.relay_columns import COVERAGE_GAP, BoardCapture
+
+        seen: list[str] = []
+
+        def fake_capture(url, sport, target, **kwargs):
+            seen.append(target)
+            return BoardCapture(status=COVERAGE_GAP, sport=sport,
+                                target_date=target, source_url=url,
+                                reason="")
+
+        monkeypatch.setattr(probe, "capture_board", fake_capture)
+        probe.settlement_probe("2027-01-01", timeout=1, pause=0,
+                               sports=("hockey",))
+        expected = (dt.datetime.now(dt.timezone.utc).date()
+                    - dt.timedelta(days=1)).isoformat()
+        assert seen == [expected]
+        assert seen[0] != "2026-12-31"  # not the day before the target

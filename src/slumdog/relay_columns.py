@@ -185,7 +185,9 @@ def _consensus(columns: dict[str, list[str]]) -> int | None:
     return counts[0]
 
 
-def align_columns(columns: dict[str, list[str]]) -> dict[str, list[str]]:
+def align_columns(columns: dict[str, list[str]], *,
+                  required: tuple[str, ...] | None = None
+                  ) -> dict[str, list[str]]:
     """Reconcile columns that render more than one line per row, or a
     heading the shape filter could not see. Anything else is left alone to
     fail as a mismatch.
@@ -204,6 +206,7 @@ def align_columns(columns: dict[str, list[str]]) -> dict[str, list[str]]:
     is a partial render and must stay a mismatch, not be trimmed into
     looking consistent.
     """
+    required = required or REQUIRED_COLUMNS
     expected = _consensus(columns)
     if not expected:
         return columns
@@ -216,14 +219,14 @@ def align_columns(columns: dict[str, list[str]]) -> dict[str, list[str]]:
         # elements while every other column returned ten. This is only
         # safe because a refusal raises: an empty render and a throttled
         # one are not confused here, they arrive by different paths.
-        if count == 0 and name not in REQUIRED_COLUMNS:
+        if count == 0 and name not in required:
             continue
         excess = count - expected
         # Only columns that are not 1:1 with matches may be collapsed. A
         # team-name column that happens to be an exact multiple of the row
         # count is a broken capture, not a multi-line cell, and must stay a
         # mismatch.
-        if (name not in REQUIRED_COLUMNS and count > expected
+        if (name not in required and count > expected
                 and count % expected == 0):
             group = count // expected
             rows = [rows[index * group] for index in range(expected)]
@@ -282,7 +285,8 @@ def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
                         timeout: int = 60, opener=None, minimum_rows: int = 1,
                         attempts: int = 3, backoff: float = 8.0,
                         sleep=time.sleep,
-                        selectors: dict[str, str] | None = None
+                        selectors: dict[str, str] | None = None,
+                        required: tuple[str, ...] | None = None
                         ) -> BoardColumns:
     """Fetch every column for a board and validate that they agree.
 
@@ -291,6 +295,7 @@ def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
     frozen as a complete one is indistinguishable from a quiet fixture day.
     """
     selectors = selectors or COLUMN_SELECTORS
+    required = required or REQUIRED_COLUMNS
     columns: dict[str, list[str]] = {}
     failures: list[str] = []
     for name, selector in selectors.items():
@@ -302,16 +307,16 @@ def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
         except ColumnFetchError as exc:
             failures.append(str(exc))
 
-    missing = [name for name in REQUIRED_COLUMNS if name not in columns]
+    missing = [name for name in required if name not in columns]
     if missing:
         raise ColumnFetchError(
             f"{sport} {target_date}: missing required column(s) "
             f"{', '.join(missing)}; failures: {'; '.join(failures) or 'none'}")
 
-    columns = align_columns(columns)
+    columns = align_columns(columns, required=required)
     counts = {name: len(values) for name, values in columns.items()}
     absent = [name for name in selectors
-              if name not in columns and name not in REQUIRED_COLUMNS]
+              if name not in columns and name not in required]
     distinct = set(counts.values())
     if len(distinct) != 1:
         raise ColumnAlignmentError(
@@ -563,7 +568,8 @@ def capture_board(board_url: str, sport: str, target_date: str, *,
                   expected_rows: int | None = None, raw_sha256: str = "",
                   attempts: int = 3, backoff: float = 8.0,
                   sleep=time.sleep,
-                  selectors: dict[str, str] | None = None) -> BoardCapture:
+                  selectors: dict[str, str] | None = None,
+                  required: tuple[str, ...] | None = None) -> BoardCapture:
     """Capture one board, returning an outcome instead of raising.
 
     Policy decisions, and why:
@@ -603,7 +609,8 @@ def capture_board(board_url: str, sport: str, target_date: str, *,
         board = fetch_board_columns(board_url, sport, target_date,
                                     timeout=timeout, opener=opener,
                                     attempts=attempts, backoff=backoff,
-                                    sleep=sleep, selectors=selectors)
+                                    sleep=sleep, selectors=selectors,
+                                    required=required)
     except (ColumnFetchError, ColumnAlignmentError) as exc:
         return BoardCapture(status=COVERAGE_GAP, sport=sport,
                             target_date=target_date, source_url=board_url,
@@ -656,6 +663,11 @@ SETTLEMENT_COLUMN_SELECTORS: dict[str, str] = {
     "score": ".lscr_td",
     "status": ".scoreLnk",
 }
+
+#: A settlement capture without these has nothing to grade: an empty score
+#: column on a results board is a refusal to answer, not a sport that lacks
+#: the field.
+SETTLEMENT_REQUIRED_COLUMNS = REQUIRED_COLUMNS + ("score", "status")
 
 #: Statuses that mean the score on the board is final. Anything else — live,
 #: postponed, abandoned — is not settled and must not be graded.
