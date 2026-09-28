@@ -24,6 +24,29 @@ from scripts.probe_kickoff_timezone import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_network_direct_vs_relay(monkeypatch):
+    """``direct_vs_relay_probe`` (owner finding, 2026-09-28) is now
+    ``run_probe``'s first stage and makes four real network calls through
+    ``direct_get``/``relay_get``/``relay_get_markdown``. This file's own
+    header promises no test touches the network, so default those three to
+    a fast, deterministic failure for every test — ``direct_vs_relay_probe``
+    already turns a raised exception into a reported ``{"ok": False, ...}``
+    leaf rather than propagating it, so this is a harmless no-op for every
+    test that does not care about this stage. Tests in
+    ``TestDirectVsRelayProbe``/``TestDirectVsRelayOnlyCLIMode`` override
+    these explicitly, which simply wins over this fixture's setup.
+    """
+    import scripts.probe_kickoff_timezone as probe
+
+    def _stub(*a, **k):
+        raise RuntimeError("network disabled in tests")
+
+    monkeypatch.setattr(probe, "direct_get", _stub)
+    monkeypatch.setattr(probe, "relay_get", _stub)
+    monkeypatch.setattr(probe, "relay_get_markdown", _stub)
+
+
 def _boom(message: str):
     def _raise(*args, **kwargs):
         raise RuntimeError(message)
@@ -3054,6 +3077,173 @@ class TestCanaryFromRenderClock:
         assert canary["healthy"] is None
 
 
+class TestDirectVsRelayProbe:
+    """Owner finding, 2026-09-28: a server-side fetch got a real response
+    DIRECT from forebet.com at the exact moment the relay (r.jina.ai)
+    returned a challenge page for the identical URL. This is the runner-
+    side settlement of that question — four single-attempt requests (json
+    x {direct, relay}, one HTML board x {direct, relay}), never retried,
+    never raising.
+    """
+
+    def test_reports_all_four_legs_when_everything_succeeds(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(
+            probe, "direct_get", lambda url, **k: b'[[{"id": 1}]]')
+        monkeypatch.setattr(
+            probe, "relay_get_markdown", lambda *a, **k: b'[[{"id": 1}]]')
+        monkeypatch.setattr(
+            probe, "relay_get",
+            lambda *a, **k: b"<html>rcnt board content here</html>")
+
+        result = probe.direct_vs_relay_probe(
+            "2026-09-29", timeout=5, sport="basketball")
+        assert result["target_date"] == "2026-09-29"
+        assert result["sport"] == "basketball"
+        assert result["football_json"]["direct"]["ok"] is True
+        assert result["football_json"]["relay"]["ok"] is True
+        assert result["html_board"]["direct"]["ok"] is True
+        assert result["html_board"]["relay"]["ok"] is True
+
+    def test_the_exact_finding_direct_works_relay_is_challenged(
+            self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        challenge = (
+            b"Performing security verification This website uses a "
+            b"security service to protect against malicious bots."
+        )
+        monkeypatch.setattr(
+            probe, "direct_get", lambda url, **k: b'[[{"id": 1}]]')
+        monkeypatch.setattr(
+            probe, "relay_get_markdown", lambda *a, **k: challenge)
+        monkeypatch.setattr(probe, "relay_get", lambda *a, **k: challenge)
+
+        result = probe.direct_vs_relay_probe(
+            "2026-09-29", timeout=5, sport="basketball")
+        assert result["football_json"]["direct"]["ok"] is True
+        assert result["football_json"]["relay"]["ok"] is True
+        assert result["football_json"]["relay"]["looks_like"] == \
+            "challenge_page"
+        assert result["html_board"]["relay"]["looks_like"] == \
+            "challenge_page"
+
+    def test_a_failed_leg_is_reported_not_raised(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        def _boom(*a, **k):
+            raise TimeoutError("connection timed out")
+
+        monkeypatch.setattr(probe, "direct_get", _boom)
+        monkeypatch.setattr(
+            probe, "relay_get_markdown", lambda *a, **k: b'[[{"id": 1}]]')
+        monkeypatch.setattr(
+            probe, "relay_get",
+            lambda *a, **k: b"<html>rcnt board content here</html>")
+
+        result = probe.direct_vs_relay_probe(
+            "2026-09-29", timeout=5, sport="basketball")
+        assert result["football_json"]["direct"]["ok"] is False
+        assert "TimeoutError" in result["football_json"]["direct"]["error"]
+        assert result["html_board"]["direct"]["ok"] is False
+
+    def test_each_leg_is_exactly_one_attempt_no_retries(self, monkeypatch):
+        seen = {}
+
+        import scripts.probe_kickoff_timezone as probe
+
+        def fake_direct_get(url, timeout=40, max_retries=3):
+            seen.setdefault("direct_retries", []).append(max_retries)
+            return b'[[{"id": 1}]]'
+
+        def fake_relay_markdown(url, expected_url, timeout=45, max_retries=3):
+            seen.setdefault("relay_markdown_retries", []).append(max_retries)
+            return b'[[{"id": 1}]]'
+
+        def fake_relay_get(url, timeout=45, max_retries=3):
+            seen.setdefault("relay_get_retries", []).append(max_retries)
+            return b"<html>rcnt board content here</html>"
+
+        monkeypatch.setattr(probe, "direct_get", fake_direct_get)
+        monkeypatch.setattr(probe, "relay_get_markdown", fake_relay_markdown)
+        monkeypatch.setattr(probe, "relay_get", fake_relay_get)
+
+        probe.direct_vs_relay_probe("2026-09-29", timeout=5, sport="basketball")
+        assert seen["direct_retries"] == [1, 1]
+        assert seen["relay_markdown_retries"] == [1]
+        assert seen["relay_get_retries"] == [1]
+
+
+class TestDirectVsRelayOnlyCLIMode:
+    def test_a_full_success_prints_a_report_and_exits_zero(
+            self, monkeypatch, capsys):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(
+            probe, "direct_vs_relay_probe",
+            lambda *a, **k: {
+                "target_date": "2026-09-29", "sport": "basketball",
+                "football_json": {
+                    "direct": {"ok": True, "looks_like": "unknown"},
+                    "relay": {"ok": False, "error": "boom"}},
+                "html_board": {
+                    "direct": {"ok": True, "looks_like": "board_html"},
+                    "relay": {"ok": False, "error": "boom"}}})
+
+        rc = probe.main([
+            "--date", "2026-09-29", "--direct-vs-relay-only",
+        ])
+        assert rc == 0
+        report = json.loads(capsys.readouterr().out.strip())
+        assert report["mode"] == "direct_vs_relay_only"
+        assert report["direct_vs_relay"]["football_json"]["direct"]["ok"]
+
+    def test_both_paths_failing_for_the_same_endpoint_exits_non_zero(
+            self, monkeypatch, capsys):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(
+            probe, "direct_vs_relay_probe",
+            lambda *a, **k: {
+                "target_date": "2026-09-29", "sport": "basketball",
+                "football_json": {
+                    "direct": {"ok": False, "error": "boom"},
+                    "relay": {"ok": False, "error": "boom"}},
+                "html_board": {
+                    "direct": {"ok": True, "looks_like": "board_html"},
+                    "relay": {"ok": False, "error": "boom"}}})
+
+        rc = probe.main([
+            "--date", "2026-09-29", "--direct-vs-relay-only",
+        ])
+        assert rc == 1
+
+    def test_never_touches_the_full_sweep_or_the_breaker_probe(
+            self, monkeypatch, capsys):
+        import scripts.probe_kickoff_timezone as probe
+
+        def _must_not_run(*a, **k):
+            raise AssertionError("direct-vs-relay-only must not reach this")
+
+        monkeypatch.setattr(probe, "run_probe", _must_not_run)
+        monkeypatch.setattr(
+            probe, "circuit_breaker_measurement", _must_not_run)
+        monkeypatch.setattr(
+            probe, "direct_vs_relay_probe",
+            lambda *a, **k: {
+                "target_date": "2026-09-29", "sport": "basketball",
+                "football_json": {
+                    "direct": {"ok": True, "looks_like": "unknown"},
+                    "relay": {"ok": True, "looks_like": "unknown"}},
+                "html_board": {
+                    "direct": {"ok": True, "looks_like": "board_html"},
+                    "relay": {"ok": True, "looks_like": "board_html"}}})
+
+        rc = probe.main(["--date", "2026-09-29", "--direct-vs-relay-only"])
+        assert rc == 0
+
+
 class TestCircuitBreakerFarStageInRunProbe:
     """Item (iii)'s default-sweep wiring: circuit_breaker_far must be a
     normal, budget-shared stage the owner's existing hardcoded workflow
@@ -3153,6 +3343,59 @@ class TestCircuitBreakerFarStageInRunProbe:
         assert report["circuit_breaker_comparison"]["trial_valid"] is False
         assert "canary" in \
             report["circuit_breaker_comparison"]["invalid_reason"].lower()
+
+    def test_run_probe_wires_direct_vs_relay_in_as_its_first_stage(
+            self, monkeypatch):
+        """Priority change, owner finding 2026-09-28: this must run before
+        open_questions, unconditionally, and must not crash the whole
+        probe if it raises."""
+        import scripts.probe_kickoff_timezone as probe
+
+        order = []
+
+        def _dvr(*a, **k):
+            order.append("direct_vs_relay")
+            return {"target_date": a[0], "sport": k.get("sport"),
+                    "football_json": {"direct": {"ok": True},
+                                      "relay": {"ok": False}},
+                    "html_board": {"direct": {"ok": True},
+                                   "relay": {"ok": False}}}
+
+        def _oq(*a, **k):
+            order.append("open_questions")
+            return {"passes_used": {}, "stage_meta": {}}
+
+        monkeypatch.setattr(probe, "direct_vs_relay_probe", _dvr)
+        monkeypatch.setattr(probe, "run_open_questions", _oq)
+        monkeypatch.setattr(probe, "fetch", lambda *a, **k: b"")
+        monkeypatch.setattr(probe, "r1_coverage", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "coverage_sweep", lambda *a, **k: {})
+
+        report = probe.run_probe("2026-09-29", sport="basketball",
+                                 timeout=1, pause=0)
+        assert order == ["direct_vs_relay", "open_questions"]
+        assert report["direct_vs_relay"]["football_json"]["direct"]["ok"]
+
+    def test_a_crash_in_direct_vs_relay_does_not_crash_the_whole_probe(
+            self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        def _boom(*a, **k):
+            raise RuntimeError("unexpected crash")
+
+        monkeypatch.setattr(probe, "direct_vs_relay_probe", _boom)
+        monkeypatch.setattr(probe, "fetch", lambda *a, **k: b"")
+        monkeypatch.setattr(probe, "render_clock_probe",
+                            lambda *a, **k: {"proven": True})
+        monkeypatch.setattr(probe, "settlement_probe", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "collector_end_to_end",
+                            lambda *a, **k: {})
+        monkeypatch.setattr(probe, "r1_coverage", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "coverage_sweep", lambda *a, **k: {})
+
+        report = probe.run_probe("2026-09-29", sport="basketball",
+                                 timeout=1, pause=0)
+        assert "crashed" in report["direct_vs_relay"]
 
     def test_r1_coverage_gets_what_is_left_not_a_flat_45s(self, monkeypatch):
         """Run a5e5720 (2026-09-28): budget_left 482s, r1_coverage still

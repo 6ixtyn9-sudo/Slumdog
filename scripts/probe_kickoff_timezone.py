@@ -59,7 +59,9 @@ from bs4 import BeautifulSoup  # noqa: E402
 from slumdog.forebet import board_url, looks_like_challenge_page  # noqa: E402
 from slumdog.forebet import (  # noqa: E402
     RELAY_BASE,
+    direct_get,
     fetch_with_fallback,
+    relay_get,
     relay_get_markdown,
     source_url,
 )
@@ -1356,6 +1358,67 @@ def canary_from_render_clock(render_clock: dict[str, Any]) -> dict[str, Any]:
                      "json_body to judge from"}
 
 
+def direct_vs_relay_probe(date: str, *, timeout: int, sport: str) -> dict[str, Any]:
+    """Owner finding, 2026-09-28: a server-side fetch on the SAME network
+    class as the relay's own egress got a REAL, full JSON response direct
+    from ``forebet.com`` at the exact moment the relay (``r.jina.ai``)
+    returned a challenge page for the identical URL. Every "site-wide
+    refusal" this session (runs 36455080098 / 36461512749 / 36467771961)
+    may therefore have been the RELAY's egress being challenged, not the
+    source refusing this runner — the opposite of what every canary
+    reading up to this function assumed.
+
+    Production's skip-direct-on-runners decision (``on_github_runner()``,
+    Edge-Factory run #503 / addendum 2026-08-20) predates this finding and
+    may itself be stale. This function answers the question directly, from
+    THIS runner, deliberately bypassing ``on_github_runner()``'s guard —
+    that guard is exactly what is in question, not a rule to respect here.
+
+    Fetches, from this runner, at (as close to) the same moment as the
+    relay/direct pair can be requested one after another:
+      1. football's tz=0 JSON: direct (no relay) and via the relay
+      2. one HTML board (``sport``): direct (no relay) and via the relay
+    Four requests total, each a SINGLE attempt (``max_retries=1`` — a WAF
+    challenge is a refusal, not congestion; see ``sample_canary``'s same
+    rule). Never raises: a failed fetch on either path IS the answer, not
+    a probe crash.
+
+    Returns ``{"target_date", "sport", "football_json": {direct, relay},
+    "html_board": {direct, relay}}`` where each leaf is
+    ``{"ok": bool, ...body_fingerprint(body) if ok else {"error": str}}``.
+    """
+    result: dict[str, Any] = {"target_date": date, "sport": sport}
+
+    def _attempt(fn) -> dict[str, Any]:
+        try:
+            body = fn()
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:300]}
+        return {"ok": True, **body_fingerprint(body)}
+
+    json_url = source_url(SPORTS["football"], date)
+    result["football_json"] = {
+        "url": json_url,
+        "direct": _attempt(
+            lambda: direct_get(json_url, timeout=timeout, max_retries=1)),
+        "relay": _attempt(
+            lambda: relay_get_markdown(
+                RELAY_BASE + json_url, json_url, timeout=timeout,
+                max_retries=1)),
+    }
+
+    board = board_url(SPORTS[sport], date)
+    result["html_board"] = {
+        "url": board,
+        "direct": _attempt(
+            lambda: direct_get(board, timeout=timeout, max_retries=1)),
+        "relay": _attempt(
+            lambda: relay_get(
+                RELAY_BASE + board, timeout=timeout, max_retries=1)),
+    }
+    return result
+
+
 def circuit_breaker_comparison(near: dict[str, Any],
                                far: dict[str, Any],
                                canary: dict[str, Any] | None = None
@@ -2501,6 +2564,23 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
         "columns": dict(COLUMN_SELECTORS),
     }
 
+    # Priority change, owner finding 2026-09-28: a server-side fetch got a
+    # REAL response direct from forebet.com at the exact moment the relay
+    # (r.jina.ai) returned a challenge page for the identical URL. Every
+    # "site-wide refusal" reading below (canary, circuit_breaker_comparison)
+    # assumed the SOURCE was refusing this runner; this may instead be the
+    # RELAY's egress being challenged. Runs FIRST, ahead of open_questions,
+    # because it is now the higher-priority question and because it is
+    # cheap (4 single-attempt requests, a few seconds) — see
+    # direct_vs_relay_probe's docstring for the full finding.
+    try:
+        report["direct_vs_relay"] = direct_vs_relay_probe(
+            date, timeout=timeout, sport=sport)
+    except Exception as exc:  # noqa: BLE001 - reported, not raised
+        report["direct_vs_relay"] = {
+            "crashed": f"{type(exc).__name__}: {exc}"[:300]}
+    emit_section("direct_vs_relay", report["direct_vs_relay"])
+
     # Coverage is the question in hand and gets the budget first. The sweep
     # has already answered reachability for every sport, so it only reruns
     # when there is time to spare; row_blocks is retired for the same reason.
@@ -3381,21 +3461,74 @@ def main(argv: list[str] | None = None) -> int:
              "pass's D+2..D+6 reach)")
     parser.add_argument(
         "--canary-only", action="store_true",
-        help=("Owner directive, 2026-09-28, after two consecutive "
-              "site-wide WAF blocks: measuring HOW MUCH to ask is moot "
-              "if WHEN to ask is the binding constraint. One direct "
-              "request to football's tz=0 JSON, classified, one "
+        help=("Measuring HOW MUCH to ask is moot if WHEN to ask is the "
+              "binding constraint — or, per --direct-vs-relay-only's "
+              "finding, if the wrong PATH is the binding constraint. One "
+              "direct request to football's tz=0 JSON, classified, one "
               "annotation, exit — seconds, not the full multi-stage "
               "sweep's ~13 minutes. Read-only: no capture, no evidence "
-              "tree, no disk writes beyond --out. Intended for a tight "
-              "cron (see docs/owner_paste/probe_canary_cron.yml) so an "
-              "availability map can be read back from annotations alone, "
-              "without an owner paste per sample."))
+              "tree, no disk writes beyond --out. A staged cron "
+              "(docs/owner_paste/probe_canary_cron.yml) is PAUSED pending "
+              "--direct-vs-relay-only's answer — see that flag's help."))
+    parser.add_argument(
+        "--direct-vs-relay-only", action="store_true",
+        help=("PRIORITY, owner directive 2026-09-28: a server-side fetch "
+              "got a REAL response direct from forebet.com at the exact "
+              "moment the relay (r.jina.ai) returned a challenge page for "
+              "the identical URL — every 'site-wide refusal' this session "
+              "may have been the RELAY's egress being challenged, not the "
+              "source. This settles it FROM THIS RUNNER: fetches "
+              "football's tz=0 JSON and one HTML board (--sport) both "
+              "direct and via the relay (4 requests, one attempt each, "
+              "no retries), fingerprints all four bodies, one annotation, "
+              "exit. Deliberately bypasses the on_github_runner() "
+              "direct-fallback skip — that guard is what is in question. "
+              "Run this BEFORE --circuit-breaker-probe or the full sweep."))
     args = parser.parse_args(argv)
 
     dt.date.fromisoformat(args.date)
     set_deadline(args.budget_seconds)
     emit_heartbeat(args.date, args.sport)
+
+    if args.direct_vs_relay_only:
+        # Bypasses EVERY other stage, including --canary-only: this
+        # question ("is the relay the actual bottleneck?") outranks
+        # everything else on the board per the owner's 2026-09-28
+        # priority change, and must not share a budget scheduler with
+        # anything heavier.
+        report = {
+            "probed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "target_date": args.date,
+            "mode": "direct_vs_relay_only",
+        }
+        try:
+            report["direct_vs_relay"] = direct_vs_relay_probe(
+                args.date, timeout=args.timeout,
+                sport=args.sport if args.sport in SPORTS else "basketball")
+        except Exception as exc:  # a crashed probe must still report
+            import traceback
+            report["crashed"] = f"{type(exc).__name__}: {exc}"
+            report["traceback"] = traceback.format_exc()[-1500:]
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(json.dumps(report, indent=2, sort_keys=True))
+        print(json.dumps(report, indent=2, sort_keys=True))
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            blob = json.dumps(
+                report.get("direct_vs_relay") or {}, sort_keys=True)[:2600]
+            print(f"::notice title=probe:direct_vs_relay::"
+                  f"{_annotation_escape(blob)}", flush=True)
+        # Exit 0 whenever both endpoints produced a fingerprinted result on
+        # at least one path (a clean "direct works"/"direct fails too"
+        # verdict either way) — a one-sided crash on both paths for the
+        # same endpoint is the only case worth flagging red.
+        dvr = report.get("direct_vs_relay") or {}
+        answered = all(
+            (dvr.get(leaf) or {}).get("direct", {}).get("ok")
+            or (dvr.get(leaf) or {}).get("relay", {}).get("ok")
+            for leaf in ("football_json", "html_board")
+        ) if dvr else False
+        return 0 if answered else 1
 
     if args.canary_only:
         # Deliberately bypasses EVERY other stage, including
