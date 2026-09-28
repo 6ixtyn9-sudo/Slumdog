@@ -2546,3 +2546,49 @@ class TestTheProbeMeasuresTheRenderClock:
         monkeypatch.setattr(probe, "fetch_column", _refuse)
         record = probe.render_clock_probe("2026-09-29", timeout=1, pause=0)
         assert "unavailable" in record["verdict"]
+
+
+class TestNoStageMaySpendTheWholeBudget:
+    """Run 36395609881 spent all 660 seconds inside the first stage and
+    every later one reported 'out of time budget'. The job-level budget
+    cannot prevent that: it only refuses a request after the clock is
+    already gone."""
+
+    def test_a_slice_expires_independently_of_the_job_budget(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        probe.set_deadline(10_000)
+        try:
+            guard = probe.slice_guard(0.0)
+            with pytest.raises(probe.BudgetExhausted, match="slice"):
+                guard()
+        finally:
+            probe.set_deadline(None)
+
+    def test_a_slice_still_respects_the_job_budget(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        probe.set_deadline(1)
+        try:
+            guard = probe.slice_guard(10_000)
+            with pytest.raises(probe.BudgetExhausted, match="budget"):
+                guard()
+        finally:
+            probe.set_deadline(None)
+
+    def test_a_spent_slice_moves_to_the_next_sport(self, monkeypatch):
+        """One sport running out of its share is not the stage running out
+        of time; the sports behind it still get their turn."""
+        import scripts.probe_kickoff_timezone as probe
+
+        seen: list[str] = []
+
+        def _spent(url, sport, target, **kwargs):
+            seen.append(sport)
+            raise probe.BudgetExhausted("stage slice of 90s spent")
+
+        monkeypatch.setattr(probe, "capture_board", _spent)
+        out = probe.r1_coverage("2026-09-29", timeout=1, pause=0,
+                                sports=("hockey", "handball"))
+        assert seen == ["hockey", "handball"]
+        assert all("slice" in rec["verdict"] for rec in out.values())

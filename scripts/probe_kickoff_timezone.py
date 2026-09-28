@@ -900,7 +900,8 @@ def coverage_sweep(date: str, *, timeout: int, pause: float,
 
 
 def horizon_coverage(date: str, *, timeout: int, pause: float,
-                     sports: tuple[str, ...]) -> dict[str, Any]:
+                     sports: tuple[str, ...],
+                     slice_seconds: float = 100.0) -> dict[str, Any]:
     """Prove rankability for sports that publish beyond the target date.
 
     Rugby, mma and cricket are reachable but had nothing on 2026-09-28:
@@ -943,10 +944,12 @@ def horizon_coverage(date: str, *, timeout: int, pause: float,
             result = capture_board(
                 url, sport, target, captured_at=date + "T00:00:00Z",
                 timeout=timeout, attempts=3, backoff=7.0, sleep=pace,
-                before_request=check_budget)
+                before_request=slice_guard(slice_seconds))
         except BudgetExhausted as exc:
             out[sport] = {"horizon_date": target,
                           "verdict": f"stopped: {exc}"}
+            if "slice" in str(exc):
+                continue  # this sport's turn is over, not the stage's
             break
         record: dict[str, Any] = {
             "horizon_date": target,
@@ -970,7 +973,29 @@ def horizon_coverage(date: str, *, timeout: int, pause: float,
     return out
 
 
-def render_clock_probe(date: str, *, timeout: int, pause: float) -> dict[str, Any]:
+def slice_guard(seconds: float):
+    """A ``before_request`` that also stops a stage overrunning its share.
+
+    Run 36395609881 spent the whole 660-second budget inside the first
+    stage and every later stage reported "out of time budget" — including
+    the two that were supposed to be cheap. The job-level budget cannot
+    prevent that on its own: it only refuses the request AFTER the clock
+    is gone. A stage that is worth two requests gets a slice, and the
+    slice is enforced on the same callback the budget uses.
+    """
+    deadline = time.monotonic() + seconds
+
+    def guard() -> None:
+        check_budget()
+        if time.monotonic() > deadline:
+            raise BudgetExhausted(
+                f"stage slice of {seconds:.0f}s spent")
+
+    return guard
+
+
+def render_clock_probe(date: str, *, timeout: int, pause: float,
+                       slice_seconds: float = 150.0) -> dict[str, Any]:
     """Measure the renderer's offset live, the way the nightly stage will.
 
     This is the measurement that decides whether thirteen sports can ever
@@ -985,6 +1010,8 @@ def render_clock_probe(date: str, *, timeout: int, pause: float) -> dict[str, An
     rendered column.
     """
     record: dict[str, Any] = {"target_date": date}
+    started = time.monotonic()
+    guard = slice_guard(slice_seconds)
     try:
         instants = {
             f"football:{match_id}": moment.strftime("%Y-%m-%d %H:%M:%S")
@@ -994,19 +1021,35 @@ def render_clock_probe(date: str, *, timeout: int, pause: float) -> dict[str, An
     except BudgetExhausted as exc:
         return {"verdict": f"stopped: {exc}"}
     record["json_matches"] = len(instants)
+    record["json_seconds"] = round(time.monotonic() - started, 1)
     if not instants:
         record["verdict"] = "no tz=0 instants; nothing to join against"
+        # Run 36395609881: the tz=0 endpoint answered something that was
+        # not JSON at all. Whether that is a challenge page or a throttle
+        # matters more than the empty result, so it is reported here rather
+        # than left in a fetch-error list nobody reads.
+        if FETCH_ERRORS:
+            record["json_error"] = str(FETCH_ERRORS[-1])[:200]
         return record
     pace(min(pause, 3))
     url = f"https://www.forebet.com/en/{SPORTS['football'].path}/predictions/{date}"
     try:
-        cells = fetch_column(url, scoped(".tnms"), timeout=timeout,
-                             column="link", attempts=2, backoff=5.0,
-                             sleep=pace, before_request=check_budget)
+        column_started = time.monotonic()
+        # One attempt, a short read timeout and a stage slice: the football
+        # board is the largest page on the site, and a relay render that
+        # drips bytes outlives a per-read timeout however small it is.
+        cells = fetch_column(url, scoped(".tnms"),
+                             timeout=min(timeout, 40),
+                             column="link", attempts=1,
+                             sleep=pace, before_request=guard)
+        record["column_seconds"] = round(time.monotonic() - column_started, 1)
     except BudgetExhausted as exc:
-        return {"verdict": f"stopped: {exc}"}
+        record["verdict"] = f"stopped: {exc}"
+        record["seconds"] = round(time.monotonic() - started, 1)
+        return record
     except Exception as exc:  # noqa: BLE001 - reported, not raised
         record["verdict"] = f"rendered column unavailable: {type(exc).__name__}"
+        record["seconds"] = round(time.monotonic() - started, 1)
         return record
     rendered: dict[str, str] = {}
     for cell in cells:
@@ -1035,12 +1078,14 @@ def render_clock_probe(date: str, *, timeout: int, pause: float) -> dict[str, An
          "utc": instants[key]}
         for key in sorted(set(rendered) & set(instants))[:3]
     ]
+    record["seconds"] = round(time.monotonic() - started, 1)
     return record
 
 
 def settlement_probe(date: str, *, timeout: int, pause: float,
                      sports: tuple[str, ...] = ("hockey",),
-                     settled_date: str | None = None) -> dict[str, Any]:
+                     settled_date: str | None = None,
+                     slice_seconds: float = 150.0) -> dict[str, Any]:
     """Does a captured pick actually settle the next day, by the same id?
 
     Coverage without settlement is half a system: a rank-1 pick that can
@@ -1073,7 +1118,7 @@ def settlement_probe(date: str, *, timeout: int, pause: float,
                 timeout=timeout, attempts=3, backoff=7.0, sleep=pace,
                 selectors=SETTLEMENT_COLUMN_SELECTORS,
                 required=SETTLEMENT_REQUIRED_COLUMNS,
-                before_request=check_budget)
+                before_request=slice_guard(slice_seconds))
         except BudgetExhausted as exc:
             out[sport] = {"settled_date": yesterday, "url": url,
                           "verdict": f"stopped: {exc}"}
@@ -1111,7 +1156,8 @@ def settlement_probe(date: str, *, timeout: int, pause: float,
 
 
 def r1_coverage(date: str, *, timeout: int, pause: float,
-                sports: tuple[str, ...] = COVERAGE_SPORTS) -> dict[str, Any]:
+                sports: tuple[str, ...] = COVERAGE_SPORTS,
+                slice_seconds: float = 90.0) -> dict[str, Any]:
     """Can each sport produce a rankable field for this date?
 
     This calls the production capture path rather than a probe-local copy
@@ -1134,9 +1180,11 @@ def r1_coverage(date: str, *, timeout: int, pause: float,
             result = capture_board(
                 url, sport, date, captured_at=date + "T00:00:00Z",
                 timeout=timeout, attempts=2, backoff=6.0, sleep=pace,
-                before_request=check_budget)
+                before_request=slice_guard(slice_seconds))
         except BudgetExhausted as exc:
             out[sport] = {"verdict": f"stopped: {exc}"}
+            if "slice" in str(exc):
+                continue
             break
         record: dict[str, Any] = {
             "status": result.status,
@@ -1918,13 +1966,22 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
     # The offset decides whether any sport but football can ever produce a
     # pick, and it costs two requests. Nothing else in this probe earns its
     # budget as cheaply.
+    stage_started = time.monotonic()
     report["render_clock"] = render_clock_probe(date, timeout=timeout,
                                                 pause=pause)
+    report["render_clock"]["budget_left_after"] = round(time_left())
     emit_section("render_clock", report["render_clock"])
+    report["stage_seconds"] = {
+        "render_clock": round(time.monotonic() - stage_started, 1)}
+
+    stage_started = time.monotonic()
 
     report["settlement_probe"] = settlement_probe(
         date, timeout=timeout, pause=pause)
+    report["stage_seconds"]["settlement_probe"] = round(
+        time.monotonic() - stage_started, 1)
     emit_section("settlement_probe", report["settlement_probe"])
+    stage_started = time.monotonic()
 
     # Cricket is left out until its partially-rendered kickoff column is
     # handled: it fails the same way every run and teaches nothing new,
@@ -1932,10 +1989,17 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
     report["horizon_coverage"] = horizon_coverage(
         date, timeout=timeout, pause=pause,
         sports=("rugby", "mma"))
+    report["stage_seconds"]["horizon_coverage"] = round(
+        time.monotonic() - stage_started, 1)
     emit_section("horizon_coverage", report["horizon_coverage"])
+    stage_started = time.monotonic()
 
     report["r1_coverage"] = r1_coverage(date, timeout=timeout, pause=pause)
+    report["stage_seconds"]["r1_coverage"] = round(
+        time.monotonic() - stage_started, 1)
+    report["stage_seconds"]["budget_left"] = round(time_left())
     emit_section("r1_coverage", report["r1_coverage"])
+    emit_section("stage_seconds", report["stage_seconds"])
 
     if time_left() > 300:
         report["coverage_sweep"] = coverage_sweep(date, timeout=timeout,
@@ -2684,7 +2748,7 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     # One annotation per section: a single blob silently truncates at ~3000
     # characters and the interesting result is usually last.
     sections = (
-        "render_clock", "settlement_probe", "r1_coverage",
+        "render_clock", "stage_seconds", "settlement_probe", "r1_coverage",
         "horizon_coverage",
         "capture_contract",
         "coverage_sweep", "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",
