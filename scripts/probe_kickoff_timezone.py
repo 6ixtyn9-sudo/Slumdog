@@ -2096,15 +2096,29 @@ def run_open_questions(date: str, *, timeout: int, pause: float,
     pass, and the passes are naturally minutes apart because the other
     stages run in between. A stage that has answered is not asked again.
     """
+    # Ordered by what is still unknown, and sized by what each costs.
+    #
+    # Five runs say the binding constraint is REQUESTS, not seconds: the
+    # calibration spends two and has proven the same offset three times
+    # (its rendered column came back in 6.5 seconds), while a whole board
+    # is eight columns times up to three attempts and has never once
+    # completed in a run that also did anything else.
+    #
+    # So the expensive questions go first and the settled one goes last.
+    # Both board stages also move to volleyball: ten rows against
+    # hockey's sixty-four, same route, same proof - a smaller page renders
+    # faster and is refused less, and what is being tested here is the
+    # PATH, not the sport.
     stages = (
+        ("collector_end_to_end", lambda budget: collector_end_to_end(
+            date, timeout=timeout, pause=pause, sport="volleyball",
+            slice_seconds=budget)),
+        ("settlement_probe", lambda budget: settlement_probe(
+            date, timeout=timeout, pause=pause, sports=("volleyball",),
+            slice_seconds=budget, attempts=1)),
         ("render_clock", lambda budget: render_clock_probe(
             date, timeout=timeout, pause=pause,
             slice_seconds=min(budget, 90), attempts=1)),
-        ("collector_end_to_end", lambda budget: collector_end_to_end(
-            date, timeout=timeout, pause=pause, slice_seconds=budget)),
-        ("settlement_probe", lambda budget: settlement_probe(
-            date, timeout=timeout, pause=pause, slice_seconds=budget,
-            attempts=1)),
     )
     results: dict[str, Any] = {}
     stage_meta: dict[str, dict[str, Any]] = {}
