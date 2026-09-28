@@ -155,6 +155,51 @@ The Arena sandbox has no outbound network (`curl` → `000`, exit 35). The GitHu
 
 **Discipline that applies to probe code too.** Every probe stage lands with tests that pin its refusals — throttle, partial render, interstitial — not just its happy path. Run the full suite and pyflakes before every push; a piped `pytest | tail` exits 0 even when red, so never chain `&& git push` off it. Expect "both added" conflicts on the two probe files during rebase (`git checkout --theirs`, then continue). The GitHub token can expire mid-session (`gh: Bad credentials`) — ask the user to reconnect; do not work around it.
 
+## The Column Route As A Production Path
+
+Every non-football board answers a bot-check page to anything CI can send,
+so `ForebetCollector._fetch` falls through to `relay_columns.capture_board`
+when — and only when — `validate_capture_body` rejects the HTML body. Rules
+that must not be relaxed:
+
+- **Fallback, never default.** A board that validates as HTML is never
+  re-fetched column-wise. The column route is strictly the weaker evidence
+  path and is taken only when the stronger one is unavailable.
+- **The frozen bytes are the extracts, not the events.** A capture is
+  written as `columns_v1` JSON holding the per-column text exactly as the
+  renderer returned it, so `parse_capture` can rebuild the same events from
+  what was stored. `body_format="columns_v1"` and `route="relay_columns"`
+  mark it; a column body is never mistaken for an HTML one, in either
+  direction.
+- **A gap is a failure.** `capture_board` returning anything but `CAPTURED`
+  raises out of `_fetch`. Nothing thinner than a full board is ever filed.
+- **Settlement uses the same machinery.** `SETTLEMENT_COLUMN_SELECTORS`
+  adds `.lscr_td` (score) and `.scoreLnk` (status); `settled_rows` grades a
+  row only when the status is one of `FT`, `AOT`, `AP`, `FINAL` and the
+  row's own rendered day is the day being settled. A live or postponed row
+  is skipped, never graded on whatever numbers are showing.
+
+## Market Shape Is Not Outcome Space
+
+`SportSpec.draw_possible` says how many outcomes the board **prices**.
+`SportSpec.draw_settles` (backed by `draw_outcome_possible`) says how many
+outcomes can actually **happen**. MMA prices two and produces three: a fight
+can end in a unanimous, majority or split draw, and separately in a no
+contest.
+
+- A draw in a sport that can end level grades as label 0 — a failed
+  underdog win, per invariant 3 — rather than being excluded. Excluding it
+  would quietly delete the cases where the pick did not come off.
+- A no contest is `VOID`: there is no result to grade.
+- A draw is `SETTLED_DRAW`, not `VOID`. The distinction matters because
+  void rows leave the record and settled draws stay in it as failures.
+- Method of victory (KO, TKO, submission, decision, disqualification) is
+  recorded in `SettledEvent.facets["method"]` as evidence only. It is never
+  a model feature and never gates a candidate.
+- A sport that cannot end level still excludes an unexpected draw
+  (`UNEXPECTED_DRAW_FOR_TWO_WAY`): there, a level result means the parse is
+  wrong, not that the match tied.
+
 ## Documentation Governance
 
 - `docs/STATE.md` is canonical current truth, not append-only diary. Git history is history.

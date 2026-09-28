@@ -445,6 +445,7 @@ class ForebetCollector:
         self.workers = max(1, min(int(workers), 6))
 
     def _fetch(self, sport: str, target_date: str) -> RawCapture:
+        body_format = "html"
         spec = SPORTS[sport]
         target = source_url(spec, target_date)
         relay = RELAY_BASE + target
@@ -473,8 +474,40 @@ class ForebetCollector:
             if last_error is not None:
                 raise last_error
         else:
-            body, route = fetch_with_fallback(relay, target, timeout=self.timeout)
-            validate_capture_body(body, sport, target_date, route)
+            body_format = "html"
+            try:
+                body, route = fetch_with_fallback(relay, target,
+                                                  timeout=self.timeout)
+                validate_capture_body(body, sport, target_date, route)
+            except ValueError:
+                # From 2026-09-22 the HTML boards answer a bot-check page to
+                # everything CI can send, which is why R1 coverage collapsed
+                # to football alone. The renderer still serves the board one
+                # field at a time; capture_board fails closed, so reaching
+                # here either produces a real board or raises.
+                from .relay_columns import (
+                    CAPTURED,
+                    capture_board,
+                    serialise_columns,
+                )
+
+                result = capture_board(
+                    target, sport, target_date,
+                    captured_at=datetime.now(timezone.utc).isoformat(),
+                    timeout=self.timeout)
+                if result.status != CAPTURED:
+                    raise ValueError(
+                        f"{sport} {target_date}: html capture rejected and "
+                        f"column capture returned {result.status}: "
+                        f"{result.reason}") from None
+                board = result.board
+                if board is None:  # defensive: CAPTURED implies a board
+                    raise ValueError(
+                        f"{sport} {target_date}: captured without columns"
+                    ) from None
+                body = serialise_columns(board)
+                route = "relay_columns"
+                body_format = "columns_v1"
         captured_at = datetime.now(timezone.utc).isoformat()
         digest = hashlib.sha256(body).hexdigest()
         stamp = captured_at.replace(":", "").replace("+00:00", "Z").replace("-", "")
@@ -489,7 +522,7 @@ class ForebetCollector:
             captured_at=captured_at,
             source_url=target,
             relay_url=relay,
-            body_format="html",
+            body_format=body_format if sport != "football" else "html",
             sha256=digest,
             bytes=len(body),
             body_path=str(body_path.relative_to(self.root)),

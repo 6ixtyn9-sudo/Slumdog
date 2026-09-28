@@ -66,7 +66,9 @@ from slumdog.parsers import BASE  # noqa: E402
 from slumdog.relay_columns import (  # noqa: E402
     COLUMN_SELECTORS,
     REQUIRED_COLUMNS,
+    SETTLEMENT_COLUMN_SELECTORS,
     capture_board,
+    settled_rows,
 )
 from slumdog.relay_columns import (  # noqa: E402
     DAY_FIRST,
@@ -955,6 +957,63 @@ def horizon_coverage(date: str, *, timeout: int, pause: float,
     return out
 
 
+def settlement_probe(date: str, *, timeout: int, pause: float,
+                     sports: tuple[str, ...] = ("hockey", "mma")) -> dict[str, Any]:
+    """Does a captured pick actually settle the next day, by the same id?
+
+    Coverage without settlement is half a system: a rank-1 pick that can
+    never be graded teaches nothing. Yesterday's board carries the result
+    and the status that says the result is final, so this captures it
+    through the same column route and reports how many rows grade — and
+    for mma, how the fights were decided, since a KO, a submission and a
+    draw are three different outcomes and only one of them is nobody
+    winning.
+    """
+    out: dict[str, Any] = {}
+    yesterday = (dt.date.fromisoformat(date) - dt.timedelta(days=1)).isoformat()
+    for sport in sports:
+        spec = SPORTS.get(sport)
+        if spec is None or time_left() < 120:
+            out[sport] = {"verdict": "skipped: out of time budget"}
+            continue
+        url = f"https://www.forebet.com/en/{spec.path}/predictions/{yesterday}"
+        pace(min(pause, 3))
+        result = capture_board(url, sport, yesterday,
+                               captured_at=date + "T00:00:00Z",
+                               timeout=timeout, attempts=3, backoff=7.0,
+                               sleep=pace,
+                               selectors=SETTLEMENT_COLUMN_SELECTORS)
+        record: dict[str, Any] = {
+            "settled_date": yesterday,
+            "status": result.status,
+            "rows": result.row_count,
+            "reason": result.reason[:160],
+            "partial": result.partial,
+        }
+        board = result.board
+        if board is not None:
+            statuses = Counter(
+                (value or "").strip().upper()[:12]
+                for value in board.columns.get("status", []))
+            record["statuses_seen"] = dict(statuses.most_common(6))
+            record["scores_sample"] = board.columns.get("score", [])[:3]
+            try:
+                graded = settled_rows(board)
+            except Exception as exc:  # unreadable date order, etc.
+                record["graded_error"] = f"{type(exc).__name__}: {exc}"[:160]
+                graded = []
+            record["graded"] = len(graded)
+            record["sample"] = [
+                {"event_id": row["event_id"],
+                 "match": f"{row['participant_1']} vs {row['participant_2']}",
+                 "score": f"{row['score_1']:g}-{row['score_2']:g}",
+                 "winner_index": row["winner_index"]}
+                for row in graded[:3]
+            ]
+        out[sport] = record
+    return out
+
+
 def r1_coverage(date: str, *, timeout: int, pause: float,
                 sports: tuple[str, ...] = COVERAGE_SPORTS) -> dict[str, Any]:
     """Can each sport produce a rankable field for this date?
@@ -1737,6 +1796,12 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
         date, timeout=timeout, pause=pause,
         sports=("rugby", "mma", "cricket"))
 
+    # Coverage that cannot be graded is not coverage. Yesterday's board is
+    # the only place the result lives, and the join has never been proven
+    # against a real one.
+    report["settlement_probe"] = settlement_probe(
+        date, timeout=timeout, pause=pause)
+
     report["r1_coverage"] = r1_coverage(date, timeout=timeout, pause=pause)
 
     if time_left() > 300:
@@ -2068,6 +2133,21 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
             if top:
                 lines.append(f"    strongest: {top['match']} "
                              f"p1={top['p1']} p2={top['p2']}")
+
+    settling = report.get("settlement_probe") or {}
+    if settling:
+        lines.append("D+1 settlement through the same route:")
+        for sport, rec in settling.items():
+            lines.append(
+                f"  {sport}: {rec.get('status', rec.get('verdict'))} "
+                f"date={rec.get('settled_date')} rows={rec.get('rows')} "
+                f"graded={rec.get('graded')} "
+                f"statuses={rec.get('statuses_seen')} "
+                f"{rec.get('graded_error', '')} {rec.get('reason', '')}")
+            for row in rec.get("sample") or []:
+                lines.append(f"    {row['match']} {row['score']} "
+                             f"winner={row['winner_index']} "
+                             f"id={row['event_id']}")
 
     coverage = report.get("r1_coverage") or {}
     if coverage:
@@ -2448,7 +2528,8 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     # One annotation per section: a single blob silently truncates at ~3000
     # characters and the interesting result is usually last.
     sections = (
-        "r1_coverage", "horizon_coverage", "capture_contract",
+        "settlement_probe", "r1_coverage", "horizon_coverage",
+        "capture_contract",
         "coverage_sweep", "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",
         "recent_markup", "render_waits", "markdown_modes", "api_sweep",
         "getjson_crack", "js_call_sites", "current_bundle", "sitemaps",

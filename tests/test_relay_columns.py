@@ -13,6 +13,10 @@ import pytest
 
 from slumdog.relay_columns import (
     CAPTURED,
+    deserialise_columns,
+    looks_like_columns_body,
+    serialise_columns,
+    settled_rows,
     COLUMN_SELECTORS,
     COVERAGE_GAP,
     NO_ROWS_FOR_DATE,
@@ -666,3 +670,88 @@ class TestFieldsASportDoesNotHave:
                                     sleep=lambda _s: None,
                                     opener=_opener(bodies))
         assert board.partial is True and "average" not in board.columns
+
+
+class TestFrozenBytesAreTheExtracts:
+    """A column capture must be re-parsable from what was stored."""
+
+    def _board(self):
+        return BoardColumns(
+            sport="hockey", target_date="2026-09-29",
+            source_url="https://www.forebet.com/en/predictions-hockey",
+            columns={"link": ["29/09/2026 Sportul - Gyergyoi"],
+                     "home": ["Sportul"], "away": ["Gyergyoi"]},
+            row_count=1, partial=True)
+
+    def test_round_trip_preserves_every_extract(self):
+        board = self._board()
+        back = deserialise_columns(
+            serialise_columns(board))
+        assert back.columns == board.columns
+        assert back.sport == board.sport
+        assert back.target_date == board.target_date
+        assert back.row_count == board.row_count
+        assert back.partial
+
+    def test_foreign_body_is_refused_not_guessed_at(self):
+        with pytest.raises(ValueError):
+            deserialise_columns(b'{"format": "html"}')
+
+    def test_html_body_is_not_mistaken_for_columns(self):
+        assert not looks_like_columns_body(b"<html><body>x")
+        assert looks_like_columns_body(serialise_columns(self._board()))
+
+
+class TestSettlementNeedsAFinalScore:
+    """D+1 grading reads the board's own result, and only when it is final."""
+
+    def _board(self, statuses, scores):
+        rows = len(statuses)
+        return BoardColumns(
+            sport="hockey", target_date="2026-09-29",
+            source_url="https://www.forebet.com/en/predictions-hockey",
+            columns={
+                "link": [f"[A{i} B{i} 29/09/2026 7:00 PM]"
+                         f"(https://f/m/a{i}/{387410 + i})"
+                         for i in range(rows)],
+                "home": [f"A{i}" for i in range(rows)],
+                "away": [f"B{i}" for i in range(rows)],
+                "probabilities": ["62 38"] * rows,
+                "pick": ["1"] * rows,
+                "score": list(scores), "status": list(statuses),
+            }, row_count=rows)
+
+    def test_final_rows_are_graded(self):
+        rows = settled_rows(self._board(["FT"], ["3 - 1"]))
+        assert len(rows) == 1
+        assert rows[0]["event_id"] == "387410"
+        assert (rows[0]["score_1"], rows[0]["score_2"]) == (3.0, 1.0)
+        assert rows[0]["winner_index"] == 1
+
+    def test_a_live_match_is_never_graded(self):
+        assert settled_rows(self._board(["45'"], ["1 - 0"])) == []
+
+    def test_a_postponed_match_is_never_graded(self):
+        assert settled_rows(self._board(["Postp."], ["- -"])) == []
+
+    def test_a_draw_is_recorded_as_a_draw(self):
+        rows = settled_rows(self._board(["FT"], ["2 - 2"]))
+        assert rows[0]["winner_index"] == 0
+
+    def test_overtime_and_penalties_count_as_final(self):
+        rows = settled_rows(self._board(["AOT", "AP"], ["2 - 3", "1 - 2"]))
+        assert [row["winner_index"] for row in rows] == [2, 2]
+
+    def test_the_settled_id_joins_to_the_id_the_pick_was_made_under(self):
+        """The whole point of D+1 settlement: same match, same identity."""
+        board = self._board(["FT"], ["3 - 1"])
+        captured = rows_to_events(board, captured_at="2026-09-29T06:00:00Z")
+        settled = settled_rows(board)
+        assert [event.event_id.split(":")[-1] for event in captured] == \
+            [row["event_id"] for row in settled]
+
+    def test_a_row_from_another_day_is_not_graded(self):
+        board = self._board(["FT"], ["3 - 1"])
+        board.columns["link"] = ["[A0 B0 30/09/2026 7:00 PM]"
+                                 "(https://f/m/a0/387410)"]
+        assert settled_rows(board) == []

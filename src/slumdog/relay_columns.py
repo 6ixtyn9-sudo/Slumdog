@@ -32,8 +32,10 @@ never silently record a short board as a complete one.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import time
+from typing import Any
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -279,16 +281,19 @@ def fetch_column(board_url: str, selector: str, *, timeout: int = 60,
 def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
                         timeout: int = 60, opener=None, minimum_rows: int = 1,
                         attempts: int = 3, backoff: float = 8.0,
-                        sleep=time.sleep) -> BoardColumns:
+                        sleep=time.sleep,
+                        selectors: dict[str, str] | None = None
+                        ) -> BoardColumns:
     """Fetch every column for a board and validate that they agree.
 
     Raises rather than returning a half-built board: a throttled render can
     hand back a genuine-looking but partial listing, and a short board
     frozen as a complete one is indistinguishable from a quiet fixture day.
     """
+    selectors = selectors or COLUMN_SELECTORS
     columns: dict[str, list[str]] = {}
     failures: list[str] = []
-    for name, selector in COLUMN_SELECTORS.items():
+    for name, selector in selectors.items():
         try:
             columns[name] = fetch_column(board_url, scoped(selector),
                                          timeout=timeout, opener=opener,
@@ -305,7 +310,7 @@ def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
 
     columns = align_columns(columns)
     counts = {name: len(values) for name, values in columns.items()}
-    absent = [name for name in COLUMN_SELECTORS
+    absent = [name for name in selectors
               if name not in columns and name not in REQUIRED_COLUMNS]
     distinct = set(counts.values())
     if len(distinct) != 1:
@@ -527,6 +532,9 @@ class BoardCapture:
     row_count: int = 0
     partial: bool = False
     suspect_short: bool = False
+    #: The validated columns, kept so a caller can freeze the extracts
+    #: themselves rather than only the events derived from them.
+    board: "BoardColumns | None" = None
 
     @property
     def usable(self) -> bool:
@@ -554,7 +562,8 @@ def capture_board(board_url: str, sport: str, target_date: str, *,
                   captured_at: str, timeout: int = 60, opener=None,
                   expected_rows: int | None = None, raw_sha256: str = "",
                   attempts: int = 3, backoff: float = 8.0,
-                  sleep=time.sleep) -> BoardCapture:
+                  sleep=time.sleep,
+                  selectors: dict[str, str] | None = None) -> BoardCapture:
     """Capture one board, returning an outcome instead of raising.
 
     Policy decisions, and why:
@@ -594,7 +603,7 @@ def capture_board(board_url: str, sport: str, target_date: str, *,
         board = fetch_board_columns(board_url, sport, target_date,
                                     timeout=timeout, opener=opener,
                                     attempts=attempts, backoff=backoff,
-                                    sleep=sleep)
+                                    sleep=sleep, selectors=selectors)
     except (ColumnFetchError, ColumnAlignmentError) as exc:
         return BoardCapture(status=COVERAGE_GAP, sport=sport,
                             target_date=target_date, source_url=board_url,
@@ -621,4 +630,114 @@ def capture_board(board_url: str, sport: str, target_date: str, *,
     return BoardCapture(status=CAPTURED, sport=sport, target_date=target_date,
                         source_url=board_url, events=events,
                         observed_dates=days, row_count=board.row_count,
-                        partial=board.partial, suspect_short=suspect)
+                        partial=board.partial, suspect_short=suspect,
+                        board=board)
+
+
+# --------------------------------------------------------------------------
+# Serialisation and settlement
+# --------------------------------------------------------------------------
+
+#: Body format written when a board is captured through this route. The raw
+#: bytes are the column extracts themselves, not the events derived from
+#: them, so a parse is reproducible from what was frozen — same rule the
+#: HTML captures follow.
+BODY_FORMAT = "columns_v1"
+
+#: Columns a D+1 settlement needs on top of identity: the score and the
+#: status that says the score is final.
+SETTLEMENT_COLUMN_SELECTORS: dict[str, str] = {
+    "link": ".tnms",
+    "home": ".homeTeam",
+    "away": ".awayTeam",
+    "kickoff": ".date_bah",
+    "probabilities": ".fprc",
+    "pick": ".forepr",
+    "score": ".lscr_td",
+    "status": ".scoreLnk",
+}
+
+#: Statuses that mean the score on the board is final. Anything else — live,
+#: postponed, abandoned — is not settled and must not be graded.
+FINAL_STATUSES = frozenset({"FT", "AOT", "AP", "FINAL"})
+
+
+def serialise_columns(board: BoardColumns) -> bytes:
+    """Freeze the extracts themselves, so the parse can be redone."""
+    return json.dumps({
+        "format": BODY_FORMAT,
+        "sport": board.sport,
+        "target_date": board.target_date,
+        "source_url": board.source_url,
+        "row_scope": ROW_SCOPE,
+        "row_count": board.row_count,
+        "partial": board.partial,
+        "columns": board.columns,
+    }, indent=2, sort_keys=True).encode()
+
+
+def deserialise_columns(body: bytes) -> BoardColumns:
+    """Rebuild a board from frozen bytes. Raises if they are not ours."""
+    payload = json.loads(body.decode("utf-8"))
+    if payload.get("format") != BODY_FORMAT:
+        raise ValueError(f"not a {BODY_FORMAT} body: {payload.get('format')!r}")
+    return BoardColumns(
+        sport=payload["sport"],
+        target_date=payload["target_date"],
+        source_url=payload["source_url"],
+        columns={name: list(values)
+                 for name, values in payload["columns"].items()},
+        row_count=int(payload["row_count"]),
+        partial=bool(payload.get("partial")),
+    )
+
+
+def looks_like_columns_body(body: bytes) -> bool:
+    """Cheap check used to route a stored capture to the right parser."""
+    head = body[:200].lstrip()
+    return head.startswith(b"{") and BODY_FORMAT.encode() in body[:400]
+
+
+def _score_pair(cell: str) -> tuple[float, float] | None:
+    """Both scores from a rendered result cell such as ``87 - 74``."""
+    numbers = [float(token) for token in _NUMBER.findall(cell)]
+    if len(numbers) < 2:
+        return None
+    return numbers[0], numbers[1]
+
+
+def settled_rows(board: BoardColumns) -> list[dict[str, Any]]:
+    """Rows whose result is final, ready for grading.
+
+    A fixture is graded only when the board says the score is final. Live,
+    postponed and abandoned rows are skipped rather than graded on whatever
+    numbers happen to be showing — a half-time score recorded as a result
+    would settle a pick against a match that had not finished.
+    """
+    order = infer_date_order(board.columns.get("link", []), board.target_date)
+    if order is None:
+        raise ColumnAlignmentError(
+            f"{board.sport} {board.target_date}: date order unreadable")
+    out: list[dict[str, Any]] = []
+    for row in board.rows():
+        status = row.get("status", "").strip().upper()
+        if status not in FINAL_STATUSES:
+            continue
+        if event_day_from_kickoff(row.get("link", ""), order) != board.target_date:
+            continue
+        scores = _score_pair(row.get("score", ""))
+        url = match_url(row.get("link", ""))
+        if scores is None or not url:
+            continue
+        score_1, score_2 = scores
+        out.append({
+            "event_id": event_id_from_url(url),
+            "participant_1": row.get("home", "").strip(),
+            "participant_2": row.get("away", "").strip(),
+            "score_1": score_1,
+            "score_2": score_2,
+            "winner_index": 1 if score_1 > score_2 else 2 if score_2 > score_1 else 0,
+            "status": status,
+            "source_url": url,
+        })
+    return out

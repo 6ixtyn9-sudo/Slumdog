@@ -52,3 +52,66 @@ def test_void_rows_are_excluded_from_history():
     row = parse_mma_settled(MMA.replace(b'<span class="oltrpy">A</span><span>KO</span>', b'<span>NO CONTEST</span>'), "2026-08-16")[0]
     assert row.disposition == "VOID"
     assert HistoryIndex([row]).rows == []
+
+
+# ---------------------------------------------------------------------------
+# MMA decides a winner differently: KO, TKO, submission, decision — or nobody.
+# ---------------------------------------------------------------------------
+
+def _mma_result(inner: bytes) -> bytes:
+    return MMA.replace(b'<span class="oltrpy">A</span><span>KO</span>', inner)
+
+
+def test_mma_records_how_the_fight_was_won():
+    assert parse_mma_settled(MMA, "2026-08-16")[0].facets["method"] == "KO"
+    for rendered, method in (
+        (b'<span class="oltrpy">A</span><span>TKO (punches) R2</span>', "TKO"),
+        (b'<span class="oltrpy">B</span><span>Submission (RNC)</span>',
+         "SUBMISSION"),
+        (b'<span class="oltrpy">A</span><span>Unanimous decision</span>',
+         "DECISION"),
+        (b'<span class="oltrpy">B</span><span>DQ</span>',
+         "DISQUALIFICATION"),
+    ):
+        row = parse_mma_settled(_mma_result(rendered), "2026-08-16")[0]
+        assert row.facets["method"] == method, rendered
+
+
+def test_mma_draw_is_settled_not_dropped():
+    """A draw is a real result: the pick failed, and the record says so."""
+    row = parse_mma_settled(
+        _mma_result(b"<span>Split Draw</span>"), "2026-08-16")[0]
+    assert row.winner_index == 0
+    assert row.disposition == "SETTLED_DRAW"
+
+
+def test_mma_no_contest_is_void_not_a_draw():
+    row = parse_mma_settled(
+        _mma_result(b"<span>NC</span>"), "2026-08-16")[0]
+    assert row.disposition == "VOID"
+
+
+def test_mma_unnamed_winner_is_still_refused():
+    """No draw, no void, no named winner — nothing to grade."""
+    assert parse_mma_settled(
+        _mma_result(b"<span>KO</span>"), "2026-08-16") == []
+
+
+def test_mma_draw_grades_as_a_failed_underdog_win():
+    from slumdog.underdog import identify_forebet_underdog, label_underdog_outcome
+
+    identity = identify_forebet_underdog(0.7, 0.3)
+    result = label_underdog_outcome("mma", identity, winner_index=0,
+                                    disposition="SETTLED_DRAW")
+    assert result.eligible is True
+    assert result.label == 0
+    assert result.is_draw is True
+
+
+def test_two_priced_outcomes_is_not_the_same_question_as_a_possible_draw():
+    from slumdog.sports import SPORTS
+
+    assert SPORTS["mma"].draw_possible is False   # board prices two
+    assert SPORTS["mma"].draw_settles is True     # three can happen
+    assert SPORTS["basketball"].draw_settles is False
+    assert SPORTS["football"].draw_settles is True

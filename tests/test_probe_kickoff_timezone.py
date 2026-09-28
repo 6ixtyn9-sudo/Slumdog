@@ -2308,3 +2308,83 @@ class TestTargetDateAnchorsTheOrder:
         assert infer_date_order(["[A B 03/04/2026](u)"], "2026-12-25") is None
 
 
+
+
+class TestSettlementProbe:
+    """Coverage that cannot be graded is not coverage.
+
+    A rank-1 pick is only worth capturing if the same match can be found
+    again the next day, under the same id, with a result attached.
+    """
+
+    def _board(self, statuses, scores):
+        from slumdog.relay_columns import BoardColumns
+
+        rows = len(statuses)
+        return BoardColumns(
+            sport="hockey", target_date="2026-09-27", source_url="u",
+            columns={
+                "link": [f"[A{i} B{i} 27/09/2026 7:00 PM]"
+                         f"(https://f/m/a{i}/38740{i})" for i in range(rows)],
+                "home": [f"A{i}" for i in range(rows)],
+                "away": [f"B{i}" for i in range(rows)],
+                "kickoff": ["19:00"] * rows,
+                "probabilities": ["62 38"] * rows,
+                "pick": ["1"] * rows,
+                "score": list(scores), "status": list(statuses),
+            }, row_count=rows)
+
+    def _run(self, monkeypatch, capture):
+        import scripts.probe_kickoff_timezone as probe
+
+        seen: list[tuple[str, dict]] = []
+
+        def fake_capture(url, sport, target, **kwargs):
+            seen.append((target, kwargs))
+            return capture
+
+        monkeypatch.setattr(probe, "capture_board", fake_capture)
+        out = probe.settlement_probe("2026-09-28", timeout=1, pause=0,
+                                     sports=("hockey",))
+        return out["hockey"], seen
+
+    def test_it_reads_yesterdays_board_with_the_result_columns(
+            self, monkeypatch):
+        from slumdog.relay_columns import (
+            CAPTURED,
+            SETTLEMENT_COLUMN_SELECTORS,
+            BoardCapture,
+        )
+
+        board = self._board(["FT", "FT"], ["3 - 1", "2 - 4"])
+        record, seen = self._run(monkeypatch, BoardCapture(
+            status=CAPTURED, sport="hockey", target_date="2026-09-27",
+            source_url="u", row_count=2, board=board))
+        target, kwargs = seen[0]
+        assert target == "2026-09-27"
+        assert kwargs["selectors"] == SETTLEMENT_COLUMN_SELECTORS
+        assert record["graded"] == 2
+        assert record["sample"][0]["score"] == "3-1"
+        assert record["sample"][0]["event_id"] == "387400"
+        assert record["sample"][1]["winner_index"] == 2
+
+    def test_unfinished_matches_are_counted_but_not_graded(self, monkeypatch):
+        from slumdog.relay_columns import CAPTURED, BoardCapture
+
+        board = self._board(["FT", "Postp."], ["3 - 1", "- -"])
+        record, _ = self._run(monkeypatch, BoardCapture(
+            status=CAPTURED, sport="hockey", target_date="2026-09-27",
+            source_url="u", row_count=2, board=board))
+        assert record["rows"] == 2
+        assert record["graded"] == 1
+        assert record["statuses_seen"]["POSTP."] == 1
+
+    def test_a_gap_reports_instead_of_pretending_to_settle(self, monkeypatch):
+        from slumdog.relay_columns import COVERAGE_GAP, BoardCapture
+
+        record, _ = self._run(monkeypatch, BoardCapture(
+            status=COVERAGE_GAP, sport="hockey", target_date="2026-09-27",
+            source_url="u", reason="columns disagree on row count"))
+        assert record["status"] == COVERAGE_GAP
+        assert "graded" not in record
+        assert "disagree" in record["reason"]

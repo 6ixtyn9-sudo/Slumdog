@@ -11,6 +11,11 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 
 from .contracts import EventSnapshot, TimingClass
+from .relay_columns import (
+    deserialise_columns,
+    looks_like_columns_body,
+    rows_to_events,
+)
 from .sports import SPORTS
 
 BASE = "https://www.forebet.com"
@@ -472,6 +477,14 @@ def parse_capture(metadata: dict, root=".") -> list[EventSnapshot]:
             root / "data" / "raw" / "football" / metadata["target_date"] / "markets.json",
         )
         return events
+    if metadata.get("body_format") == "columns_v1" or looks_like_columns_body(body):
+        # Captured through the renderer one column at a time, because the
+        # HTML board answers a bot-check page to CI. The frozen bytes are the
+        # extracts, so this parse is reproducible from what was stored.
+        board = deserialise_columns(body)
+        return rows_to_events(
+            board, captured_at=metadata["captured_at"],
+            raw_sha256=metadata["sha256"])
     return parse_html_events(
         body, metadata["sport"], metadata["target_date"], metadata["captured_at"],
         metadata["source_url"], metadata["sha256"],
