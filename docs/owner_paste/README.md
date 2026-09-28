@@ -116,7 +116,21 @@ without an owner paste.
 Priority 1 breaker measurement are both settled for good.** It is a
 diagnostic, not part of the pipeline.
 
-## `probe_canary_cron.yml` — pending, staged 2026-09-28: continuous availability sampling
+## `probe_canary_cron.yml` — PAUSED, staged 2026-09-28: continuous availability sampling
+
+**PAUSED — do not apply yet.** Later the same day, a server-side fetch got
+a REAL response direct from `forebet.com` at the exact moment a relay
+(`r.jina.ai`) fetch of the identical URL returned a challenge page. This
+job's sample — like `sample_canary`/`_canary_state` on a GitHub runner —
+goes via the relay only, so a red run of it may only prove the relay's
+egress was challenged, not that Forebet itself refused the runner. Applying
+it now would build an availability map of the wrong thing. Hold until
+`scripts/probe_kickoff_timezone.py --direct-vs-relay-only` has run from an
+actual GitHub Actions runner and the result is recorded in `HANDOFF.md`
+(see "direct vs relay"); the staged file itself now carries the same note
+at the top. See also `_CANARY_PATH_BLOCKED_PREFIX` / `_mark_canary_path_blocked`
+in `src/slumdog/forebet.py` for the same relabeling applied to the
+production canary code path.
 
 **Why it exists:** two consecutive site-wide WAF blocks this session
 (`36455080098`, `36461512749`), the same afternoon that had served cleanly

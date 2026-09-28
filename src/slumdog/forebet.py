@@ -487,19 +487,31 @@ def _classify_capture_outcome(exc: Exception) -> str:
 
 
 def sample_canary(target_date: str | None = None, *, timeout: int = 20) -> dict[str, Any]:
-    """One standalone, direct request to football's tz=0 JSON.
+    """One standalone request to football's tz=0 JSON, VIA THE RELAY —
+    production's default path, and the only path this function tests.
 
     ``_canary_state`` below reads this same discriminator for free, but
     only after a call to :meth:`ForebetCollector.capture_selected` has
     already fetched football as part of its normal sport selection. This
     function makes the check available on its own, BEFORE any per-sport
     capture has started — the pre-flight the owner asked for after two
-    consecutive site-wide WAF blocks (2026-09-28): "we've been optimising
-    how much we ask, when the binding constraint may be when we ask."
+    consecutive relay-path blocks (2026-09-28): "we've been optimising how
+    much we ask, when the binding constraint may be when we ask."
     Callers: ``forward_shadow_batch.py``'s pre-flight/mid-run abort (do not
     spend a forward pass's capture budget against a wall), and the probe's
     ``--canary-only`` mode (a few seconds, safe on a tight cron, versus the
     full multi-stage sweep).
+
+    **Relabelled 2026-09-28, second correction — read this before trusting
+    a ``healthy: False`` reading:** a server-side fetch got a REAL response
+    direct from ``forebet.com`` at the exact moment a relay fetch of the
+    identical URL returned a challenge page. This function only ever goes
+    through the relay (``relay_get_markdown``) — it therefore measures
+    whether OUR PATH is currently reachable, not whether the source itself
+    is refusing this runner. A ``False`` here is evidence the relay is
+    blocked, not evidence the board is unpublished AND not proof Forebet
+    itself is down — see ``direct_vs_relay_probe`` for the runner-side
+    test of the direct path this function deliberately does not take.
 
     Deliberately ONE attempt (``relay_get_markdown(..., max_retries=1)``):
     a WAF challenge is a refusal, not congestion, and retrying it harder is
@@ -510,7 +522,9 @@ def sample_canary(target_date: str | None = None, *, timeout: int = 20) -> dict[
     Returns ``{"sport": "football", "checked": True, "healthy": bool,
     "reason": str | None, "sampled_at": <UTC ISO8601>}``. Never raises: a
     connection failure or an unparseable body IS an unhealthy canary —
-    that is the entire reason to call this.
+    that is the entire reason to call this. ``reason`` says "via the
+    relay" explicitly so the receipt cannot be misread as a source-level
+    finding.
     """
     target_date = target_date or date.today().isoformat()
     sampled_at = datetime.now(timezone.utc).isoformat()
@@ -520,18 +534,22 @@ def sample_canary(target_date: str | None = None, *, timeout: int = 20) -> dict[
         body = relay_get_markdown(relay, target, timeout=timeout, max_retries=1)
     except Exception as exc:
         return {"sport": "football", "checked": True, "healthy": False,
-                "reason": f"{type(exc).__name__}: {exc}"[:200],
+                "reason": f"football tz=0 JSON via the relay raised "
+                          f"{type(exc).__name__}: {exc}"[:200],
                 "sampled_at": sampled_at}
     if looks_like_challenge_page(body):
         return {"sport": "football", "checked": True, "healthy": False,
-                "reason": f"football tz=0 JSON looked like a challenge "
-                          f"page ({len(body)} bytes)",
+                "reason": f"football tz=0 JSON via the relay looked like "
+                          f"a challenge page ({len(body)} bytes) — this "
+                          f"is a relay-path finding, not proof the "
+                          f"source itself refused us",
                 "sampled_at": sampled_at}
     try:
         validate_football_json_body(body)
     except Exception as exc:
         return {"sport": "football", "checked": True, "healthy": False,
-                "reason": f"football tz=0 JSON failed to parse: {exc}"[:200],
+                "reason": f"football tz=0 JSON via the relay failed to "
+                          f"parse: {exc}"[:200],
                 "sampled_at": sampled_at}
     return {"sport": "football", "checked": True, "healthy": True,
             "reason": None, "sampled_at": sampled_at}
@@ -541,21 +559,34 @@ def _canary_state(selected: list[str], existing: set[str],
                   captures: "list[RawCapture]",
                   failures: list[str]) -> dict[str, Any]:
     """Football's tz=0 JSON is the cheap, already-fetched discriminator
-    between "this board is not published yet" and "the whole site is
-    refusing us right now" — both currently surface identically as an
-    HTTP 422 / ``COVERAGE_GAP`` from any other sport's column route.
-    Whenever a call to :meth:`ForebetCollector.capture_selected` also
-    fetches football (the common case — it is first in ``SPORTS`` and
+    between "this board is not published yet" and "our path is being
+    refused right now" — both currently surface identically as an HTTP
+    422 / ``COVERAGE_GAP`` from any other sport's column route. Whenever a
+    call to :meth:`ForebetCollector.capture_selected` also fetches
+    football (the common case — it is first in ``SPORTS`` and
     ``sports=None`` requests every sport), football's own result IS that
     discriminator, for free.
 
     Owner finding, 2026-09-28 (Priority 1, item iii): a near/far
-    circuit-breaker comparison run while Cloudflare was challenge-blocking
-    the whole site could not tell "not published" from "refused right
-    now" apart — the one distinction the comparison exists to draw. Every
-    receipt now records whether football (the canary) was healthy for
-    THIS SAME run, so a blocked run can be recognised and discarded
-    instead of misread as a publication-timing finding.
+    circuit-breaker comparison run while football's own fetch was
+    challenge-blocked could not tell "not published" from "our path
+    refused right now" apart — the one distinction the comparison exists
+    to draw. Every receipt now records whether football (the canary) was
+    healthy for THIS SAME run, so a blocked run can be recognised and
+    discarded instead of misread as a publication-timing finding.
+
+    **Relabelled 2026-09-28, second correction:** this reads football's
+    result from ``_fetch`` — relay-only on a GitHub runner (direct
+    fallback is skipped there by ``on_github_runner()``; see
+    ``fetch_with_fallback``). A ``healthy: False`` reading on a runner
+    therefore means "the relay path was blocked this run", not "the
+    source refused us" — a server-side fetch got a real response direct
+    from ``forebet.com`` at the exact moment the relay returned a
+    challenge page for the identical URL. See ``sample_canary`` (the
+    pre-flight sibling, same relay-only scope) and
+    ``direct_vs_relay_probe`` (the runner-side confirmation) for the full
+    finding. Do not read a ``False`` here as proof the site itself is
+    down.
     """
     if "football" not in selected:
         return {"sport": "football", "checked": False, "healthy": None,
@@ -577,17 +608,28 @@ def _canary_state(selected: list[str], existing: set[str],
 #: (football) also failed in the same run — see ``_canary_state``. Leads
 #: with the correction so it is the first thing read, not an appendix to
 #: the breaker's own "not-published signal" wording.
-_SITE_WIDE_REFUSAL_PREFIX = (
-    "[SITE-WIDE REFUSAL \u2014 canary (football) also failed this run; "
-    "NOT evidence the board is unpublished] "
+#:
+#: Relabelled 2026-09-28 from "SITE-WIDE REFUSAL": the owner fetched
+#: football's tz=0 JSON directly (no relay) and via the relay at the same
+#: moment and got a REAL response direct while the relay returned a
+#: challenge page — the canary (relay-only, see ``sample_canary``) may be
+#: measuring OUR PATH, not the source. Calling this "site-wide" asserted a
+#: cause this discriminator was never able to prove; "CANARY PATH BLOCKED"
+#: says only what was actually observed.
+_CANARY_PATH_BLOCKED_PREFIX = (
+    "[CANARY PATH BLOCKED \u2014 football (our canary) also failed this "
+    "run over the same path; NOT evidence the board is unpublished, and "
+    "NOT proof the source itself refused us \u2014 2026-09-28: a direct "
+    "fetch succeeded at the exact moment the relay did not; see "
+    "direct_vs_relay_probe] "
 )
 
 
-def _mark_site_wide_refusal(capture_timing: list[dict],
-                            failures: list[str]) -> None:
+def _mark_canary_path_blocked(capture_timing: list[dict],
+                              failures: list[str]) -> None:
     """When the canary is down, relabel every OTHER sport's ``COVERAGE_GAP``
     entry so nothing downstream repeats the "board not published" reading a
-    site-wide refusal produces identically.
+    blocked canary produces identically.
 
     ``NO_ROWS_FOR_DATE`` is never touched: it is only ever returned on
     positive evidence (the board rendered cleanly and held no match for the
@@ -599,12 +641,12 @@ def _mark_site_wide_refusal(capture_timing: list[dict],
         sport = text.split(":", 1)[0]
         if sport == "football" or "COVERAGE_GAP" not in text:
             continue
-        failures[i] = _SITE_WIDE_REFUSAL_PREFIX + text
+        failures[i] = _CANARY_PATH_BLOCKED_PREFIX + text
     for entry in capture_timing:
         if entry.get("sport") == "football":
             continue
         if str(entry.get("outcome", "")).startswith("COVERAGE_GAP"):
-            entry["outcome"] = "COVERAGE_GAP:site_wide_refusal"
+            entry["outcome"] = "COVERAGE_GAP:canary_path_blocked"
 
 
 
@@ -888,7 +930,7 @@ class ForebetCollector:
         # function's own return value.
         canary = _canary_state(selected, existing, captures, failures)
         if canary["healthy"] is False:
-            _mark_site_wide_refusal(capture_timing, failures)
+            _mark_canary_path_blocked(capture_timing, failures)
 
         report_dir = self.root / "data" / "reports"
         report_dir.mkdir(parents=True, exist_ok=True)

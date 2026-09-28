@@ -369,7 +369,7 @@ class TestTheBoardIsNotTheSource:
                 spec, "2026-09-29")
 
 
-class TestCanaryDiscriminatesSiteWideRefusalFromPublicationGap:
+class TestCanaryDiscriminatesPathBlockedFromPublicationGap:
     """Owner finding, 2026-09-28 (Priority 1, item iii): a near/far
     circuit-breaker comparison run while Cloudflare was challenge-blocking
     the whole site could not tell "not published yet" from "refused right
@@ -438,11 +438,13 @@ class TestCanaryDiscriminatesSiteWideRefusalFromPublicationGap:
 
         [volleyball_timing] = [t for t in receipt["capture_timing"]
                                if t["sport"] == "volleyball"]
-        assert volleyball_timing["outcome"] == "COVERAGE_GAP:site_wide_refusal"
+        assert volleyball_timing["outcome"] == "COVERAGE_GAP:canary_path_blocked"
         [volleyball_failure] = [f for f in receipt["failures"]
                                 if "volleyball:" in f]
-        assert volleyball_failure.startswith("[SITE-WIDE REFUSAL")
+        assert volleyball_failure.startswith("[CANARY PATH BLOCKED")
         assert "not evidence the board is unpublished" in \
+            volleyball_failure.lower()
+        assert "not proof the source itself refused us" in \
             volleyball_failure.lower()
 
         # Football's own entry is never relabelled by this pass — it IS
@@ -483,7 +485,7 @@ class TestCanaryDiscriminatesSiteWideRefusalFromPublicationGap:
         assert rugby_timing["outcome"] == "NO_ROWS_FOR_DATE"
         [rugby_failure] = [f for f in receipt["failures"]
                            if f.startswith("rugby:")]
-        assert not rugby_failure.startswith("[SITE-WIDE REFUSAL")
+        assert not rugby_failure.startswith("[CANARY PATH BLOCKED")
 
     def test_canary_not_checked_when_football_was_not_requested(
             self, tmp_path, monkeypatch):
@@ -576,11 +578,11 @@ class TestCanaryDiscriminatesSiteWideRefusalFromPublicationGap:
 
 class TestSampleCanaryStandalone:
     """``sample_canary`` is the pre-flight version of ``_canary_state``:
-    one direct request, callable BEFORE any per-sport capture has spent a
-    single request — the check ``forward_shadow_batch.py`` now runs before
-    (and periodically during) its forward pass so a site-wide WAF block
-    never again grinds ~70 sport-dates through their full retry budgets
-    against a wall (run 36426785929).
+    one relay-path request, callable BEFORE any per-sport capture has
+    spent a single request — the check ``forward_shadow_batch.py`` now
+    runs before (and periodically during) its forward pass so a
+    relay-path WAF block never again grinds ~70 sport-dates through
+    their full retry budgets against a wall (run 36426785929).
     """
 
     def test_healthy_when_the_json_parses_cleanly(self, monkeypatch):

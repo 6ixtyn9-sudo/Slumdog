@@ -1,4 +1,24 @@
 name: Forebet canary sample (cron, read-only, one request)
+# ============================================================================
+# PAUSED — do not paste this into .github/workflows/ yet (2026-09-28).
+#
+# This job's every-two-hours sample goes via the relay only (same as
+# slumdog.forebet.sample_canary/_canary_state on a GitHub runner —
+# on_github_runner() skips the direct-fetch fallback there). A server-side
+# fetch, same moment, same URL, got a REAL response direct from forebet.com
+# while the relay (r.jina.ai) returned a challenge page — so a red run of
+# THIS job may only prove the relay's egress was challenged, not that
+# Forebet itself was unreachable. Pasting it now would build an
+# "availability map" that measures the wrong thing.
+#
+# Un-pause once scripts/probe_kickoff_timezone.py --direct-vs-relay-only has
+# run from an actual GitHub Actions runner and confirmed (or overturned)
+# that finding — see HANDOFF.md, "direct vs relay" for the runner-side
+# result once recorded. If direct-from-runner turns out to work reliably,
+# this file should also be revisited to sample direct rather than via the
+# relay, since that would be the more meaningful availability signal.
+# ============================================================================
+#
 # Owner directive, 2026-09-28, after two consecutive site-wide WAF blocks in
 # the same afternoon that had served cleanly that morning (run 36419041728,
 # run a5e5720): "we've been optimising how MUCH we ask, when the binding

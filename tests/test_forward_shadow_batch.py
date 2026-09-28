@@ -1620,8 +1620,8 @@ class TestPhaseAnnotationOrdering:
 
 
 class TestCanaryGateInDriverMain:
-    """Owner directive, 2026-09-28, after two consecutive site-wide WAF
-    blocks: "site availability, not request count, may be the binding
+    """Owner directive, 2026-09-28, after two consecutive relay-path WAF
+    blocks: "path availability, not request count, may be the binding
     constraint." ``forward_shadow_batch.py`` must sample the canary before
     the forward pass and periodically during it, and a down canary must
     stop the pass — with the phases that already ran (settlement etc.)

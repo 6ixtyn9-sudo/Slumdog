@@ -1,5 +1,78 @@
 # Slumdog Living Handoff
 
+**2026-09-28 (same session, continued a sixth time) — DIRECT-VS-RELAY PROBE RESULT FROM AN ACTUAL GITHUB RUNNER: NEITHER PATH WORKS FROM THIS RUNNER TODAY — DIRECT FAILS OUTRIGHT, RELAY GETS CHALLENGED. THE "IT'S JUST THE RELAY" READING DOES NOT HOLD AS STATED; CANARY WORDING RELABELLED TO "PATH BLOCKED", NOT "SITE REFUSED".**
+
+**Why this entry exists:** the owner reported that their own server-side fetch, same moment, same URL, got a real response direct from `forebet.com` while a relay (`r.jina.ai`) fetch of the identical URL returned a
+challenge page — asserting this runner shares the owner's egress class, so the relay (not Forebet) was the likely culprit behind every "site-wide refusal" this session (`36455080098`, `36461512749`,
+`36467771961`). That assertion needed a runner-side test before being taken as settled, because `sample_canary`/`_canary_state`/`canary_from_render_clock` only ever exercise the relay path on a GitHub runner
+(`on_github_runner()` skips the direct-fetch fallback there) — nothing this session had actually tried direct from a runner until now.
+
+**What was built:** `direct_vs_relay_probe(date, *, timeout, sport)` in `scripts/probe_kickoff_timezone.py` — four single-attempt, no-retry requests (football tz=0 JSON: direct + relay; one HTML sport board:
+direct + relay), each returning `{"ok": bool, ...body_fingerprint(...)}` or `{"ok": False, "error"}`, never raising. Wired into `run_probe()` as its first stage (`report["direct_vs_relay"]`, `probe:direct_vs_relay`
+annotation) specifically so the existing auto-triggered push workflow — which passes no custom flags — would answer this without any `.github/workflows/` edit. Also exposed standalone as
+`--direct-vs-relay-only` for a cheap, few-second runner-side check outside the full sweep. Landed as commit `a92afb6`; auto-triggered run `36470920157`.
+
+**The result (run `36470920157`, job `probe`=`109092666481`, commit `a92afb680c16c2b3238bed8eecde5bc9b323fd9c`, started `2026-09-28T19:15:09Z`, completed `2026-09-28T19:27:39Z`), read from the
+`probe:direct_vs_relay` check-run annotation:**
+
+```json
+{"football_json": {
+    "url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-29&ord=0&tz=0&tzs=&tze=",
+    "direct": {"ok": false, "error": "RuntimeError: direct fetch failed across transports: urllib=HTTPError"},
+    "relay":  {"ok": true, "bytes": 272, "looks_like": "challenge_page", "has_rcnt": false,
+               "sample": "... Performing security verification ... This website uses a security service to protect against malicious bots ..."}
+  },
+ "html_board": {
+    "url": "https://www.forebet.com/en/basketball/predictions/2026-09-29", "sport": "basketball", "target_date": "2026-09-29",
+    "direct": {"ok": false, "error": "RuntimeError: direct fetch failed across transports: urllib=HTTPError"},
+    "relay":  {"ok": true, "bytes": 5931, "looks_like": "challenge_page", "has_rcnt": false,
+               "sample": "<html lang=\"en-US\"><head><title>Just a moment...</title>..."}
+  }}
+```
+
+**Read this precisely — it does NOT simply confirm "the relay is the problem, the source is fine for this runner":**
+
+1. **Direct fetch did not merely come back unhealthy — it failed outright**, the same `RuntimeError: direct fetch failed across transports: urllib=HTTPError` for both requests, with no body to fingerprint at
+   all. That is a materially different (and worse) failure mode than the owner's own server-side direct fetch, which got a complete, real JSON/HTML response. Two fetches from two different network locations to
+   the same origin at different moments producing different outcomes is not evidence they would behave identically; it is evidence they do not.
+2. **Relay fetch, by contrast, DID complete — it got a full HTTP response — and that response was a Cloudflare "Performing security verification" / "Just a moment..." challenge page**, i.e. the relay's request
+   reached Cloudflare and was actively challenged, not silently dropped.
+3. **Net effect on this GitHub-hosted runner, today, right now: both paths are unusable, for two different reasons.** Direct cannot even complete a request (network/TLS/connection-level failure via urllib,
+   before Cloudflare ever gets a chance to render a challenge). Relay completes the request but gets challenged by Cloudflare. Neither result supports "switch to direct and the problem goes away" as a fix for
+   THIS runner today — direct is not merely unproven here, it is actively broken here. It also does not fully vindicate "it was always Forebet, not the relay" either: the relay's own failure IS a real Cloudflare
+   challenge of a real request, not a relay-side outage — so Cloudflare is still, in some sense, "in the loop" for the relay path too, just at a different point than a blind direct WAF block would be.
+4. **What is genuinely confirmed:** the specific claim "this runner's direct egress is equivalent to the owner's, so it would have succeeded direct just as it did for the owner" is NOT supported by this run —
+   direct failed here, categorically, both times. Whatever made the owner's server-side fetch succeed direct (different IP range/reputation, different TLS fingerprint/HTTP client, a moment when Cloudflare
+   happened not to challenge that specific origin IP, etc.) is not present on a GitHub Actions runner as tested here.
+5. **What remains open:** whether the `urllib=HTTPError` on direct is a hard block (e.g. connection refused/reset by Cloudflare specifically against Actions' IP ranges, well documented as commonly blocklisted)
+   or an artifact of `direct_get`'s specific transport stack (only `urllib` was attempted — `_cffi_get`/curl_cffi's TLS fingerprint is what `fetch_with_fallback` uses locally and was NOT exercised by this direct
+   leg of the probe on the runner; worth checking whether a curl_cffi-based direct attempt behaves differently before concluding direct is unconditionally dead on Actions). Not investigated further this session.
+
+**Decision taken given this result (this session, not deferred): keep the relabeling direction the owner gave (canary/circuit-breaker wording should say "our path was blocked", not "the site refused us" /
+"the whole site is down"), because that framing was already correct and, if anything, UNDERSTATED by this result — "our path" now demonstrably includes cases where BOTH the direct and relay paths from this
+specific runner are blocked, for different reasons, not just the relay. What changed as a result of this run: the relabeling explicitly avoids implying "direct would have worked" or "it's just the relay,
+switch and you're fixed" — neither is true on this evidence. Concretely, in `src/slumdog/forebet.py`:**
+
+- `_SITE_WIDE_REFUSAL_PREFIX` → `_CANARY_PATH_BLOCKED_PREFIX` (prefix text now `[CANARY PATH BLOCKED — ...]`, references this run's date and finding, keeps the load-bearing substring
+  `"NOT evidence the board is unpublished"` that an existing test pins), `_mark_site_wide_refusal()` → `_mark_canary_path_blocked()`, outcome suffix `COVERAGE_GAP:site_wide_refusal` →
+  `COVERAGE_GAP:canary_path_blocked`. Call site and all `tests/test_forebet.py` references updated to match (renamed class `TestCanaryDiscriminatesSiteWideRefusalFromPublicationGap` →
+  `TestCanaryDiscriminatesPathBlockedFromPublicationGap`).
+- `_canary_state()`'s and `sample_canary()`'s docstrings reworded to state plainly that these only ever exercise the relay path on a GitHub runner, that a `False` reading means "our path (as tested) was
+  blocked this run", and explicitly point at `direct_vs_relay_probe` for the runner-side finding above rather than asserting either "the source is down" or "it's just the relay, direct is fine."
+  `sample_canary`'s per-branch `reason` strings now say "via the relay" explicitly.
+- Comment-only "site-wide refusal" references in `forward_shadow_batch.py` and `tests/test_forward_shadow_batch.py` reworded to "relay-path" / "canary path block" for consistency; the two historical
+  narrative comments in `probe_kickoff_timezone.py` that already quote "site-wide refusal" as the superseded term (describing what earlier runs were called before this finding) were left as accurate history.
+- `docs/owner_paste/probe_canary_cron.yml` and `docs/owner_paste/README.md` both now carry an explicit **PAUSED** notice: the staged cron samples the relay path only (same asymmetry as `sample_canary` on a
+  runner), so a red run of it — given the result above — could mean either the relay OR the source is blocking the runner, and a green run says nothing about the direct path at all. Do not apply it until this
+  ambiguity is resolved (e.g. by adding a direct-path leg using `_cffi_get`, or by accepting the relay-only signal as "our production path's" health, which is a narrower and now more defensible claim than
+  "site availability").
+
+**Also newly true and worth carrying forward:** the near/far circuit-breaker trial embedded in this same run (`36470920157`) was **a fourth consecutive invalid trial** — `canary.healthy=false`
+(`"football tz=0 JSON looked like 'challenge_page' (272 bytes)"`, `far_breaker_tripped=true`, `trial_valid=false`) — same signature as `36455080098`/`36461512749`/`36467771961`. Item (iii) (a valid
+circuit-breaker measurement) is still not closed; four invalid trials now on record, zero valid ones, and this run's own `direct_vs_relay` data suggests the WAF condition is closer to "this runner's IP range is
+disfavoured much of the time" than "an occasional afternoon spike" — worth factoring into how many more pushes it is reasonable to spend chasing a lucky `healthy: true` window versus addressing the underlying
+egress problem directly (e.g. residential/different egress for the relay, or accepting Actions-hosted circuit-breaker measurement may not be achievable at all and moving the measurement elsewhere).
+
 **2026-09-28 (same session, continued a fifth time) — THE REFRAME: SITE AVAILABILITY, NOT REQUEST COUNT, MAY BE THE BINDING CONSTRAINT. CANARY-FIRST ABORT IN THE FORWARD PASS; `--canary-only` MODE; A CRON STAGED TO MAP WHEN FOREBET SERVES.**
 
 **The entry directly below this one closed two invalid trials honestly — the owner's response was to redirect on what the canary had actually revealed.** Clean service this morning (run `36419041728` graded 18

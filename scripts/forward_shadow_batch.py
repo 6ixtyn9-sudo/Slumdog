@@ -146,7 +146,7 @@ def emit_notice(title: str, payload) -> None:
 
 
 def canary_gate(*, timeout: int = 45) -> dict:
-    """One cheap, standalone sample of the site-wide canary (football's
+    """One cheap, standalone sample of the canary (football's
     tz=0 JSON) — see ``slumdog.forebet.sample_canary``'s docstring for the
     full rationale. Wrapped here, rather than calling ``sample_canary``
     directly from ``main()``, purely so a test can monkeypatch
@@ -1676,7 +1676,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Repository root: {repo_root}", file=sys.stderr)
 
     # Canary-first abort (owner directive, 2026-09-28, after two consecutive
-    # site-wide WAF blocks): "site availability, not request count, may be
+    # relay-path WAF blocks): "path availability, not request count, may be
     # the binding constraint." Sample before EVERY date this loop is about
     # to spend a capture budget on — the first sample covers "before the
     # forward pass" (nothing has been requested yet), each subsequent one
@@ -1701,7 +1701,7 @@ def main(argv: list[str] | None = None) -> int:
                     "canary": sample,
                 }
                 print(
-                    f"Forward pass ABANDONED on a site-wide refusal before "
+                    f"Forward pass ABANDONED on a canary path block before "
                     f"{target_date} ({i + 1}/{len(targets)}): "
                     f"{sample.get('reason')} — {len(results)} date(s) "
                     f"already completed are kept; {len(targets) - i} "
@@ -1757,12 +1757,15 @@ def main(argv: list[str] | None = None) -> int:
         "refresh": refresh_results,
         "event_day": event_day_results,
         "event_day_settlement": event_day_settlement,
-        # Site-wide canary samples taken before every forward-pass date
-        # (see canary_gate() above) plus, when the pass was abandoned on a
-        # site-wide refusal rather than completing/exhausting its target
+        # Canary samples taken before every forward-pass date (see
+        # canary_gate() above) plus, when the pass was abandoned on a
+        # canary path block rather than completing/exhausting its target
         # dates normally, the abort record itself — the "was abandoned on
-        # a site-wide refusal" statement the owner asked every run to be
-        # able to make, with sample times attached.
+        # a canary path block" statement the owner asked every run to be
+        # able to make, with sample times attached. NOTE (2026-09-28): the
+        # canary is relay-only on a GitHub runner (direct fallback is
+        # skipped there); a block here means our path was refused, not
+        # necessarily the source.
         "canary_gate": {
             "samples": canary_samples,
             "aborted": canary_abort is not None,
