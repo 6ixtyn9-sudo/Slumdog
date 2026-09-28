@@ -265,6 +265,11 @@ def fetch(url: str, *, timeout: int, json_endpoint: bool = False) -> bytes | Non
     return None
 
 
+#: Filled in when the tz=0 endpoint answers something unparseable, so the
+#: annotation can say WHAT it answered.
+FOOTBALL_JSON_FINGERPRINT: dict[str, Any] = {}
+
+
 def football_utc_kickoffs(date: str, *, timeout: int) -> dict[str, dt.datetime]:
     """``{match_id: kickoff_utc}`` from the tz=0-pinned JSON endpoint."""
     from slumdog.parsers import _load_football_payload
@@ -276,6 +281,14 @@ def football_utc_kickoffs(date: str, *, timeout: int) -> dict[str, dt.datetime]:
     try:
         payload = _load_football_payload(body)
     except Exception as exc:
+        # What came back matters more than the fact it would not parse.
+        # "JSONDecodeError at char 0" describes a challenge page, a relay
+        # Markdown wrapper and an empty body identically, and those need
+        # three different fixes. Production reads this endpoint too, so a
+        # silent change here would stop football as well.
+        FOOTBALL_JSON_FINGERPRINT.update(body_fingerprint(body))
+        FOOTBALL_JSON_FINGERPRINT["parse_error"] = (
+            f"{type(exc).__name__}: {exc}"[:200])
         FETCH_ERRORS.append({
             "url": "football-json", "route": "parse",
             "error": f"{type(exc).__name__}: {exc}"[:300],
@@ -1028,7 +1041,9 @@ def render_clock_probe(date: str, *, timeout: int, pause: float,
         # not JSON at all. Whether that is a challenge page or a throttle
         # matters more than the empty result, so it is reported here rather
         # than left in a fetch-error list nobody reads.
-        if FETCH_ERRORS:
+        if FOOTBALL_JSON_FINGERPRINT:
+            record["json_body"] = dict(FOOTBALL_JSON_FINGERPRINT)
+        elif FETCH_ERRORS:
             record["json_error"] = str(FETCH_ERRORS[-1])[:200]
         return record
     pace(min(pause, 3))

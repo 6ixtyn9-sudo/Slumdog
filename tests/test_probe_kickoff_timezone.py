@@ -2592,3 +2592,43 @@ class TestNoStageMaySpendTheWholeBudget:
                                 sports=("hockey", "handball"))
         assert seen == ["hockey", "handball"]
         assert all("slice" in rec["verdict"] for rec in out.values())
+
+
+class TestAnUnparseableJsonEndpointSaysWhatItGot:
+    """'JSONDecodeError at char 0' describes a challenge page, a relay
+    Markdown wrapper and an empty body identically — and those need three
+    different fixes. Production reads this endpoint too."""
+
+    def _probe_with_body(self, monkeypatch, body):
+        import scripts.probe_kickoff_timezone as probe
+
+        probe.FOOTBALL_JSON_FINGERPRINT.clear()
+        probe.FETCH_ERRORS.clear()
+        monkeypatch.setattr(probe, "fetch", lambda *a, **k: body)
+        kickoffs = probe.football_utc_kickoffs("2026-09-29", timeout=1)
+        assert kickoffs == {}
+        monkeypatch.setattr(probe, "football_utc_kickoffs",
+                            lambda date, **k: {})
+        return probe.render_clock_probe("2026-09-29", timeout=1, pause=0)
+
+    def test_a_challenge_page_is_named_as_one(self, monkeypatch):
+        record = self._probe_with_body(
+            monkeypatch,
+            b"<!DOCTYPE html><html><title>Just a moment...</title>")
+        assert record["json_body"]["bytes"] > 0
+        assert "Just a moment" in record["json_body"]["sample"]
+
+    def test_a_relay_markdown_wrapper_is_named_as_one(self, monkeypatch):
+        record = self._probe_with_body(
+            monkeypatch,
+            b"Title: Forebet\n\nMarkdown Content:\n[[{\"id\": 1}]]")
+        assert record["json_body"]["looks_like"] == "relay_markdown_wrapper"
+
+    def test_an_empty_body_is_not_confused_with_either(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        probe.FOOTBALL_JSON_FINGERPRINT.clear()
+        probe.FETCH_ERRORS.clear()
+        monkeypatch.setattr(probe, "fetch", lambda *a, **k: None)
+        assert probe.football_utc_kickoffs("2026-09-29", timeout=1) == {}
+        assert probe.FOOTBALL_JSON_FINGERPRINT == {}
