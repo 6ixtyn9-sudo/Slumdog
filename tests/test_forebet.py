@@ -146,3 +146,54 @@ class TestCaptureSelectedRefreshParams:
         # With force: the raw dir no longer shields the sport from a fetch.
         collector.capture_selected("2026-09-23", sports=["hockey"], force=True)
         assert calls == [("hockey", "2026-09-23")]
+
+
+def test_the_second_challenge_wording_is_named_not_caught_by_luck():
+    """Captured live on the tz=0 JSON endpoint (run 36401440850): 272 bytes
+    that matched no marker and failed closed only because the JSON parse
+    threw. An HTML board would have survived on its missing sport label."""
+    from slumdog.forebet import looks_like_challenge_page
+
+    live = (b"![Image 1: Icon for www.forebet.com](https://www.forebet.com/"
+            b"favicon.ico) ## www.forebet.com ## Performing security "
+            b"verification This website uses a security service to protect "
+            b"against malicious bots. This page is displayed while the "
+            b"website verifies you are not a bot.")
+    assert looks_like_challenge_page(live)
+    assert not looks_like_challenge_page(
+        b'[[{"id": 1, "HOST_NAME": "Arsenal"}]]')
+
+
+class TestTheBoardIsNotTheSource:
+    """Run 36402990164 spent 108 seconds and three attempts rendering
+    /en/football-tips-and-predictions/predictions/<date>, which does not
+    exist. The renderer answers 422 for 'your selector matched nothing',
+    which reads exactly like throttling — so a wrong URL looks like a site
+    refusing you."""
+
+    def test_footballs_board_is_not_its_json_endpoint(self):
+        from slumdog.forebet import board_url, source_url
+        from slumdog.sports import SPORTS
+
+        board = board_url(SPORTS["football"], "2026-09-29")
+        assert board == ("https://www.forebet.com/en/football-predictions/"
+                         "predictions-1x2/2026-09-29")
+        assert "getrs.php" in source_url(SPORTS["football"], "2026-09-29")
+        assert "getrs.php" not in board
+
+    def test_the_sport_path_slug_is_not_a_board_either(self):
+        from slumdog.forebet import board_url
+        from slumdog.sports import SPORTS
+
+        assert SPORTS["football"].path not in board_url(
+            SPORTS["football"], "2026-09-29")
+
+    def test_every_other_sport_keeps_one_url(self):
+        from slumdog.forebet import board_url, source_url
+        from slumdog.sports import SPORTS
+
+        for key, spec in SPORTS.items():
+            if key == "football":
+                continue
+            assert board_url(spec, "2026-09-29") == source_url(
+                spec, "2026-09-29")

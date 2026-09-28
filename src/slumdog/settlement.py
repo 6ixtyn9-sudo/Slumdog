@@ -229,6 +229,38 @@ def _base_row(row, sport: str, target_date: str):
     }
 
 
+#: A fight that produced no result to grade.
+NO_CONTEST_TOKENS = ("cancl", "no contest", "abandon", "canceled",
+                     "cancelled", "postp")
+
+#: Whole words that mean no contest. Matched as words, not substrings —
+#: "nc" lives inside too many ordinary strings to match loosely.
+NO_CONTEST_WORDS = ("nc", "void")
+
+#: A fight that ended level. Forebet renders these as plain words in the
+#: result cell rather than as a score, so they are matched as words.
+DRAW_TOKENS = ("draw",)
+
+#: How a fight was won. Evidence only — recorded so the record says what
+#: kind of win it was, never used as a model feature (AGENTS.md invariant 5).
+_METHODS = (
+    ("submission", "SUBMISSION"), ("sub", "SUBMISSION"),
+    ("tko", "TKO"), ("ko", "KO"),
+    ("unanimous", "DECISION"), ("majority", "DECISION"),
+    ("split", "DECISION"), ("decision", "DECISION"), ("dec", "DECISION"),
+    ("dq", "DISQUALIFICATION"), ("disqualif", "DISQUALIFICATION"),
+)
+
+
+def _victory_method(result_text: str) -> str:
+    """The method of victory named in the result cell, or "" when absent."""
+    words = re.findall(r"[a-z]+", result_text.casefold())
+    for token, method in _METHODS:
+        if token in words:
+            return method
+    return ""
+
+
 def parse_mma_settled(body: bytes, target_date: str) -> list[SettledEvent]:
     soup = BeautifulSoup(body, "html.parser")
     settled = []
@@ -242,8 +274,17 @@ def parse_mma_settled(body: bytes, target_date: str) -> list[SettledEvent]:
         if not result_text:
             continue
         lowered = result_text.casefold()
-        if any(token in lowered for token in ("cancl", "no contest", "abandon")):
+        method = _victory_method(result_text)
+        words = set(re.findall(r"[a-z]+", lowered))
+        if (any(token in lowered for token in NO_CONTEST_TOKENS)
+                or words & set(NO_CONTEST_WORDS)):
+            # Nothing happened that can grade a pick: no result to score.
             winner, disposition = 0, "VOID"
+        elif words & set(DRAW_TOKENS):
+            # A fight can end level — unanimous, majority or split draw. The
+            # underdog did not win, so this is a settled failure, not a void
+            # and not a row to drop.
+            winner, disposition = 0, "SETTLED_DRAW"
         else:
             winner_name = _text(row.select_one(".lscr_td .oltrpy"))
             if _identity(winner_name) == _identity(base["participant_1"]):
@@ -260,6 +301,7 @@ def parse_mma_settled(body: bytes, target_date: str) -> list[SettledEvent]:
         settled.append(SettledEvent(
             **base, sport="mma", event_date=target_date, winner_index=winner,
             score_1=None, score_2=None, disposition=disposition,
+            facets={"method": method} if method else {},
         ))
     return settled
 

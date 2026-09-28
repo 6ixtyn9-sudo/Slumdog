@@ -256,6 +256,12 @@ def load_capture_records(
             "captured_at": captured_at,
             "source_url": source_url,
             "sha256": body_sha,
+            # The receipt already records how the body was written. Not
+            # passing it on left the parser guessing from the bytes, and a
+            # column capture that guesses wrong parses as HTML and yields
+            # nothing.
+            "body_format": sidecar_obj.get("body_format") or "",
+            "route": sidecar_obj.get("route") or "",
         }
         try:
             snapshots = parse_capture(metadata, root=str(repo_root))

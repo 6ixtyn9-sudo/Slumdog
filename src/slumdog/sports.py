@@ -13,6 +13,21 @@ class SportSpec:
     period_labels: tuple[str, ...]
     known_facets: tuple[str, ...]
     current_only: bool = False
+    #: Whether a contest can END level, which is NOT the same question as
+    #: whether the board prices a draw. MMA prices two outcomes and still
+    #: produces draws (unanimous, majority and split), so the market shape
+    #: (``draw_possible``) and the outcome space (this field) differ. A sport
+    #: that can end level settles a draw as a failed underdog win; a sport
+    #: that cannot is telling us the parse went wrong, and that row is
+    #: excluded rather than graded.
+    draw_outcome_possible: bool | None = None
+
+    @property
+    def draw_settles(self) -> bool:
+        """True when a level result is a real outcome to be graded."""
+        if self.draw_outcome_possible is None:
+            return self.draw_possible
+        return self.draw_outcome_possible
 
 
 HISTORY_STARTS: dict[str, str | None] = {
@@ -88,6 +103,7 @@ SPORTS: dict[str, SportSpec] = {
         "mma", "mma", "fight_2way", False,
         ("R1", "R2", "R3", "R4", "R5"),
         ("division", "fighter_record", "height", "weight", "reach", "stance", "strikes", "takedowns", "submissions", "control_time", "predicted_method", "moneyline"),
+        draw_outcome_possible=True,
     ),
     "esports": SportSpec(
         "esports", "esports", "maps_2way", False,

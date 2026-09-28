@@ -41,6 +41,7 @@ import json
 from dataclasses import replace as _dc_replace
 import math
 import os
+import re
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -60,6 +61,7 @@ from .capture_loader import (
     load_capture_records,
 )
 from .dataset import build_pre_event_features
+from .render_clock import load_render_clock
 from .history_loader import HistoryLoadResult, load_valid_history, DEFAULT_MAX_INTERIM_BYTES
 from .shadow_contracts import PreEventRecord, key_of
 from .underdog import identify_forebet_underdog
@@ -77,6 +79,91 @@ FROZEN_R2_KEY = "R2_CONSERVATIVE_FIXED_RULE"
 FROZEN_R2_PATH = (
     f"{FROZEN_BASELINE_CONFIG_PATH}:rules.{FROZEN_R2_KEY}"
 )
+
+
+# ---------------------------------------------------------------------------
+# Timing tracks
+# ---------------------------------------------------------------------------
+# Two mutually exclusive timing contracts exist. They share the SAME frozen R2
+# eligibility rule, the SAME R1 ranking comparator and the SAME feature
+# construction — only the proof of pre-event timing differs, and they write to
+# separate artifact roots so their evidence can never be pooled by accident.
+#
+#   STANDARD (declaration_version "shadow_evaluator")
+#       Frozen 24h gate: captured_at AND decision_committed_at must both be
+#       <= target_date 00:00 UTC - 24h. Unchanged since Milestone 7; this is
+#       the record the forward hit-rate is reported on.
+#
+#   EVENT_DAY (declaration_version "shadow_evaluator_event_day")
+#       Owner decision 2026-09-26. Forebet does not publish boards for
+#       basketball / hockey / baseball / tennis / rugby more than ~a day out
+#       ("target date missing from HTML" at both the D+6 forward capture and
+#       the T+1/T+2 refresh), so those sports are structurally unreachable
+#       under the date-anchored 24h gate: 09-21..09-26 produced football-only
+#       rank-1 picks. This track decides on the event day itself and proves
+#       pre-event status PER EVENT against the published kickoff instead of
+#       against the date anchor: an event is admissible only if its parsed
+#       kickoff is at least ``min_lead_minutes_before_kickoff`` after the
+#       decision instant. Events with no parseable kickoff are refused
+#       (fail-closed) — never assumed to be far away.
+#
+# The event-day track is NOT a relaxation of the standard track: it is a
+# separate, weaker-lead-time experiment whose artifacts live under their own
+# root and carry ``track: "EVENT_DAY"`` in every payload and manifest.
+STANDARD_TRACK = "STANDARD"
+EVENT_DAY_TRACK = "EVENT_DAY"
+STANDARD_DECLARATION_VERSION = "shadow_evaluator"
+EVENT_DAY_DECLARATION_VERSION = "shadow_evaluator_event_day"
+STANDARD_ARTIFACT_ROOT = "data/reports/shadow"
+EVENT_DAY_ARTIFACT_ROOT = "data/reports/shadow_event_day"
+# Floor on the declared per-event lead time. A pick frozen less than half an
+# hour before kickoff is not meaningfully pre-event evidence for this product,
+# so the declaration cannot declare one.
+MIN_EVENT_DAY_LEAD_MINUTES = 30
+
+
+@dataclass(frozen=True)
+class TrackPolicy:
+    """Resolved timing contract for one run, derived from the declaration.
+
+    ``name`` is the only branch key used downstream. The two numeric fields
+    are mutually exclusive: the standard track has a date-anchored cutoff
+    offset and no per-event lead requirement; the event-day track has a
+    per-event lead requirement and no date anchor.
+    """
+
+    name: str
+    safe_cutoff_offset_hours: int | None
+    min_lead_minutes: int | None
+    artifact_root: str
+
+    @property
+    def is_event_day(self) -> bool:
+        return self.name == EVENT_DAY_TRACK
+
+
+def track_policy(declaration: dict[str, Any]) -> TrackPolicy:
+    """Resolve the timing track of an ALREADY-VERIFIED declaration.
+
+    :func:`load_shadow_declaration` has validated every field this reads, so
+    this function performs no re-validation and cannot be used to smuggle an
+    unverified declaration into a run.
+    """
+    timing = declaration.get("timing_safety", {})
+    if declaration.get("declaration_version") == EVENT_DAY_DECLARATION_VERSION:
+        return TrackPolicy(
+            name=EVENT_DAY_TRACK,
+            safe_cutoff_offset_hours=None,
+            min_lead_minutes=int(timing["min_lead_minutes_before_kickoff"]),
+            artifact_root=declaration["artifact_path"]["root"],
+        )
+    return TrackPolicy(
+        name=STANDARD_TRACK,
+        safe_cutoff_offset_hours=int(timing.get("safe_cutoff_offset_hours_utc", 24)),
+        min_lead_minutes=None,
+        artifact_root=declaration.get("artifact_path", {}).get(
+            "root", STANDARD_ARTIFACT_ROOT),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +245,39 @@ def safe_cutoff_utc(target_date: str, *, offset_hours: int = 24) -> _dt.datetime
     return _dt.datetime(d.year, d.month, d.day, tzinfo=_dt.timezone.utc) - _dt.timedelta(hours=offset_hours)
 
 
+# Forebet listings publish the scheduled start in exactly two shapes, both
+# already in UTC because every capture URL pins ``tz=0``:
+#   HTML listings  (``.date_bah``)  -> "26/09/2026 18:00"
+#   football JSON  (``DATE_BAH``)   -> "2026-09-26 18:00"
+_KICKOFF_DMY = re.compile(r"^(\d{2})/(\d{2})/(\d{4})[ T](\d{2}):(\d{2})")
+_KICKOFF_YMD = re.compile(r"^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})")
+
+
+def parse_kickoff_utc(value: str) -> _dt.datetime | None:
+    """Parse a Forebet listing kickoff string into an aware UTC datetime.
+
+    Returns ``None`` — never a guess — when the string is absent, truncated
+    to a date with no time, or in any other shape. Callers on the
+    event-day track treat ``None`` as a refusal to admit the event.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    m = _KICKOFF_DMY.match(text)
+    if m:
+        day, month, year, hour, minute = (int(g) for g in m.groups())
+    else:
+        m = _KICKOFF_YMD.match(text)
+        if not m:
+            return None
+        year, month, day, hour, minute = (int(g) for g in m.groups())
+    try:
+        return _dt.datetime(
+            year, month, day, hour, minute, tzinfo=_dt.timezone.utc)
+    except ValueError:
+        return None
+
+
 def load_frozen_baseline_config(root: Path) -> dict[str, Any]:
     """Verify the 6B frozen config: SHA-256 and the exact R2 rule shape."""
     path = Path(root) / FROZEN_BASELINE_CONFIG_PATH
@@ -189,6 +309,54 @@ def load_frozen_baseline_config(root: Path) -> dict[str, Any]:
             f"frozen R2 eligibility drift: actual={sorted(actual_set)}"
         )
     return obj
+
+
+def _validate_event_day_timing(
+    obj: dict[str, Any], timing: dict[str, Any]
+) -> None:
+    """Fail-closed validation of a EVENT_DAY declaration's timing block.
+
+    Every field is mandatory and exactly-valued. The declaration may NOT
+    carry ``safe_cutoff_offset_hours_utc``: a event-day run must never be
+    able to present itself as satisfying the frozen 24h contract, and the
+    two tracks must never share an artifact root.
+    """
+    if timing.get("track") != EVENT_DAY_TRACK:
+        raise ShadowEvaluatorError(
+            f"timing_safety.track must be {EVENT_DAY_TRACK!r} for a "
+            f"{EVENT_DAY_DECLARATION_VERSION} declaration"
+        )
+    for forbidden in ("safe_cutoff_offset_hours_utc", "safe_cutoff_offset_hours"):
+        if forbidden in timing:
+            raise ShadowEvaluatorError(
+                f"timing_safety.{forbidden} must be absent on the "
+                f"{EVENT_DAY_TRACK} track (it does not satisfy the frozen "
+                f"24h contract and must not claim to)"
+            )
+    lead = timing.get("min_lead_minutes_before_kickoff")
+    if isinstance(lead, bool) or not isinstance(lead, int):
+        raise ShadowEvaluatorError(
+            "timing_safety.min_lead_minutes_before_kickoff must be an integer"
+        )
+    if lead < MIN_EVENT_DAY_LEAD_MINUTES or lead > 1440:
+        raise ShadowEvaluatorError(
+            f"timing_safety.min_lead_minutes_before_kickoff must be between "
+            f"{MIN_EVENT_DAY_LEAD_MINUTES} and 1440 (got {lead})"
+        )
+    for flag in (
+        "require_parsed_kickoff",
+        "refuse_event_without_parsed_kickoff",
+        "never_pooled_with_standard_track",
+    ):
+        if timing.get(flag) is not True:
+            raise ShadowEvaluatorError(f"timing_safety.{flag} must be True")
+    root = obj.get("artifact_path", {}).get("root")
+    if root != EVENT_DAY_ARTIFACT_ROOT:
+        raise ShadowEvaluatorError(
+            f"artifact_path.root must be {EVENT_DAY_ARTIFACT_ROOT!r} on the "
+            f"{EVENT_DAY_TRACK} track (got {root!r}) — the two tracks never "
+            f"share an artifact root"
+        )
 
 
 def load_shadow_declaration(path: str | Path) -> dict[str, Any]:
@@ -224,8 +392,18 @@ def load_shadow_declaration(path: str | Path) -> dict[str, Any]:
     if anti.get("rule_source_frozen_config_sha256") != FROZEN_BASELINE_CONFIG_SHA256:
         raise ShadowEvaluatorError("anti_tuning.rule_source_frozen_config_sha256 mismatch")
     timing = obj.get("timing_safety", {})
-    if timing.get("safe_cutoff_offset_hours_utc") != 24:
+    event_day = obj.get("declaration_version") == EVENT_DAY_DECLARATION_VERSION
+    if event_day:
+        _validate_event_day_timing(obj, timing)
+    elif timing.get("safe_cutoff_offset_hours_utc") != 24:
         raise ShadowEvaluatorError("timing_safety.safe_cutoff_offset_hours_utc must be 24 (frozen)")
+    elif obj.get("artifact_path", {}).get("root") == EVENT_DAY_ARTIFACT_ROOT:
+        # Symmetric guard: a 24h-frozen declaration must not write into the
+        # event-day tree either. Separation is enforced from both sides.
+        raise ShadowEvaluatorError(
+            f"artifact_path.root {EVENT_DAY_ARTIFACT_ROOT!r} is reserved for "
+            f"{EVENT_DAY_DECLARATION_VERSION} declarations"
+        )
     if timing.get("require_captured_at_present") is not True:
         raise ShadowEvaluatorError("timing_safety.require_captured_at_present must be True")
     if timing.get("require_decision_committed_at_present") is not True:
@@ -576,6 +754,142 @@ def _timing_classify(
     return timed, timing_rejected, malformed
 
 
+# Sports whose captured kickoff timestamp is PROVEN to be UTC.
+#
+# Red-team finding 2026-09-26 (measured against the live site, not assumed):
+#   * Football is captured from the JSON endpoint ``getrs.php?...&tz=0``,
+#     which pins the rendering timezone. ``DATE_BAH`` is therefore UTC.
+#   * Every other sport is captured from an HTML listing page, whose times
+#     are rendered in a timezone derived from the REQUESTING CLIENT (our
+#     relay's egress IP), not UTC, and the ``tz=0`` query parameter is
+#     IGNORED on those pages. Evidence: the 1X2 board for 2026-09-26
+#     displayed "09/25/2026 9:00 PM" for match 2468143 while the tz=0 JSON
+#     gave ``DATE_BAH = 2026-09-26 02:00:00`` for the same board — a 5 hour
+#     client-side offset, unchanged by appending ``?tz=0``.
+#
+# A positive (east-of-UTC) rendering offset would make an event look LATER
+# than it is, i.e. it could let this track admit an event that has already
+# started — the exact leakage the lead gate exists to prevent. The offset is
+# not observable from the artifact, so the track refuses these sports rather
+# than guessing. Extending this set requires a per-capture calibration that
+# recovers the offset from evidence; see docs/EVENT_DAY_TRACK.md.
+UTC_KICKOFF_PROVEN_SPORTS = frozenset({"football"})
+
+
+# Per-event timing rejection reasons on the EVENT_DAY track. Every
+# rejected record lands in exactly one bucket and the buckets are reported in
+# the manifest, so "why did this sport produce nothing today" is answerable
+# from the artifact alone.
+EVENT_DAY_REJECTION_REASONS = (
+    "CAPTURED_AT_UNPARSEABLE",
+    "CAPTURED_AFTER_DECISION",
+    "KICKOFF_TIMEZONE_NOT_PROVEN_UTC",
+    "KICKOFF_MISSING_OR_UNPARSEABLE",
+    "KICKOFF_NOT_ON_TARGET_DATE",
+    "INSUFFICIENT_LEAD_BEFORE_KICKOFF",
+    "INSUFFICIENT_LEAD_FOR_CONVERTED_KICKOFF",
+)
+
+
+# Extra lead demanded of a kickoff that was CONVERTED rather than read.
+#
+# The offset is measured on football's board and applied to every other
+# sport's board. That rests on an inference — one renderer, one egress, one
+# clock — which is well founded and is not a measurement. The error it
+# would produce is not symmetric: an offset wrong in one direction makes a
+# match look LATER than it is, and admits a pick against a match already
+# under way. That is the leakage the timezone hold existed to prevent, so
+# while the inference is young a converted kickoff must clear the declared
+# lead by this margin as well.
+#
+# 90 minutes is chosen against the observed drift: the renderer moved from
+# UTC-5 to UTC-2 over two days, but within a single run every one of the 40
+# joined matches agreed exactly. The margin covers a clock that shifts
+# mid-run, not one that is simply unknown — an unknown clock is refused
+# outright, not margined.
+CONVERTED_KICKOFF_MARGIN_MINUTES = 90
+
+
+def _timing_classify_event_day(
+    records: list[PreEventRecord],
+    *,
+    target_date: str,
+    decision_dt: _dt.datetime,
+    min_lead_minutes: int,
+    render_clock=None,
+) -> tuple[list[PreEventRecord], int, int, dict[str, int]]:
+    """Stage 1 for the EVENT_DAY track.
+
+    Replaces the date-anchored cutoff with a strictly per-event proof:
+
+    1. the snapshot must have been captured at or before the decision
+       instant (no capture from the future),
+    2. the listing must carry a parseable kickoff — an event whose start
+       time cannot be read is REFUSED, never assumed distant,
+    3. the kickoff must fall on the target date (a listing row for another
+       day cannot be admitted by this run), and
+    4. the kickoff must be at least ``min_lead_minutes`` after the decision
+       instant, so the pick is frozen that far ahead of the event.
+
+    Returns ``(timed_records, timing_rejected, malformed_or_unkeyable,
+    rejection_reason_counts)``. The first three elements match
+    :func:`_timing_classify` so the downstream accounting is identical.
+    """
+    timed: list[PreEventRecord] = []
+    malformed = 0
+    reasons = {reason: 0 for reason in EVENT_DAY_REJECTION_REASONS}
+    min_kickoff = decision_dt + _dt.timedelta(minutes=min_lead_minutes)
+    min_converted_kickoff = min_kickoff + _dt.timedelta(
+        minutes=CONVERTED_KICKOFF_MARGIN_MINUTES)
+    for r in records:
+        if _extract_decision_fingerprint(r) is None:
+            malformed += 1
+            continue
+        try:
+            cap_at = _parse_utc(r.captured_at)
+        except ValueError:
+            reasons["CAPTURED_AT_UNPARSEABLE"] += 1
+            continue
+        if cap_at > decision_dt:
+            reasons["CAPTURED_AFTER_DECISION"] += 1
+            continue
+        converted = False
+        if r.sport in UTC_KICKOFF_PROVEN_SPORTS:
+            kickoff_dt = parse_kickoff_utc(r.kickoff)
+        elif render_clock is not None:
+            converted = True
+            # The kickoff's timezone is no longer unknown for this capture:
+            # football was seen through both the tz=0 JSON and the renderer
+            # in the same run, and the gap between them is the renderer's
+            # offset. The same renderer served this record, so its rendered
+            # time converts to an instant by measurement rather than by
+            # assumption. See slumdog.render_clock for what the measurement
+            # refuses.
+            kickoff_dt = render_clock.to_utc(r.kickoff)
+        else:
+            # No calibration for this capture. HTML boards render in the
+            # relay's local timezone, so the kickoff cannot be proven
+            # pre-event. Refuse instead of assuming UTC.
+            reasons["KICKOFF_TIMEZONE_NOT_PROVEN_UTC"] += 1
+            continue
+        if kickoff_dt is None:
+            reasons["KICKOFF_MISSING_OR_UNPARSEABLE"] += 1
+            continue
+        if kickoff_dt.date().isoformat() != target_date:
+            reasons["KICKOFF_NOT_ON_TARGET_DATE"] += 1
+            continue
+        if converted and kickoff_dt < min_converted_kickoff:
+            # Cleared the declared lead, but not the margin a converted
+            # kickoff owes. See CONVERTED_KICKOFF_MARGIN_MINUTES.
+            reasons["INSUFFICIENT_LEAD_FOR_CONVERTED_KICKOFF"] += 1
+            continue
+        if kickoff_dt < min_kickoff:
+            reasons["INSUFFICIENT_LEAD_BEFORE_KICKOFF"] += 1
+            continue
+        timed.append(r)
+    return timed, sum(reasons.values()), malformed, reasons
+
+
 # ---------------------------------------------------------------------------
 # Stage 2: Conflict classification (runs on every timed-valid record)
 # ---------------------------------------------------------------------------
@@ -872,18 +1186,39 @@ def _emit_run(
     repo_root: Path,
     decision_clock: _dt.datetime | None = None,
     exclude_event_ids: frozenset[str] | None = None,
+    render_clock=None,
 ) -> ShadowRunResult:
     decision_dt = decision_clock or _now_utc()
     decision_committed_at = _now_utc_iso(decision_dt)
-    safe_cutoff = safe_cutoff_utc(target_date)
-    if decision_dt > safe_cutoff:
-        return _blocked_run(
-            target_date=target_date, decision_committed_at=decision_committed_at,
-            declaration=declaration, capture_result=capture_result,
-            history_result=history_result, safe_cutoff=safe_cutoff,
-            block_reason="DECISION_COMMITTED_AT_AFTER_SAFE_CUTOFF",
-            repo_root=repo_root,
-        )
+    policy = track_policy(declaration)
+    if policy.is_event_day:
+        # The event-day gate is per event, so the run-level "safe cutoff"
+        # is the earliest kickoff this run may select: decision + declared
+        # lead. Recorded in the payload, manifest and input digest exactly
+        # like the standard cutoff, so the timing claim is always explicit.
+        safe_cutoff = decision_dt + _dt.timedelta(minutes=policy.min_lead_minutes)
+        day_end = safe_cutoff_utc(target_date, offset_hours=-24)
+        if decision_dt >= day_end:
+            # Deciding after the target day has ended in UTC is not a
+            # pre-event decision under any reading.
+            return _blocked_run(
+                target_date=target_date,
+                decision_committed_at=decision_committed_at,
+                declaration=declaration, capture_result=capture_result,
+                history_result=history_result, safe_cutoff=safe_cutoff,
+                block_reason="DECISION_COMMITTED_AT_AFTER_TARGET_DATE",
+                repo_root=repo_root,
+            )
+    else:
+        safe_cutoff = safe_cutoff_utc(target_date)
+        if decision_dt > safe_cutoff:
+            return _blocked_run(
+                target_date=target_date, decision_committed_at=decision_committed_at,
+                declaration=declaration, capture_result=capture_result,
+                history_result=history_result, safe_cutoff=safe_cutoff,
+                block_reason="DECISION_COMMITTED_AT_AFTER_SAFE_CUTOFF",
+                repo_root=repo_root,
+            )
 
     # Refresh-mode pre-filter: drop events already selected by an earlier
     # run for this date (their decisions are frozen artifacts; the refresh
@@ -917,9 +1252,20 @@ def _emit_run(
     #                              canonical
     #   Stage 4  per-sport-day ranking + primary/cohort selection
 
-    timed_records, timing_rejected, malformed_or_unkeyable = _timing_classify(
-        capture_result.records, safe_cutoff=safe_cutoff,
-    )
+    event_day_rejections: dict[str, int] | None = None
+    if policy.is_event_day:
+        (timed_records, timing_rejected, malformed_or_unkeyable,
+         event_day_rejections) = _timing_classify_event_day(
+            capture_result.records,
+            target_date=target_date,
+            decision_dt=decision_dt,
+            min_lead_minutes=policy.min_lead_minutes,
+            render_clock=render_clock,
+        )
+    else:
+        timed_records, timing_rejected, malformed_or_unkeyable = _timing_classify(
+            capture_result.records, safe_cutoff=safe_cutoff,
+        )
     admitted_canonicals, conflict_accounting, conflict_fingerprints = _conflict_classify(
         timed_records,
     )
@@ -1077,6 +1423,16 @@ def _emit_run(
             ev["rank_within_sport_day"] = rank_idx
             if rank_idx > last_cohort_rank:
                 continue
+            event_day_fields: dict[str, Any] = {}
+            if policy.is_event_day:
+                kickoff_dt = parse_kickoff_utc(record.kickoff)
+                # The timing gate above refused every record without a
+                # parseable kickoff, so this is never None here.
+                event_day_fields = {
+                    "kickoff_utc": _now_utc_iso(kickoff_dt),
+                    "lead_minutes_at_decision": int(
+                        (kickoff_dt - decision_dt).total_seconds() // 60),
+                }
             selections.append({
                 "sport": sport, "event_date": _date, "event_id": record.event_id,
                 "rank_within_sport_day": rank_idx, "status": status,
@@ -1097,6 +1453,10 @@ def _emit_run(
                 "route": record.route,
                 "rule_source": FROZEN_R2_PATH,
                 "run_id": "",
+                # Empty on the standard track: the dict comprehension adds
+                # nothing, so those payloads keep their exact historical
+                # schema and digest composition.
+                **event_day_fields,
             })
         if primary_event_id is not None:
             summary_status = "SHADOW_RULE_QUALIFIED"
@@ -1283,6 +1643,23 @@ def _emit_run(
         # Normal runs omit the key entirely → byte-stable input digests.
         input_digest_payload["refresh_exclude_event_ids"] = sorted(
             exclude_event_ids)
+    if policy.is_event_day:
+        # Event-day only (same byte-stability rule as refresh mode): the
+        # timing contract IS an input to the decision, so the track name and
+        # the declared lead are committed to the input digest. A standard and
+        # a event-day run over the same capture can therefore never
+        # collide on run_id.
+        input_digest_payload["timing_track"] = policy.name
+        input_digest_payload["min_lead_minutes_before_kickoff"] = (
+            policy.min_lead_minutes)
+        # A run that converted rendered kickoffs with a measured offset made
+        # a different timing claim from one that refused them, so the
+        # calibration is an input to the decision, not a footnote.
+        input_digest_payload["render_clock_offset_minutes"] = (
+            None if render_clock is None else render_clock.offset_minutes)
+        input_digest_payload["converted_kickoff_margin_minutes"] = (
+            None if render_clock is None
+            else CONVERTED_KICKOFF_MARGIN_MINUTES)
     input_digest = _canonical_sha256(input_digest_payload)
 
     # ``decision_digest`` commits to the conflict-resolved pool,
@@ -1360,6 +1737,28 @@ def _emit_run(
         # Present only in refresh mode so normal (non-refresh) runs keep the
         # exact historical payload schema and digest composition.
         payload["refresh_exclusion_count"] = len(refreshed_excluded)
+    if policy.is_event_day:
+        # Loud, unmissable labelling: anything reading a event-day payload
+        # sees the track and the weaker timing claim before it sees a pick.
+        payload["track"] = policy.name
+        payload["timing_contract"] = {
+            "track": policy.name,
+            "min_lead_minutes_before_kickoff": policy.min_lead_minutes,
+            "earliest_admissible_kickoff_utc": _now_utc_iso(safe_cutoff),
+            "kickoff_source": "forebet_listing_scheduled_start_utc",
+            "satisfies_frozen_24h_contract": False,
+            "never_pooled_with_standard_track": True,
+        }
+        # Anything reading this payload can see whether a kickoff was known
+        # to be UTC or converted, by how much, and on what evidence.
+        payload["timing_contract"]["render_clock"] = (
+            None if render_clock is None else render_clock.as_dict())
+        payload["timing_contract"]["kickoff_timezone_basis"] = (
+            "tz0_json_only" if render_clock is None
+            else "measured_render_offset")
+        payload["timing_contract"]["converted_kickoff_margin_minutes"] = (
+            None if render_clock is None
+            else CONVERTED_KICKOFF_MARGIN_MINUTES)
     payload_bytes = canonical_json_bytes(payload)
     fd_p, tmp_p = tempfile.mkstemp(prefix="shadow_selections.", suffix=".json.tmp", dir=str(artifact_dir))
     try:
@@ -1398,6 +1797,13 @@ def _emit_run(
         "r2_exclusion_breakdown": _summarise_r2_exclusions(considered_pool_dicts),
         "decision_conflicts": conflict_fingerprints,
     }
+    if policy.is_event_day:
+        manifest["track"] = policy.name
+        manifest["timing_contract"] = dict(payload["timing_contract"])
+        # Why each sport produced nothing is answerable from the artifact
+        # alone — the whole point of the track.
+        manifest["event_day_timing_rejections"] = dict(
+            sorted((event_day_rejections or {}).items()))
     if exclude_event_ids is not None:
         # Refresh-mode-only manifest fields (see payload note above): the
         # exclusion request itself is provenance for the refreshed run.
@@ -1477,6 +1883,11 @@ def _blocked_run(
         "declaration_sha256": _canonical_sha256(declaration),
         "frozen_baseline_config_sha256": FROZEN_BASELINE_CONFIG_SHA256,
     }
+    if declaration.get("declaration_version") == EVENT_DAY_DECLARATION_VERSION:
+        # A blocked event-day receipt must be identifiable as such; its
+        # "safe_cutoff_utc" is an earliest-admissible-kickoff, not a 24h gate.
+        body["track"] = EVENT_DAY_TRACK
+        body["safe_cutoff_semantics"] = "earliest_admissible_kickoff_utc"
     if capture_result is not None:
         body["capture_provenance"] = {
             "receipt_path": capture_result.receipt_path,
@@ -1508,6 +1919,7 @@ def evaluate_from_disk(
     decision_clock: _dt.datetime | None = None,
     history_max_interim_bytes: int | None = None,
     exclude_event_ids: frozenset[str] | None = None,
+    render_clock_path: str | Path | None = None,
 ) -> ShadowRunResult:
     """Top-level disk-to-artifact orchestration.
 
@@ -1522,7 +1934,14 @@ def evaluate_from_disk(
     repo_root = Path(repo_root).resolve()
     declaration = load_shadow_declaration(declaration_path)
     load_frozen_baseline_config(repo_root)
-    safe_cutoff = safe_cutoff_utc(target_date)
+    _policy = track_policy(declaration)
+    if _policy.is_event_day:
+        # Load-failure receipts must state the same timing claim the run
+        # would have made: earliest admissible kickoff, not a 24h cutoff.
+        safe_cutoff = (decision_clock or _now_utc()) + _dt.timedelta(
+            minutes=_policy.min_lead_minutes)
+    else:
+        safe_cutoff = safe_cutoff_utc(target_date)
     try:
         capture_result = load_capture_records(
             target_date=target_date,
@@ -1557,6 +1976,11 @@ def evaluate_from_disk(
             block_reason=f"HISTORY_LOAD_FAILED:{type(e).__name__}:{e}",
             repo_root=repo_root,
         )
+    # A calibration is only ever read for the date it was measured on, and
+    # a missing or unreadable one simply leaves the run where it was:
+    # football only. It can never make a run stricter or looser by accident,
+    # because failure is indistinguishable from absence here by design.
+    render_clock = load_render_clock(render_clock_path, target_date)
     return _emit_run(
         target_date=target_date,
         capture_result=capture_result,
@@ -1565,6 +1989,7 @@ def evaluate_from_disk(
         repo_root=repo_root,
         decision_clock=decision_clock,
         exclude_event_ids=exclude_event_ids,
+        render_clock=render_clock,
     )
 
 
@@ -1598,6 +2023,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                         "Those events are removed from admission (their "
                         "original decisions stay frozen); the run emits only "
                         "genuinely new fixtures.")
+    p.add_argument("--render-clock", type=Path, default=None, metavar="PATH",
+                   help="EVENT_DAY mode: path to a render-clock calibration "
+                        "measured during THIS capture (see "
+                        "slumdog.render_clock). With one, a rendered kickoff "
+                        "is converted to UTC by measurement and its sport is "
+                        "no longer held back; without one, or with one that "
+                        "does not belong to this date, the run behaves "
+                        "exactly as if the flag were absent — football only.")
     return p
 
 
@@ -1626,6 +2059,7 @@ def main(argv: list[str] | None = None) -> int:
             history_paths=args.history or None,
             history_max_interim_bytes=args.history_max_interim_bytes,
             exclude_event_ids=exclude_event_ids,
+            render_clock_path=args.render_clock,
         )
     except ShadowEvaluatorError as e:
         print(f"SHADOW_RUN_BLOCKED: {e}", file=sys.stderr)

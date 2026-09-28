@@ -1,4 +1,285 @@
+
+### Update 2026-09-27: two questions closed, and the capture module landed
+
+**The renderer will not hand back markup.** `X-Target-Selector` combined with
+either `X-Return-Format: html` or `X-Respond-With: html` returns 422, and
+`X-Return-Format: html` with a wait-for-selector returns the bot-check page
+(5,931 bytes). There is no route that feeds `parse_html_events` directly; a
+capture has to read the text extracts.
+
+**`getjson.php` is answered and closed.** The faithful call form is
+`gdt=<slug>-<mid>&mid=<mid>` — the call site reads the whole last path
+segment, which is why the slug-only probes returned 14 bytes. With the right
+form the endpoint replies `{"2552263":[]}`: a correct call, but empty for an
+upcoming match. It carries post-match data and cannot supply a kickoff
+instant. Football's `getrs.php` `DATE_BAH` remains the only machine-readable
+instant, so the 24h EVENT_DAY hold still stands for every other sport.
+
+**A `.tnms` row cannot be split into home and away.** It renders as
+`Abejas Santos 09/27/2026 2:00 AM` with no separator, and the match slug is
+ambiguous the same way. The fix is column-wise extraction — one selector per
+field (`.homeTeam`, `.awayTeam`, `.date_bah`, `.fprc`, `.forepr`, `.ex_sc`,
+`.avg_sc`) — zipped back into rows by index.
+
+**The channel is unreliable and the module treats it that way.**
+`src/slumdog/relay_columns.py` implements the capture and fails closed. In
+measurements on 2026-09-27 the same selectors that returned 92 clean names in
+one run returned 422 in the next, and `.avg_sc` came back with 18 rows for a
+board holding 126 — a partial render that would look entirely genuine to a
+lenient parser. So the module raises rather than returns whenever a required
+column is missing, the columns disagree on row count, the body is a bot-check
+page, or the board is shorter than a caller-supplied minimum. A caller may
+retry later; it may never record a short board as a complete one.
+
+Not yet wired into the collector — the flakiness means a retry and pacing
+policy has to be decided before this feeds the frozen evidence record.
+
+### Update 2026-09-27 (later): R1 PROVEN LIVE FOR TWO BLOCKED SPORTS
+
+Run 36300806681 ran the whole chain — capture, scope, align, convert — on
+live boards for the 2026-09-28 target date and produced **rankable fields
+for sports that have been unreachable since 2026-09-22**:
+
+| Sport | Rows | Rankable events | Strongest candidate |
+| --- | --- | --- | --- |
+| basketball | 18 | **17** | Maccabi Ramat Gan W vs Hapoel Jerusalem W, p1 0.84, id 289116 |
+| hockey | 28 | **28** | Sparta Prague U20 vs Kladno U20, p1 0.82, id 378390 |
+| baseball | 10 | 0 | columns all aligned; every row on the board is 09/29, so none belongs to the target date |
+| tennis | 43 | 0 | five columns agreed on 43 rows; the probability column was throttled (422) |
+
+**What made it work.** Two fixes, in order:
+
+1. *Row scoping.* Every board returned exactly one fewer `.fprc` than
+   `.homeTeam` — some rows carry no probability cell. One missing element
+   destroys an index join, and the extracts give no way to tell which row
+   vanished. `:has(.fprc):has(.tnms)` restricts the match set to complete
+   rows, so the columns are equal in length by construction and an
+   unpredicted match is never captured. This was initially misdiagnosed as a
+   heading-stripping bug; the heading allowlist was replaced with
+   shape-detection anyway, which is the right thing regardless.
+2. *Retry on refusal.* Throttling is now the only obstacle. The refusals move
+   between runs — the same selector returns 92 names in one run and 422 in
+   the next — so `fetch_column` retries the transport with backoff. A
+   bot-check body is not retried: it is an answer, not a transient.
+
+**Not yet decided, and blocking production use:** the retry budget per board
+per day, whether a board that never comes back clean is logged as a coverage
+gap or handed to the short-notice track, and whether each sport needs a
+`minimum_rows` floor. None of this is wired into the collector; nothing here
+has touched the frozen evidence record.
+
+Kickoff remains rendered text in the relay's timezone, so the 24h EVENT_DAY
+hold still applies to every sport except football.
+
+### Capture policy for the column route (settled 2026-09-27)
+
+Three questions gated wiring the route into the collector. Answered from
+invariants this project already holds, and pinned in
+`tests/test_relay_columns.py::TestCapturePolicy`.
+
+1. **A failed board is a `COVERAGE_GAP`, never a quiet day, and is never
+   handed to the short-notice track.** The two tracks are compared to each
+   other, so each one's record has to reflect its own timing discipline.
+   Routing 24h-track capture failures into the event-day track would make
+   the event-day hit rate a mixture of picks decided late by design and
+   picks decided late because a fetch failed. Each track captures for
+   itself. Transport refusals are retried three times with backoff first,
+   because the refusals move between runs.
+2. **No absolute row-count floor.** A floor is a guess about how busy a
+   sport is on an arbitrary date; on a genuinely quiet day it converts real
+   coverage into a false failure, and manufacturing absence is as wrong as
+   manufacturing data. Partial renders already fail closed as disagreeing
+   columns. A count far below what a board usually holds is recorded as
+   `suspect_short` for review and does not reject the capture.
+3. **A board is never walked forward to another date.** The capture is
+   anchored to a date and the 24h proof is a claim about that date.
+   Instead, the dates the board *did* render are recorded in
+   `observed_dates` — which measures each sport's publication horizon, the
+   real input to scheduling the late-publishing sports. Baseball on
+   2026-09-28 is the worked example: readable, aligned, and entirely 09/29.
+
+Corollary: **silence is not evidence of absence.** A board that renders
+nothing is a gap, not a day without fixtures — an empty render and a
+throttled blank are indistinguishable, and this route has already served
+short bodies that looked like data. `NO_ROWS_FOR_DATE` is claimed only on
+positive evidence of other dates.
+
+**Workflow persist gap CLOSED (owner paste applied 2026-09-27):** `main`
+carries the corrected `forward_shadow.yml` byte-identical to the staged
+copy; the checker reports 24/24 covered, exit 0. The staged file is deleted
+and `tests/test_workflow_persist_contract.py` now guards the live file.
+
+### Sweep of the nine never-probed sports (2026-09-27, target 2026-09-28)
+
+One row-scoped request each, run 36335190579. Reachability and publication
+horizon are separate findings and are reported separately.
+
+| Sport | Rows | On target date | Dates the board showed |
+| --- | --- | --- | --- |
+| handball | 22 | **11** | 2026-09-28 only |
+| volleyball | 20 | **10** | 2026-09-28 only |
+| cricket | 20 | 1 | 09-28, 09-29, plus malformed values (see below) |
+| rugby | 20 | 0 | 10-01, 10-02 |
+| mma | 20 | 0 | 10-03, 10-04 |
+| american_football | 2 | 0 | 09-29 |
+| afl | 20 | 0 | 09-11 … 09-26 — all in the past; season over |
+| esoccer | — | — | HTTP 422: does not use this row markup |
+| esports | — | — | HTTP 422: does not use this row markup |
+
+So the column route reaches **seven of nine**. Only handball and volleyball
+have matches on the target date; rugby and mma publish 3–6 days ahead and
+are reachable whenever their own dates are targeted; afl is out of season,
+which is a fact about the calendar, not a capture failure.
+
+**Bug this sweep caught before it shipped: the date order is not fixed.**
+Cricket returned `30/09/2026` where basketball returns `09/27/2026`. The
+parser assumed month-first everywhere, so a day-first board would have had
+its matches filed under a day they do not belong to — and the 24h proof is a
+claim about that day. `infer_date_order()` now measures the order per board
+from values that can only be read one way (a component over 12). A board
+that gives no disambiguating date, or that contradicts itself, is REFUSED as
+a `COVERAGE_GAP`; no order is ever guessed.
+
+### R1 CAPTURED FOR THREE BLOCKED SPORTS THROUGH THE PRODUCTION PATH (run 36342678198)
+
+Target date 2026-09-28, `capture_board()` called exactly as a capture would
+call it — retries, required columns, date-order inference, fail-closed policy.
+
+| Sport | Rows | Rankable | Strongest candidate |
+| --- | --- | --- | --- |
+| hockey | 34 | **34** | Kokshetau vs Pavlodar, p1 0.85, id 381952 |
+| basketball | 19 | **18** | Colonias Gold vs San Alfonzo, p1 0.85, id 285067 |
+| handball | 12 | **12** | Stal Mielec vs Wisla Plock, p2 0.86, id 186367 |
+| volleyball | — | — | skipped: out of the job's time budget |
+
+Status `CAPTURED`, no gaps, `suspect_short` false, and `observed_dates`
+recorded for each. With football's JSON that is **four sports with a rank-1
+field**, against one before this work.
+
+Two fixes got it there, both found by live measurement:
+
+* **Retry closed the throttling hole.** The stage had re-implemented
+  fetching and so never used production's retry; once it called
+  `capture_board`, all eight columns returned for all four sports with no
+  refusals at all.
+* **`.ex_sc` renders three lines per match** (the pair, then each side).
+  Every board returned exactly 3× the row count there — 57/19, 102/34,
+  36/12, 30/10. A column that is an exact multiple of the row count is
+  collapsed to its first line per group. Only columns that are NOT 1:1 with
+  matches may be collapsed, so a name column of the wrong length stays a
+  mismatch instead of being swallowed. The row count itself comes from
+  `link`, `kickoff` and `probabilities` — 1:1 with matches and
+  heading-detectable by shape.
+
+Still open: volleyball needs the budget freed (done — `row_blocks` retired,
+the sweep now only reruns with time to spare); the collector is still not
+wired; no settlement has been proven against a column-captured board.
+
+## A WORKING CAPTURE ROUTE FOR THE BLOCKED SPORTS (2026-09-26)
+
+The boards are not unreachable. The relay's rendering engine clears the bot
+check and returns the listing — what fails is the *full-page* render, which
+collapses the table and drops the team-name column. A **selector-scoped**
+extraction keeps it.
+
+Two requests per board, both to `https://r.jina.ai/<board url>`, headers
+`User-Agent`, `Accept: text/plain`, `X-No-Cache: true`, plus:
+
+| Header | Returns |
+|---|---|
+| `X-Target-Selector: .rcnt .tnms` | one row per match: team names + kickoff, e.g. `[Abejas Santos 09/27/2026 2:00 AM](…/matches/…)` |
+| `X-Target-Selector: .rcnt` | the numbers for those rows: probabilities, predicted score, avg points, odds |
+
+Measured on the 2026-09-27 basketball board, twice: 16.8KB / 126 kickoffs /
+126 dates / 227 name tokens, against 12.6KB of numeric rows. `.homeTeam` also
+works when not throttled and returns a clean home-team list (92 names).
+
+**Why this was missed for so long.** Plain Markdown of the same page carries
+the numbers and no names, so the early read was "the renderer drops match
+identity". It does — at page scope. Scoping to the element recovers it.
+
+**Caveats before this becomes production capture:**
+1. The join is by row order across two requests. Verify counts match per
+   board and fail closed when they do not.
+2. The kickoff is rendered text (`09/27/2026 2:00 AM`), not an instant. The
+   EVENT_DAY timezone hold still applies to these sports. Football remains the
+   only sport with a machine-readable instant (`DATE_BAH` from `getrs.php`).
+3. The relay throttles: hammering it returns 422s, 591-byte stubs and
+   interstitials. Several earlier "dead ends" in this file were throttled
+   replies, not answers. Pace the captures and treat a short body as a
+   failure, never as an empty board.
+
+## Capture routes for non-football boards — exhaustively tested 2026-09-26
+
+Measured from a GitHub runner, read-only probe runs 36242850508 → 36253357842.
+
+| Route | Result |
+|---|---|
+| `getrs.php` JSON (football's route) | **works** — 864 matches |
+| `getrs.php` with other sport codes (`bas`, `basketball`, `bsk`, `bk`, `bb`) | ~520B, no rows — no JSON twin exists |
+| Relay, `X-Return-Format: html` (current capture path) | 5.9KB interstitial |
+| Relay, `X-Respond-With: html` | 5.9KB interstitial |
+| Relay, `X-Engine: browser` / `cf-browser-rendering` | HTTP 401 — paid key |
+| Relay, Markdown engine | **clears the check**, 15KB — but 1 match link and 0 clocks: names no teams, gives no kickoff |
+| Direct from runner, `www` and `m.forebet.com` | HTTP 403 |
+| allorigins proxy (unrelated IP) | 5.8KB interstitial |
+| codetabs proxy | HTTP 503 |
+| Headless Chromium on the runner, 45s wait | 28KB interstitial, never resolves |
+| Headless Chromium, warm up on site root first | **the homepage itself is challenged** |
+
+The last row is the decisive one: the block is not on the boards, it is on the
+whole site for datacenter addresses. `getrs.php` survives because it is an
+API endpoint that was never put behind the check — which is the only reason
+football still captures.
+
+**This cannot be solved from GitHub Actions by trying harder.** It needs one of:
+a paid unblocking service (relay API key, scraping API), a residential/self-hosted
+runner, or accepting football-only coverage.
+
+**Timezone question, answered by archived markup:** rows carry
+`<time itemprop="startDate" datetime="2024-05-22"><span class="date_bah">22/05/2024 14:00</span></time>`
+— a date-only attribute, no offset. There is no machine-readable start instant,
+so the 24h hold stands on its merits rather than for want of evidence. Note that
+`getrs.php` takes a `tz=` parameter and capture pins `tz=0`.
+### Second pass, after "have we really tried everything?" (same day)
+
+Three things the first pass missed, all now tested:
+
+| Attempt | Result |
+|---|---|
+| `getjson.php?gdt=` | **live and unchallenged** — returns `[]`, not 404, not an interstitial |
+| …its call site in the bundle | `getjson.php?gdt=<slug>&mid=<match id>` — **per-match**, and the id only exists on the board. Circular. |
+| `get_menu.php?ln=en` | 91KB of the league tree, unchallenged — navigation only, no fixtures |
+| `get_live_r.php` | HTTP 404, endpoint retired |
+| `getftr.php?int=` | challenged |
+| `getrs.php` control, relayed | 2.9MB JSON, and it carries `"DATE_BAH":"2026-09-27 02:00:00"` — a real per-match instant |
+| All of the above, fetched direct from the runner | HTTP 403 — even the open APIs refuse this IP directly |
+| Wayback Save Page Now | HTTP 520, no new snapshot |
+| Chromium **headed** under Xvfb, `navigator.webdriver` patched out | interstitial on the homepage (`display: ":99"` confirms it really was headed) |
+
+The headed-browser result is the one that closes the question. Headless
+fingerprinting was the best remaining explanation for why the relay's renderer
+clears this check from a datacenter address while ours did not; running headed
+with the automation tells removed eliminates it. The block follows the address.
+
+Worth recording for later: `getrs.php` returns `DATE_BAH` per match and accepts
+`tz=`, so for football there IS a machine-readable instant in the JSON — the
+"no machine-readable start" finding applies to the HTML boards only.
+
+**Remaining levers, all requiring something outside the runner:** a paid
+unblocker (relay API key, ScraperAPI/ZenRows/Browserless), a residential proxy,
+a self-hosted runner on a home connection, an official data agreement with
+Forebet, or a different data source.
+
 # Slumdog State — Canonical Current Truth
+
+**Last verified:** 2026-09-26 (UTC, later session) — **THE DOCUMENTED ROOT CAUSE OF THE NON-FOOTBALL COVERAGE COLLAPSE IS WRONG. IT IS A BOT-CHECK BLOCK, NOT PUBLISHING LAG.** Measured from a GitHub runner (probe workflow runs 36242850508 / 36243059526 / 36243322782 / 36243519958, read-only): the football JSON endpoint returns 864 matches for 2026-09-27, while EVERY HTML listing board comes back as a ~5.9KB Cloudflare `Just a moment...` interstitial. Committed capture receipts carry the same signature — a real board is 40–350KB, and from **2026-09-22** almost every non-football capture is ~5KB, with only sporadic real successes (basketball 273KB on 09-25, handball 117KB). That date is exactly when R1 coverage collapsed to football-only, so the prior explanation ("Forebet does not publish those boards more than a day ahead") does not hold: the boards are not being published late, they are not being fetched at all. **Worse: `esoccer` and `afl` are `current_only`, so only the lenient sport-label check applied and the interstitial was being stored as a genuine capture** (5832 / 5798 bytes on 09-28). Fixed this session: `forebet.looks_like_challenge_page()` + a hard reject in `validate_html_body`, so a bot-check page can never again be frozen as evidence. Relay route comparison on one board: `X-Return-Format: html` → challenge page; `X-Engine: browser` and `X-Engine: cf-browser-rendering` → **HTTP 401** (those modes need a paid relay key); Markdown reader → 15258 bytes of real board content, but for basketball it carries neither team names nor per-match kickoff times, so it is not a drop-in substitute. **Consequences:** (1) the EVENT_DAY timezone hold is currently moot for non-football sports — they cannot be fetched from CI at all, let alone timed; (2) no calibration work should start until a capture route exists; (3) the open decision is a relay API key (owner-held secret) vs. discovering per-sport JSON endpoints vs. accepting football-only. Gates this session: **1223 passed**, pyflakes clean, `py_compile` ok, `git diff --check` ok. The prior header line follows verbatim for history:
+
+**Last verified:** 2026-09-26 (UTC, later session) — **TRACK RENAMED `SHORT_NOTICE` → `EVENT_DAY` (owner choice 2026-09-26: the old name framed the track as hasty when the real distinction is WHEN the decision is taken) AND A READ-ONLY KICKOFF-TIMEZONE PROBE ADDED.** The rename was free: no real run exists, so nothing had to be migrated. Everything moved together — declaration `config/shadow_evaluator_event_day.json` (`declaration_version: shadow_evaluator_event_day`), artifact tree `data/reports/shadow_event_day/`, `track: "EVENT_DAY"`, settlement `--shadow-subdir shadow_event_day`, `run_event_day_for_date` / `--skip-event-day`, receipt prefix `capture_event_day_*`, manifest key `event_day_timing_rejections`, docs `docs/EVENT_DAY_TRACK.md`, tests `tests/test_event_day_{track,batch}.py`. New `scripts/probe_kickoff_timezone.py` (read-only, no capture frozen, no tree touched) answers the two questions that gate lifting the timezone hold: (1) does the raw listing HTML carry a machine-readable start instant (`<time datetime>`, `data-*` epoch/ISO, JSON-LD `startDate`) — unanswerable from the agent sandbox, which only had Markdown-converted fetches, and Markdown discards attributes; (2) if not, what offset does OUR relay render at, measured by joining the football JSON (true UTC) to the football HTML board on the match id. It exits 0 only on a definite answer (machine-readable field, or unanimous offset across ≥20 joined matches) and reports a zero offset as one observation, not a guarantee. Also: the per-track settlement receipt `settlement_capture_receipt_shadow_event_day.json` was added to `PERSISTED_EVIDENCE`, so the checker now reports **11** uncovered types (was 10) and the owner paste in `docs/EVENT_DAY_TRACK.md` §5 widens the settlement-evidence glob to `settlement_capture_receipt*.json` (re-verified: the paste still brings the checker to exit 0). Gates: **1203 passed**, pyflakes clean, `py_compile` ok, `git diff --check` ok. The prior header line follows verbatim for history:
+
+**Last verified:** 2026-09-26 (UTC, later session) — **EVENT_DAY TRACK RED-TEAMED BEFORE FIRST DISPATCH; ONE BLOCKER AND TWO DEFECTS FOUND AND FIXED. THE TRACK IS NOW FOOTBALL-ONLY BY DESIGN.** (1) **BLOCKER — kickoff timezone.** Measured against the live site on 2026-09-26: the football JSON endpoint pins `tz=0` and its `DATE_BAH` is UTC, but every HTML sport board renders kickoff in a timezone derived from the REQUESTING CLIENT (relay egress IP) and IGNORES `?tz=0`. Evidence: the 2026-09-26 1X2 board showed match `2468143` as `09/25/2026 9:00 PM` while the tz=0 JSON gave `2026-09-26 02:00:00` — a 5-hour client-side offset, unchanged when `?tz=0&tzs=&tze=` was appended. An east-of-UTC rendering offset makes an event look LATER than it is, so the 120-minute lead proof could have been sold for an event already in play — exactly the leakage the gate exists to prevent, in the direction that flatters the record. Enforcement: `shadow_evaluator.UTC_KICKOFF_PROVEN_SPORTS` (= `{football}`) and the new fail-closed rejection reason `KICKOFF_TIMEZONE_NOT_PROVEN_UTC`; the daily stage no longer fetches the held-back boards and names them in its receipt as `timezone_hold_sports`. **Consequence stated plainly: until the hold is lifted the track CANNOT deliver "an R1 in every sport every day"; it runs football-only.** The honest unlock (designed, NOT implemented) is per-capture calibration: capture the football JSON and the football HTML board through the same relay in the same pass, join on the match id, take the modal offset, record it in the manifest, and refuse the track if the join is thin or the offsets disagree. (2) **Settlement evidence collision** — both tracks can hold a run for the same date and the driver settles both the same morning; `settle_run` wrote every capture to the shared `data/settlement_evidence/<date>/settlement_capture_receipt.json`, so the event-day pass would have OVERWRITTEN the committed evidence the frozen track's `settlement.json` points at. Fixed by `shadow_settle.settlement_receipt_name(shadow_subdir)` (standard name unchanged; event-day gets `settlement_capture_receipt_shadow_event_day.json`, still `capture_purpose: settlement`). (3) **Request pacing** — `capture_selected` fetched a date's whole sport list in one burst; it now accepts `pause_seconds` and fetches serially with the same 62s spacing as the settlement capture, which the stage passes through. Verified already-safe and now pinned by tests: finished/in-play rows are dropped by both listing parsers; lead is measured from the decision instant (conservative); one decision per date; `shadow_run_dir` allowlists the tree; `timing_track` separates the digests; the stage never raises. Local gates: **1186 passed**, pyflakes clean, `py_compile` ok, `git diff --check` ok. Still true: no real event-day run exists, no workflow file modified, the delta-evidence persist gap still awaits the OWNER PASTE in `docs/EVENT_DAY_TRACK.md` §5. The prior header line follows verbatim for history:
+
+**Last verified:** 2026-09-26 (UTC) — **EVENT_DAY EVIDENCE TRACK IMPLEMENTED AND TESTED LOCALLY (owner decision 2026-09-26: "separate, clearly-labelled event-day track"); NOT YET DISPATCHED — NO REAL SHORT-NOTICE RUN OR SETTLEMENT EXISTS.** R1 coverage on the frozen track had collapsed to football-only for 2026-09-21..26 because Forebet does not publish basketball / hockey / baseball / tennis / rugby / american-football boards more than about a day ahead (both the D+6 forward capture and the T+1/T+2 refresh return `target date missing from HTML`), which makes those sports structurally unreachable under the date-anchored 24h gate. The new track decides on the event day and proves pre-event status PER EVENT against the published kickoff (`min_lead_minutes_before_kickoff` = 120, frozen in its declaration); an event with no parseable kickoff is REFUSED, never assumed distant. Same frozen `R2_CONSERVATIVE_FIXED_RULE`, same `R1_ALWAYS_RANK_COMPARATOR`, same features, same cohort policy — only the timing proof differs. Separation is enforced on six surfaces (declaration version, artifact tree `data/reports/shadow_event_day/`, `track: "EVENT_DAY"` labels, own capture receipt name, own settlement `--shadow-subdir`, namespaced batch-receipt counters) and fail-closed in both directions: a event-day declaration may not carry `safe_cutoff_offset_hours_utc`, and a standard declaration may not point at the event-day tree. **The two hit rates are never summed.** The 24h track is byte-identical (regression-tested: no new payload/manifest/digest keys). Also this session: **PRE-EXISTING EVIDENCE-LOSS BUG FOUND** — `selections_delta_*` / `settlement_delta_*` (daily refresh, live since 2026-09-22) are written on the runner and never committed because `forward_shadow.yml`'s persist-step `find` list does not name them; four days of refresh evidence was discarded. Workflow files are owner-authored, so the fix is an OWNER PASTE (exact text in `docs/EVENT_DAY_TRACK.md` §5) plus a new reporting tool `scripts/check_workflow_evidence_globs.py` (exit 1 today, 10 uncovered artifact types; exit 0 after the paste). Local gates: `1168 passed` (Python 3.11 venv; CI 3.13 divergence stands), pyflakes clean on `src/` + `scripts/` + the two new test files, `py_compile` ok, `git diff --check` ok. Training FROZEN, production NOT AUTHORIZED, shortlist policy NOT AUTHORIZED, no workflow file modified, no frozen config or committed evidence touched. The prior header line follows verbatim for history:
 
 **Last verified:** 2026-09-14 (UTC, later session) — **`main` @ `523190e9`** (merge commit, parents `33a4baf` + fix commit `6f9df1645` "fix: unbreak the four Census failures on main") / **FIX VERIFIED GREEN IN CI — Depth Build #33 (`workflow_dispatch`): Census `Run pytest` `success` on Python 3.13 at 2026-09-14T10:04:03Z and the `depth-sweep` then RAN unskipped (10:04:04Z→10:19:09Z), recovering the 2026-09-14 board census that failed #32 skipped** / **NO PR-TRIGGERED VERIFY WORKFLOW — OWNER DECISION 2026-09-14, DO NOT RE-PROPOSE; runner-cost argument VOIDED same day (repo is public, Actions minutes free — decision rests on owner-authored workflows + existing Monday pytest gate), see Verification** / **FULL-HISTORY SECRET SCAN CLEAN (192 commits; Dependabot alerts confirmed disabled via API)** / docs-only session (`AGENTS.md` pre-push note, this file, `HANDOFF.md`; no code and no workflow file changed). The stale 2026-09-07 header line follows verbatim for history:
 

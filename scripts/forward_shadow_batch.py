@@ -59,6 +59,82 @@ import time
 from pathlib import Path
 
 
+# Evidence trees under data/reports/. Never pooled: "shadow" is the frozen
+# 24h pre-event contract, "shadow_event_day" is the separate per-event
+# kickoff-lead track added 2026-09-26 so late-publishing sports can produce a
+# rank-1 pick at all. Mirrors slumdog.shadow_settle's constants (kept as plain
+# strings here so the module imports without the package installed).
+STANDARD_SHADOW_SUBDIR = "shadow"
+EVENT_DAY_SHADOW_SUBDIR = "shadow_event_day"
+EVENT_DAY_CONFIG = "config/shadow_evaluator_event_day.json"
+
+# Single source of truth for every SMALL evidence file this pipeline can
+# write and that must survive the runner (the scoped git waiver in AGENTS.md:
+# JSON/text evidence only — never raw capture bodies, never *.tar.gz, never
+# history ledgers). ``scripts/check_workflow_evidence_globs.py`` compares this
+# list against the workflow's persist step, so an artifact type added here
+# without a matching workflow glob is reported instead of silently discarded
+# when the job ends.
+PERSISTED_EVIDENCE: tuple[tuple[str, str], ...] = (
+    # --- frozen 24h track -------------------------------------------------
+    ("data/reports/shadow", "shadow_selections.json"),
+    ("data/reports/shadow", "manifest.json"),
+    ("data/reports/shadow", "settlement.json"),
+    ("data/reports/shadow", "settlement.json.sha256"),
+    ("data/reports/shadow", "settlement_supplement_20260914T000000Z.json"),
+    ("data/reports/shadow", "settlement_supplement_20260914T000000Z.json.sha256"),
+    # daily-refresh deltas (written since 2026-09-22)
+    ("data/reports/shadow", "selections_delta_20260922T043000Z.json"),
+    ("data/reports/shadow", "selections_delta_20260922T043000Z.json.sha256"),
+    ("data/reports/shadow", "selections_delta_20260922T043000Z.manifest.json"),
+    ("data/reports/shadow", "settlement_delta_20260922T043000Z.json"),
+    ("data/reports/shadow", "settlement_delta_20260922T043000Z.json.sha256"),
+    # bundle receipts + markers (archives themselves are never committed)
+    ("data/reports/shadow", "slumdog-shadow-2026-09-22-abcd.bundle.json"),
+    ("data/reports/shadow", "slumdog-shadow-2026-09-22-abcd.tar.gz.sha256"),
+    ("data/reports/shadow", "forward_batch_receipt.json"),
+    # --- EVENT_DAY track (2026-09-26) ----------------------------------
+    ("data/reports/shadow_event_day", "shadow_selections.json"),
+    ("data/reports/shadow_event_day", "manifest.json"),
+    ("data/reports/shadow_event_day", "settlement.json"),
+    ("data/reports/shadow_event_day", "settlement.json.sha256"),
+    # --- capture receipts -------------------------------------------------
+    ("data/reports", "capture_2026-09-26.json"),
+    ("data/reports", "capture_refresh_2026-09-26_20260925T043308Z.json"),
+    ("data/reports", "capture_event_day_2026-09-26_20260926T043000Z.json"),
+    # --- settlement evidence receipts -------------------------------------
+    ("data/settlement_evidence", "settlement_capture_receipt.json"),
+    ("data/settlement_evidence",
+     "settlement_capture_receipt_completion_20260914T000000Z.json"),
+    # Per-track D+1 receipt: the event-day settlement writes its own file so
+    # it cannot overwrite the frozen track's committed capture evidence.
+    ("data/settlement_evidence",
+     "settlement_capture_receipt_shadow_event_day.json"),
+)
+
+# Evidence types the CURRENT workflow does not commit yet, pending the
+# owner-authored persist-step update (workflow files are owner-only; see
+# AGENTS.md / docs/STATE.md). The contract test asserts the real gap is a
+# SUBSET of this list: it stays green when the owner pastes the fix (the gap
+# shrinks) and fails loudly if a NEW uncovered artifact type is introduced.
+KNOWN_UNCOVERED_PENDING_OWNER_PASTE: frozenset[tuple[str, str]] = frozenset({
+    ("data/reports/shadow", "selections_delta_20260922T043000Z.json"),
+    ("data/reports/shadow", "selections_delta_20260922T043000Z.json.sha256"),
+    ("data/reports/shadow", "selections_delta_20260922T043000Z.manifest.json"),
+    ("data/reports/shadow", "settlement_delta_20260922T043000Z.json"),
+    ("data/reports/shadow", "settlement_delta_20260922T043000Z.json.sha256"),
+    ("data/reports/shadow", "forward_batch_receipt.json"),
+    ("data/reports/shadow_event_day", "shadow_selections.json"),
+    ("data/reports/shadow_event_day", "manifest.json"),
+    ("data/reports/shadow_event_day", "settlement.json"),
+    ("data/reports/shadow_event_day", "settlement.json.sha256"),
+    ("data/settlement_evidence",
+     "settlement_capture_receipt_shadow_event_day.json"),
+    # NOTE: capture_event_day_*.json is ALREADY covered — the persist step's
+    # `git add -f data/reports/capture_*.json` line matches it.
+})
+
+
 def compute_target_dates(n: int = 5, *, base: dt.date | None = None) -> list[str]:
     """Return the next N reachable target dates (D+2 through D+N+1).
 
@@ -122,7 +198,12 @@ def _is_target_date_dir(name: str) -> bool:
     return True
 
 
-def find_settleable_run(target_date: str, repo_root: Path) -> str | None:
+def find_settleable_run(
+    target_date: str,
+    repo_root: Path,
+    *,
+    shadow_subdir: str = STANDARD_SHADOW_SUBDIR,
+) -> str | None:
     """Return the run_id of the one completed, unsettled run for a date.
 
     Returns ``None`` if the date has no completed run, or if its
@@ -133,7 +214,7 @@ def find_settleable_run(target_date: str, repo_root: Path) -> str | None:
     completed, unsettled one found (sorted by run_id) is returned so
     behavior stays deterministic.
     """
-    shadow_dir = repo_root / "data" / "reports" / "shadow" / target_date
+    shadow_dir = repo_root / "data" / "reports" / shadow_subdir / target_date
     if not shadow_dir.is_dir():
         return None
     candidates = []
@@ -152,6 +233,7 @@ def find_settleable_dates(
     repo_root: Path,
     *,
     as_of: dt.date | None = None,
+    shadow_subdir: str = STANDARD_SHADOW_SUBDIR,
 ) -> list[tuple[str, str]]:
     """Return ``(target_date, run_id)`` pairs eligible for D+1 settlement.
 
@@ -167,7 +249,7 @@ def find_settleable_dates(
     """
     as_of = as_of or dt.datetime.now(dt.timezone.utc).date()
     cutoff = as_of - dt.timedelta(days=1)
-    shadow_root = repo_root / "data" / "reports" / "shadow"
+    shadow_root = repo_root / "data" / "reports" / shadow_subdir
     if not shadow_root.is_dir():
         return []
     out: list[tuple[str, str]] = []
@@ -177,13 +259,20 @@ def find_settleable_dates(
         target_date = child.name
         if dt.date.fromisoformat(target_date) > cutoff:
             continue
-        run_id = find_settleable_run(target_date, repo_root)
+        run_id = find_settleable_run(
+            target_date, repo_root, shadow_subdir=shadow_subdir)
         if run_id is not None:
             out.append((target_date, run_id))
     return out
 
 
-def _sports_in_run(target_date: str, run_id: str, repo_root: Path) -> list[str]:
+def _sports_in_run(
+    target_date: str,
+    run_id: str,
+    repo_root: Path,
+    *,
+    shadow_subdir: str = STANDARD_SHADOW_SUBDIR,
+) -> list[str]:
     """Return the distinct sports actually present in a prediction run.
 
     Reads both ``selections[]`` and the manifest's ``considered_pool[]``
@@ -193,7 +282,7 @@ def _sports_in_run(target_date: str, run_id: str, repo_root: Path) -> list[str]:
     default") if the run's files cannot be parsed; this keeps a
     corrupted or unexpected run from silently skipping settlement.
     """
-    run_dir = repo_root / "data" / "reports" / "shadow" / target_date / run_id
+    run_dir = repo_root / "data" / "reports" / shadow_subdir / target_date / run_id
     sports: set[str] = set()
     try:
         selections = json.loads((run_dir / "shadow_selections.json").read_text())
@@ -226,6 +315,7 @@ def run_settlement_for_date(
     *,
     pause_seconds: int = 62,
     timeout: int = 45,
+    shadow_subdir: str = STANDARD_SHADOW_SUBDIR,
 ) -> dict:
     """Settle one overdue prediction run. Never raises.
 
@@ -244,7 +334,8 @@ def run_settlement_for_date(
         "status": "PENDING",
         "error": None,
     }
-    sports = _sports_in_run(target_date, run_id, repo_root)
+    sports = _sports_in_run(
+        target_date, run_id, repo_root, shadow_subdir=shadow_subdir)
     if not sports:
         result["status"] = "NO_SPORTS_RESOLVED"
         result["error"] = "could not determine sports from run files"
@@ -258,6 +349,7 @@ def run_settlement_for_date(
             pause_seconds=pause_seconds,
             timeout=timeout,
             sports=sports,
+            shadow_subdir=shadow_subdir,
         )
         result["status"] = "SETTLED"
         result["settlement_artifact_path"] = settled.settlement_artifact_path
@@ -279,6 +371,7 @@ def run_settlement_backlog(
     pause_seconds: int = 62,
     timeout: int = 45,
     dry_run: bool = False,
+    shadow_subdir: str = STANDARD_SHADOW_SUBDIR,
 ) -> list[dict]:
     """Settle every overdue (D+1) prediction run, oldest date first.
 
@@ -286,7 +379,8 @@ def run_settlement_backlog(
     continues to the next date. Never touches an already-settled run
     (idempotent — safe to call on every scheduled invocation).
     """
-    pending = find_settleable_dates(repo_root, as_of=as_of)
+    pending = find_settleable_dates(
+        repo_root, as_of=as_of, shadow_subdir=shadow_subdir)
     results = []
     for i, (target_date, run_id) in enumerate(pending):
         if dry_run:
@@ -300,6 +394,7 @@ def run_settlement_backlog(
         results.append(run_settlement_for_date(
             target_date, run_id, repo_root,
             pause_seconds=pause_seconds, timeout=timeout,
+            shadow_subdir=shadow_subdir,
         ))
     return results
 
@@ -709,6 +804,259 @@ def run_refresh_backlog(
     return results
 
 
+# ---------------------------------------------------------------------------
+# Event-day stage (owner decision 2026-09-26): one rank-1 (R1) pick per
+# sport on the event day itself.
+#
+# Why it exists: Forebet only publishes basketball / hockey / baseball /
+# tennis / rugby / american-football boards about a day out — both the D+6
+# forward capture and the T+1/T+2 refresh get "target date missing from HTML"
+# for them — so under the date-anchored 24h contract those sports cannot
+# produce a pick at all, and 2026-09-21..26 were football-only. This stage
+# captures TODAY's board and evaluates it under the EVENT_DAY declaration,
+# which proves pre-event status per event against the published kickoff
+# (>= min_lead_minutes_before_kickoff) instead of against the date anchor.
+#
+# Separation is absolute: its own capture receipt name, its own declaration,
+# its own artifact tree (data/reports/shadow_event_day/), track labels in
+# every payload/manifest, and its own settlement pass. Nothing in this stage
+# reads or writes the 24h-frozen tree, and the two hit rates are never added
+# together.
+# ---------------------------------------------------------------------------
+
+
+def find_event_day_run(target_date: str, repo_root: Path) -> str | None:
+    """Return the completed event-day run id for a date, or None."""
+    day_dir = (repo_root / "data" / "reports"
+               / EVENT_DAY_SHADOW_SUBDIR / target_date)
+    if not day_dir.is_dir():
+        return None
+    for child in sorted(day_dir.iterdir()):
+        if (child.is_dir() and child.name != "BLOCKED"
+                and (child / "shadow_selections.json").exists()):
+            return child.name
+    return None
+
+
+def summarise_event_day_run(run_dir: Path) -> dict:
+    """Per-sport R1 summary of one completed event-day run.
+
+    Returns ``{"sports_with_r1": [...], "r1_count": n, "selection_count": n}``.
+    Unreadable artifacts yield zeros rather than raising — the caller's
+    contract is "never raises".
+    """
+    out = {"sports_with_r1": [], "r1_count": 0, "selection_count": 0}
+    try:
+        payload = json.loads((run_dir / "shadow_selections.json").read_text())
+        selections = payload.get("selections", [])
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+        return out
+    sports = sorted({
+        sel.get("sport") for sel in selections
+        if isinstance(sel, dict) and sel.get("rank_within_sport_day") == 1
+        and sel.get("sport")
+    })
+    out["sports_with_r1"] = sports
+    out["r1_count"] = len(sports)
+    out["selection_count"] = len(selections)
+    return out
+
+
+def calibrate_event_day_clock(
+    target_date: str,
+    repo_root: Path,
+    *,
+    timeout: int = 45,
+    pause_seconds: int = 62,
+    stamp: str = "",
+) -> tuple[Path | None, dict]:
+    """Measure the renderer's clock for this capture, or explain why not.
+
+    Football is the one sport this run sees through both channels: the
+    tz=0 JSON, whose DATE_BAH is an instant, and the rendered board that
+    every other sport also comes from. The gap between them is the
+    renderer's offset for this run's egress. Returns the path to the
+    written calibration (or ``None``) and a summary for the batch entry.
+
+    Nothing here can make a run looser by accident: any failure returns
+    ``None``, which leaves the evaluator exactly where it is without a
+    calibration — football only.
+    """
+    from slumdog.capture_loader import load_capture_records
+    from slumdog.forebet import ForebetCollector, board_url
+    from slumdog.relay_columns import (
+        event_id_from_url,
+        fetch_column,
+        match_url,
+        scoped,
+    )
+    from slumdog.render_clock import calibrate_capture, instants_from_records
+    from slumdog.sports import SPORTS
+
+    stamp = stamp or dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    reports_dir = repo_root / "data" / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    receipt_name = f"capture_render_clock_{target_date}_{stamp}.json"
+    summary: dict = {"status": "PENDING", "reason": "", "detail": "",
+                     "offset_minutes": None, "samples": 0}
+
+    def fetch_instants() -> dict[str, str]:
+        collector = ForebetCollector(root=repo_root, timeout=timeout,
+                                     workers=1)
+        collector.capture_selected(target_date, ["football"],
+                                   receipt_name=receipt_name,
+                                   pause_seconds=0)
+        loaded = load_capture_records(
+            target_date=target_date,
+            capture_receipt_path=reports_dir / receipt_name,
+            repo_root=repo_root)
+        return instants_from_records(loaded.records)
+
+    def fetch_rendered() -> dict[str, str]:
+        # One request, not a whole board: the calibration needs only the
+        # cell that carries the match link and its rendered time. Every
+        # other column would be a request spent on something the
+        # measurement cannot use.
+        url = board_url(SPORTS["football"], target_date)
+        cells = fetch_column(url, scoped(".tnms"), timeout=timeout,
+                             column="link", attempts=2, backoff=5.0)
+        rendered: dict[str, str] = {}
+        for cell in cells:
+            link = match_url(cell)
+            if link:
+                rendered[f"football:{event_id_from_url(link)}"] = cell
+        return rendered
+
+    calibration = calibrate_capture(
+        target_date=target_date,
+        fetch_instants=fetch_instants,
+        fetch_rendered=fetch_rendered,
+        measured_at=dt.datetime.now(dt.timezone.utc).isoformat(),
+        source_run=stamp)
+    if not calibration.proven:
+        summary.update(status="REFUSED", reason=calibration.reason,
+                       detail=calibration.detail[:300])
+        return None, summary
+
+    clock = calibration.clock
+    path = reports_dir / f"render_clock_{target_date}_{stamp}.json"
+    path.write_text(json.dumps(clock.as_dict(), indent=2, sort_keys=True))
+    summary.update(status="MEASURED", offset_minutes=clock.offset_minutes,
+                   samples=clock.samples, detail=str(path.name))
+    return path, summary
+
+
+def run_event_day_for_date(
+    target_date: str,
+    repo_root: Path,
+    *,
+    pause_seconds: int = 62,
+    timeout: int = 45,
+    dry_run: bool = False,
+    base_date: dt.date | None = None,
+) -> dict:
+    """Capture + evaluate today's board on the EVENT_DAY track.
+
+    Isolated exactly like the settlement and refresh stages: every failure
+    lands in the returned dict and is never raised to the batch driver, so a
+    event-day failure can never cost the 24h-frozen forward pass.
+    """
+    from slumdog.forebet import ForebetCollector
+    from slumdog.shadow_evaluator import UTC_KICKOFF_PROVEN_SPORTS
+    from slumdog.sports import SPORTS
+
+    entry: dict = {
+        "target_date": target_date, "status": "PENDING", "run_id": None,
+        "timezone_hold_sports": [],
+        "track": "EVENT_DAY", "capture_receipt": None,
+        "captured_sports": 0, "capture_failures": 0,
+        "sports_with_r1": [], "r1_count": 0, "selection_count": 0,
+        "timing_rejections": {}, "error": None,
+        "render_clock": {"status": "NOT_ATTEMPTED"},
+    }
+    base_date = base_date or dt.datetime.now(dt.timezone.utc).date()
+    reports_dir = repo_root / "data" / "reports"
+
+    existing = find_event_day_run(target_date, repo_root)
+    if existing is not None:
+        # One event-day decision per date. Re-running would freeze a
+        # second, later-lead decision for the same day and make the track's
+        # hit rate ambiguous.
+        entry["status"] = "ALREADY_RUN"
+        entry["run_id"] = existing
+        return entry
+    if dry_run:
+        entry["status"] = "DRY_RUN"
+        return entry
+
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    receipt_name = f"capture_event_day_{target_date}_{stamp}.json"
+    entry["capture_receipt"] = receipt_name
+    try:
+        collector = ForebetCollector(root=repo_root, timeout=timeout, workers=1)
+        # Which boards this track may decide from is a question about
+        # evidence, not about sports. A rendered kickoff is unusable while
+        # its timezone is unknown — but football is visible through both the
+        # tz=0 JSON and the renderer in the same run, so the offset can be
+        # measured rather than assumed. With it, every sport's rendered
+        # kickoff becomes an instant; without it, nothing changes and only
+        # football is fetched, because every other request would be
+        # guaranteed-rejected.
+        clock_path, clock_summary = calibrate_event_day_clock(
+            target_date, repo_root, timeout=timeout,
+            pause_seconds=pause_seconds, stamp=stamp)
+        entry["render_clock"] = clock_summary
+        if clock_path is None:
+            selected_sports = sorted(UTC_KICKOFF_PROVEN_SPORTS)
+        else:
+            selected_sports = sorted(SPORTS)
+        entry["selected_sports"] = selected_sports
+        entry["timezone_hold_sports"] = sorted(
+            s for s in SPORTS if s not in selected_sports)
+        collector.capture_selected(
+            target_date, selected_sports,
+            force=True, receipt_name=receipt_name,
+            pause_seconds=pause_seconds)
+        try:
+            receipt = json.loads((reports_dir / receipt_name).read_text())
+            entry["captured_sports"] = len(receipt.get("captured", []))
+            entry["capture_failures"] = len(receipt.get("failures", []))
+        except (OSError, json.JSONDecodeError):
+            pass
+        if entry["captured_sports"] == 0:
+            entry["status"] = "NO_CAPTURES"
+            return entry
+
+        result = run_evaluator(
+            target_date, repo_root,
+            receipt_name=receipt_name,
+            config_rel=EVENT_DAY_CONFIG,
+            render_clock_path=clock_path,
+        )
+        entry["run_id"] = result.get("run_id")
+        run_status = result.get("run_status")
+        run_dir = Path(result.get("artifact_dir") or "")
+        if run_status == "SHADOW_RUN_BLOCKED":
+            entry["status"] = "BLOCKED"
+            entry["error"] = f"evaluator run_status={run_status}"
+            return entry
+        entry.update(summarise_event_day_run(run_dir))
+        try:
+            manifest = json.loads((run_dir / "manifest.json").read_text())
+            entry["timing_rejections"] = manifest.get(
+                "event_day_timing_rejections", {})
+        except (OSError, json.JSONDecodeError):
+            pass
+        entry["status"] = (
+            "SELECTIONS_EMITTED" if run_status == "SHADOW_SELECTIONS_EMITTED"
+            else "NO_SELECTION"
+        )
+    except Exception as exc:
+        entry["status"] = "EVENT_DAY_FAILED"
+        entry["error"] = f"{type(exc).__name__}: {exc}"
+    return entry
+
+
 def run_capture(target_date: str, repo_root: Path, *, pause_seconds: int = 62, timeout: int = 45) -> dict:
     """Capture Forebet listings for a target date.
 
@@ -735,6 +1083,8 @@ def run_evaluator(
     *,
     receipt_name: str | None = None,
     exclude_events_path: Path | None = None,
+    config_rel: str = "config/shadow_evaluator.json",
+    render_clock_path: Path | None = None,
 ) -> dict:
     """Run the shadow evaluator for a target date.
 
@@ -746,7 +1096,10 @@ def run_evaluator(
     """
     receipt_path = repo_root / "data" / "reports" / (
         receipt_name or f"capture_{target_date}.json")
-    config_path = repo_root / "config" / "shadow_evaluator.json"
+    # ``config_rel`` selects the timing track: the default frozen 24h
+    # declaration, or the EVENT_DAY declaration whose artifacts land in
+    # the separate data/reports/shadow_event_day tree.
+    config_path = repo_root / config_rel
     if not receipt_path.is_file():
         raise RuntimeError(f"capture receipt not found: {receipt_path}")
     if not config_path.is_file():
@@ -785,6 +1138,8 @@ def run_evaluator(
     ] + history_args
     if exclude_events_path is not None:
         cmd += ["--exclude-events", str(exclude_events_path)]
+    if render_clock_path is not None:
+        cmd += ["--render-clock", str(render_clock_path)]
 
     result = subprocess.run(
         cmd, capture_output=True, text=True, timeout=300, cwd=str(repo_root),
@@ -942,6 +1297,12 @@ def main(argv: list[str] | None = None) -> int:
                              "re-snapshots when a completed run exists "
                              "(default 2; deeper windows are progressively "
                              "little refresh — fixtures are largely fixed)")
+    parser.add_argument("--skip-event-day", action="store_true",
+                        help="Skip the EVENT_DAY stage (same-day capture "
+                             "+ per-event kickoff-lead evaluation into "
+                             "data/reports/shadow_event_day/) and its own "
+                             "D+1 settlement pass. The frozen 24h track is "
+                             "unaffected either way.")
     parser.add_argument("--completion-window-days", type=int,
                         default=DEFAULT_COMPLETION_WINDOW_DAYS,
                         help=f"Maximum age (days) of a settled run the "
@@ -1065,6 +1426,43 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
 
+    # Event-day track (owner decision 2026-09-26). Runs BEFORE the
+    # forward pass: today's picks are the time-critical ones, and the forward
+    # pass is the long stage. Both sub-stages are isolated — a failure here
+    # can never stop the 24h-frozen pipeline below.
+    event_day_settlement: list[dict] = []
+    event_day_results: list[dict] = []
+    if not args.skip_event_day:
+        if not args.skip_settlement:
+            event_day_settlement = run_settlement_backlog(
+                repo_root,
+                pause_seconds=args.pause_seconds,
+                timeout=args.capture_timeout,
+                dry_run=args.dry_run,
+                shadow_subdir=EVENT_DAY_SHADOW_SUBDIR,
+            )
+            for sr in event_day_settlement:
+                print(f"  event-day settle {sr['target_date']} "
+                      f"({sr['run_id']}): {sr['status']}", file=sys.stderr)
+                if sr.get("error"):
+                    print(f"    Error: {sr['error']}", file=sys.stderr)
+        today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+        entry = run_event_day_for_date(
+            today, repo_root,
+            pause_seconds=args.pause_seconds,
+            timeout=args.capture_timeout,
+            dry_run=args.dry_run,
+        )
+        event_day_results.append(entry)
+        print(
+            f"  event-day {entry['target_date']}: {entry['status']}"
+            + (f" (R1 in {entry['r1_count']} sport(s): "
+               f"{', '.join(entry['sports_with_r1'])})"
+               if entry.get("r1_count") else "")
+            + (f" [{entry['error']}]" if entry.get("error") else ""),
+            file=sys.stderr,
+        )
+
     targets = compute_target_dates(args.dates)
     print(f"Forward shadow batch: {len(targets)} dates starting from {targets[0]}", file=sys.stderr)
     print(f"Repository root: {repo_root}", file=sys.stderr)
@@ -1100,6 +1498,8 @@ def main(argv: list[str] | None = None) -> int:
         "settlement_completion": completion_results,
         "delta_settlement": delta_settlement_results,
         "refresh": refresh_results,
+        "event_day": event_day_results,
+        "event_day_settlement": event_day_settlement,
         "summary": {
             "total": len(results),
             "completed": sum(1 for r in results if r["status"] == "COMPLETED"),
@@ -1141,6 +1541,22 @@ def main(argv: list[str] | None = None) -> int:
             ),
             "refresh_failed": sum(
                 1 for r in refresh_results if r["status"] == "REFRESH_FAILED"
+            ),
+            # EVENT_DAY track counters. Deliberately named apart from the
+            # frozen-track counters above: the two records are never summed.
+            "event_day_runs": len(event_day_results),
+            "event_day_r1_sports": sum(
+                r.get("r1_count", 0) for r in event_day_results
+            ),
+            "event_day_selections": sum(
+                r.get("selection_count", 0) for r in event_day_results
+            ),
+            "event_day_failed": sum(
+                1 for r in event_day_results
+                if r["status"] in ("EVENT_DAY_FAILED", "BLOCKED")
+            ),
+            "event_day_settled": sum(
+                1 for r in event_day_settlement if r["status"] == "SETTLED"
             ),
         },
     }

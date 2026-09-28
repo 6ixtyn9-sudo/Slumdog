@@ -226,6 +226,18 @@ def _is_valid_winner_index(value: Any) -> bool:
     return value in (0, 1, 2)
 
 
+def _draw_settles(sport: str) -> bool:
+    """Whether a level result is gradeable for this sport.
+
+    Read from the registry, never from the caller — the same rule the rest
+    of this module follows for draw capability.
+    """
+    from .sports import SPORTS
+
+    spec = SPORTS.get(sport)
+    return bool(spec and spec.draw_settles)
+
+
 def _label_from_indices(
     *,
     sport: str,
@@ -324,6 +336,24 @@ def _label_from_indices(
     if winner_index == 0:
         if draw_possible:
             # Draw-capable: draw = 0 (failed underdog win)
+            return UnderdogLabelResult(
+                label=0,
+                eligible=True,
+                exclusion_reason=None,
+                is_draw=True,
+                is_void=False,
+                winner_index=0,
+                favorite_index=favorite_index,
+                underdog_index=underdog_index,
+                identity_ineligibility_reason=None,
+                sport=sport,
+                draw_possible=draw_possible,
+            )
+        elif _draw_settles(sport):
+            # Two priced outcomes, three possible results — MMA. A draw is a
+            # real result and the underdog did not win, so it grades 0 like
+            # any other failed underdog win rather than vanishing from the
+            # record.
             return UnderdogLabelResult(
                 label=0,
                 eligible=True,

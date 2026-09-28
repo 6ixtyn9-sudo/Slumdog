@@ -337,6 +337,26 @@ def source_url(spec: SportSpec, target_date: str) -> str:
     return f"https://www.forebet.com/en/{spec.path}/predictions/{target_date}"
 
 
+def board_url(spec: SportSpec, target_date: str) -> str:
+    """The HUMAN board for a sport — the page the renderer reads.
+
+    Not the same thing as :func:`source_url`, and the difference is not
+    cosmetic. For football, ``source_url`` is the tz=0 JSON endpoint; there
+    is no board markup there at all. For every other sport the two agree.
+
+    Getting this wrong is silent: the renderer answers HTTP 422 for "your
+    selector matched nothing", which is indistinguishable from throttling,
+    so a wrong URL reads as a site that is refusing you. Run 36402990164
+    spent 108 seconds and three attempts proving exactly that against
+    ``/en/football-tips-and-predictions/predictions/...``, a page that does
+    not exist.
+    """
+    if spec.key == "football":
+        return ("https://www.forebet.com/en/football-predictions/"
+                f"predictions-1x2/{target_date}")
+    return source_url(spec, target_date)
+
+
 def unwrap_reader(raw: bytes | str, expected_url: str) -> bytes:
     """Legacy Markdown-wrapper validator retained for forensic tests."""
     text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
@@ -353,9 +373,47 @@ def unwrap_reader(raw: bytes | str, expected_url: str) -> bytes:
     return body_bytes
 
 
+# Markers of a bot-check interstitial served instead of the page. Measured
+# 2026-09-26: the relay's html mode returns a ~5.8KB "Just a moment..." page
+# for Forebet listing boards. For dated boards that page failed the
+# date check by accident, but for ``current_only`` sports (esoccer, afl) the
+# lenient label check let it through, so challenge pages were being stored as
+# genuine captures. Reject them explicitly rather than relying on a
+# coincidence.
+# 2026-09-28: a SECOND wording appeared, and on the tz=0 JSON endpoint
+# rather than an HTML board — 272 bytes of "Performing security
+# verification ... protect against malicious bots", captured live by the
+# probe (run 36401440850). It matched none of the markers below. It failed
+# closed anyway, by the same coincidence this list exists to stop relying
+# on: the JSON parse threw, and an HTML board would have missed its sport
+# label. Name it instead.
+_CHALLENGE_MARKERS = (
+    b"just a moment",
+    b"performing security verification",
+    b"security service to protect against malicious bots",
+    b"verifying you are human",
+    b"challenge-platform",
+    b"cf_chl_opt",
+    b"cf-chl",
+    b"attention required! | cloudflare",
+    b"enable javascript and cookies to continue",
+)
+
+
+def looks_like_challenge_page(body: bytes) -> bool:
+    """True if the body is a bot-check interstitial rather than content."""
+    lower = body.lower()
+    return any(marker in lower for marker in _CHALLENGE_MARKERS)
+
+
 def validate_html_body(body: bytes, sport: str, target_date: str) -> None:
     if len(body) < 100:
         raise ValueError("HTML capture unexpectedly short")
+    if looks_like_challenge_page(body):
+        raise ValueError(
+            f"relay returned a bot-check challenge page, not a board "
+            f"({len(body)} bytes)"
+        )
     lower = body.lower()
     if b"not what you were looking for" in lower or b"forebet 404 error" in lower:
         raise ValueError("Forebet returned a 404 content page")
@@ -411,12 +469,23 @@ def validate_capture_body(body: bytes, sport: str, target_date: str, route: str)
 
 
 class ForebetCollector:
-    def __init__(self, root: Path | str = ".", timeout: int = 35, workers: int = 4):
+    def __init__(self, root: Path | str = ".", timeout: int = 35,
+                 workers: int = 4, before_request=None):
         self.root = Path(root)
         self.timeout = timeout
         self.workers = max(1, min(int(workers), 6))
+        # Optional callback invoked before each board is fetched and before
+        # each column request inside the fallback. A caller under a
+        # wall-clock cap needs a say: one board can cost a first HTML
+        # attempt plus eight column requests with retries, which outlived
+        # a 110-second budget by a factor of four in run 36409134160.
+        # Production passes nothing and is unchanged.
+        self.before_request = before_request
 
     def _fetch(self, sport: str, target_date: str) -> RawCapture:
+        if self.before_request is not None:
+            self.before_request()
+        body_format = "html"
         spec = SPORTS[sport]
         target = source_url(spec, target_date)
         relay = RELAY_BASE + target
@@ -445,8 +514,52 @@ class ForebetCollector:
             if last_error is not None:
                 raise last_error
         else:
-            body, route = fetch_with_fallback(relay, target, timeout=self.timeout)
-            validate_capture_body(body, sport, target_date, route)
+            body_format = "html"
+            try:
+                # ONE attempt, not three. Since 2026-09-22 this board has
+                # answered a bot-check page to everything CI can send, and
+                # it has never once succeeded since - so the three retries
+                # inside fetch_with_fallback buy nothing and cost three
+                # full-page renders of a 42KB document. In run 36419041728
+                # the column requests that followed them came back 403
+                # while the same relay served a five-column settlement
+                # capture seconds later. One attempt is enough to detect a
+                # bot-check; the retries were paying for the privilege of
+                # being rate-limited.
+                body, route = fetch_with_fallback(relay, target,
+                                                  timeout=self.timeout,
+                                                  max_retries=1)
+                validate_capture_body(body, sport, target_date, route)
+            except ValueError:
+                # From 2026-09-22 the HTML boards answer a bot-check page to
+                # everything CI can send, which is why R1 coverage collapsed
+                # to football alone. The renderer still serves the board one
+                # field at a time; capture_board fails closed, so reaching
+                # here either produces a real board or raises.
+                from .relay_columns import (
+                    CAPTURED,
+                    capture_board,
+                    serialise_columns,
+                )
+
+                result = capture_board(
+                    target, sport, target_date,
+                    captured_at=datetime.now(timezone.utc).isoformat(),
+                    timeout=self.timeout,
+                    before_request=self.before_request)
+                if result.status != CAPTURED:
+                    raise ValueError(
+                        f"{sport} {target_date}: html capture rejected and "
+                        f"column capture returned {result.status}: "
+                        f"{result.reason}") from None
+                board = result.board
+                if board is None:  # defensive: CAPTURED implies a board
+                    raise ValueError(
+                        f"{sport} {target_date}: captured without columns"
+                    ) from None
+                body = serialise_columns(board)
+                route = "relay_columns"
+                body_format = "columns_v1"
         captured_at = datetime.now(timezone.utc).isoformat()
         digest = hashlib.sha256(body).hexdigest()
         stamp = captured_at.replace(":", "").replace("+00:00", "Z").replace("-", "")
@@ -461,7 +574,7 @@ class ForebetCollector:
             captured_at=captured_at,
             source_url=target,
             relay_url=relay,
-            body_format="html",
+            body_format=body_format if sport != "football" else "html",
             sha256=digest,
             bytes=len(body),
             body_path=str(body_path.relative_to(self.root)),
@@ -473,7 +586,8 @@ class ForebetCollector:
 
     def capture_selected(self, target_date: str, sports: list[str] | None = None,
                          *, force: bool = False,
-                         receipt_name: str | None = None) -> list[RawCapture]:
+                         receipt_name: str | None = None,
+                         pause_seconds: float = 0.0) -> list[RawCapture]:
         date.fromisoformat(target_date)
         selected = list(SPORTS) if not sports else sports
         unknown = [sport for sport in selected if sport not in SPORTS]
@@ -495,13 +609,26 @@ class ForebetCollector:
         to_fetch = [sport for sport in selected if sport not in existing]
         captures: list[RawCapture] = [cap for cap in self._existing_captures(target_date) if cap.sport in selected]
         failures: list[str] = []
-        with ThreadPoolExecutor(max_workers=self.workers) as executor:
-            futures = {sport: executor.submit(self._fetch, sport, target_date) for sport in to_fetch}
-            for sport in to_fetch:  # deterministic result order
+        if pause_seconds and pause_seconds > 0:
+            # Paced serial path. A same-day stage fetches every sport in one
+            # burst; ``pause_seconds`` spaces those requests the same way the
+            # settlement capture does, so an extra daily stage does not raise
+            # the request rate seen by the source.
+            for i, sport in enumerate(to_fetch):
+                if i > 0:
+                    time.sleep(pause_seconds)
                 try:
-                    captures.append(futures[sport].result())
+                    captures.append(self._fetch(sport, target_date))
                 except Exception as exc:  # each satellite fails independently
                     failures.append(f"{sport}:{type(exc).__name__}:{exc}")
+        else:
+            with ThreadPoolExecutor(max_workers=self.workers) as executor:
+                futures = {sport: executor.submit(self._fetch, sport, target_date) for sport in to_fetch}
+                for sport in to_fetch:  # deterministic result order
+                    try:
+                        captures.append(futures[sport].result())
+                    except Exception as exc:  # each satellite fails independently
+                        failures.append(f"{sport}:{type(exc).__name__}:{exc}")
 
         # Capture the five distinct JSON markets for the date. They cover all
         # matches in one request each, so they are cheap enough to fetch for

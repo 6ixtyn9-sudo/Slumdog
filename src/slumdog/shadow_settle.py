@@ -215,17 +215,73 @@ def grade_underdog_win(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Evidence tree selection
+# ---------------------------------------------------------------------------
+# Two evidence trees exist under data/reports/ and they are never pooled:
+#
+#   shadow/                 STANDARD track — frozen 24h pre-event contract
+#   shadow_event_day/    EVENT_DAY track — per-event kickoff lead
+#                           (owner decision 2026-09-26)
+#
+# Every settlement entry point takes ``shadow_subdir`` and defaults to the
+# standard tree, so existing callers and every already-written artifact are
+# bit-for-bit unaffected. Grading logic itself is identical for both tracks:
+# an underdog either won outright or it did not.
+STANDARD_SHADOW_SUBDIR = "shadow"
+EVENT_DAY_SHADOW_SUBDIR = "shadow_event_day"
+KNOWN_SHADOW_SUBDIRS = (STANDARD_SHADOW_SUBDIR, EVENT_DAY_SHADOW_SUBDIR)
+
+
+def settlement_receipt_name(
+    shadow_subdir: str = STANDARD_SHADOW_SUBDIR,
+) -> str:
+    """Per-track filename of the one-shot D+1 settlement capture receipt.
+
+    The standard tree keeps the historical, already-committed name. Every
+    other evidence tree gets its own file: two tracks can hold a run for the
+    same target date, and the second settlement of that date must not
+    overwrite the first track's committed capture evidence (the receipt each
+    ``settlement.json`` points at must stay the bytes that graded it).
+    """
+    if shadow_subdir not in KNOWN_SHADOW_SUBDIRS:
+        raise SettlementError(
+            f"unknown shadow evidence tree {shadow_subdir!r} "
+            f"(known: {', '.join(KNOWN_SHADOW_SUBDIRS)})"
+        )
+    if shadow_subdir == STANDARD_SHADOW_SUBDIR:
+        return "settlement_capture_receipt.json"
+    return f"settlement_capture_receipt_{shadow_subdir}.json"
+
+
+def shadow_run_dir(
+    repo_root: Path,
+    target_date: str,
+    run_id: str,
+    shadow_subdir: str = STANDARD_SHADOW_SUBDIR,
+) -> Path:
+    """Path of one prediction run inside the chosen evidence tree."""
+    if shadow_subdir not in KNOWN_SHADOW_SUBDIRS:
+        raise SettlementError(
+            f"unknown shadow evidence tree {shadow_subdir!r} "
+            f"(known: {', '.join(KNOWN_SHADOW_SUBDIRS)})"
+        )
+    return Path(repo_root) / "data" / "reports" / shadow_subdir / target_date / run_id
+
+
 def load_prediction_run(
     target_date: str,
     run_id: str,
     repo_root: Path,
+    *,
+    shadow_subdir: str = STANDARD_SHADOW_SUBDIR,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Load and validate a frozen prediction run.
 
     Returns ``(selections_payload, manifest)``.
     Raises :class:`SettlementError` on any integrity failure.
     """
-    run_dir = repo_root / "data" / "reports" / "shadow" / target_date / run_id
+    run_dir = shadow_run_dir(repo_root, target_date, run_id, shadow_subdir)
     if not run_dir.is_dir():
         raise SettlementError(f"prediction run directory not found: {run_dir}")
     selections_path = run_dir / "shadow_selections.json"
@@ -303,6 +359,7 @@ def fetch_settlement_capture(
     timeout: int = 45,
     sports: list[str] | None = None,
     receipt_name: str | None = None,
+    capture_purpose: str | None = None,
 ) -> dict[str, Any]:
     """Fetch post-event Forebet listings for sports on ``target_date``.
 
@@ -400,7 +457,11 @@ def fetch_settlement_capture(
         # ``settlement_capture_receipt.json``); ``settlement_completion`` for a
         # later completion-pass re-capture, which must NOT overwrite the D+1
         # receipt already embedded in settlement.json.
-        "capture_purpose": (
+        # An explicit ``capture_purpose`` overrides the inference: a
+        # non-standard track's one-shot D+1 capture also passes a
+        # ``receipt_name`` (its own per-track file) but is still a
+        # ``settlement`` capture, not a completion re-capture.
+        "capture_purpose": capture_purpose or (
             "settlement_completion" if receipt_name is not None else "settlement"
         ),
         "captured": [asdict(item) for item in captured],
@@ -975,6 +1036,7 @@ def write_settlement_artifact(
     settlement_receipt: dict[str, Any],
     repo_root: Path,
     settled_at: str | None = None,
+    shadow_subdir: str = STANDARD_SHADOW_SUBDIR,
 ) -> SettlementResult:
     """Write the immutable settlement artifact + SHA-256 marker.
 
@@ -982,7 +1044,7 @@ def write_settlement_artifact(
     ``shadow_selections.json`` and ``manifest.json``. Refuses to
     overwrite an existing settlement artifact.
     """
-    run_dir = repo_root / "data" / "reports" / "shadow" / target_date / run_id
+    run_dir = shadow_run_dir(repo_root, target_date, run_id, shadow_subdir)
     artifact_path = run_dir / "settlement.json"
     marker_path = run_dir / "settlement.json.sha256"
     if artifact_path.exists():
@@ -1075,9 +1137,9 @@ def write_settlement_artifact(
     marker_content = f"{artifact_sha}  settlement.json\n"
     marker_path.write_text(marker_content)
 
-    # Find the settlement receipt path
+    # Find the settlement receipt path (per-track filename)
     evidence_dir = repo_root / "data" / "settlement_evidence" / target_date
-    receipt_path = evidence_dir / "settlement_capture_receipt.json"
+    receipt_path = evidence_dir / settlement_receipt_name(shadow_subdir)
 
     return SettlementResult(
         target_date=target_date,
@@ -1110,6 +1172,7 @@ def settle_run(
     timeout: int = 45,
     settled_at: str | None = None,
     sports: list[str] | None = None,
+    shadow_subdir: str = STANDARD_SHADOW_SUBDIR,
 ) -> SettlementResult:
     """Settle a frozen shadow prediction run.
 
@@ -1140,11 +1203,11 @@ def settle_run(
 
     # Step 1: Load the prediction run
     selections_payload, manifest = load_prediction_run(
-        target_date, run_id, repo_root,
+        target_date, run_id, repo_root, shadow_subdir=shadow_subdir,
     )
 
     # Step 2: Check no existing settlement
-    run_dir = repo_root / "data" / "reports" / "shadow" / target_date / run_id
+    run_dir = shadow_run_dir(repo_root, target_date, run_id, shadow_subdir)
     if (run_dir / "settlement.json").exists():
         raise SettlementError(
             f"settlement already exists for {target_date}/{run_id}; "
@@ -1155,13 +1218,25 @@ def settle_run(
     if offline:
         settlement_receipt = load_settlement_receipt(
             target_date, repo_root,
-            Path(settlement_receipt_path) if settlement_receipt_path else None,
+            Path(settlement_receipt_path) if settlement_receipt_path
+            else (
+                repo_root / "data" / "settlement_evidence" / target_date
+                / settlement_receipt_name(shadow_subdir)
+            ),
         )
     else:
+        # Per-track receipt file: settling the same date on a second track
+        # must never overwrite the first track's committed capture evidence.
+        track_receipt_name = settlement_receipt_name(shadow_subdir)
         settlement_receipt = fetch_settlement_capture(
             target_date, repo_root,
             workers=workers, pause_seconds=pause_seconds, timeout=timeout,
             sports=sports,
+            receipt_name=(
+                None if shadow_subdir == STANDARD_SHADOW_SUBDIR
+                else track_receipt_name
+            ),
+            capture_purpose="settlement",
         )
 
     # Step 4: Parse settled results
@@ -1187,6 +1262,7 @@ def settle_run(
         settlement_receipt=settlement_receipt,
         repo_root=repo_root,
         settled_at=settled_at,
+        shadow_subdir=shadow_subdir,
     )
 
 
@@ -1595,6 +1671,7 @@ def settle_selection_deltas(
     pause_seconds: int = 62,
     timeout: int = 45,
     generated_at: str | None = None,
+    shadow_subdir: str = STANDARD_SHADOW_SUBDIR,
 ) -> list[dict[str, Any]]:
     """One-shot grade of every ungraded selections_delta_* in a run dir.
 
@@ -1604,7 +1681,7 @@ def settle_selection_deltas(
     """
     repo_root = Path(repo_root).resolve()
     run_dir = (
-        repo_root / "data" / "reports" / "shadow" / target_date / run_id
+        shadow_run_dir(repo_root, target_date, run_id, shadow_subdir)
     )
     generated_at = generated_at or _dt.datetime.now(
         _dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1723,6 +1800,7 @@ def complete_settlement(
     timeout: int = 45,
     sports: list[str] | None = None,
     generated_at: str | None = None,
+    shadow_subdir: str = STANDARD_SHADOW_SUBDIR,
 ) -> CompletionResult:
     """Re-grade rows left open by the one-shot D+1 settlement (never raises
     :class:`SettlementError` to callers — returns a result with a status;
@@ -1731,7 +1809,7 @@ def complete_settlement(
     """
     repo_root = Path(repo_root).resolve()
     run_dir = (
-        repo_root / "data" / "reports" / "shadow" / target_date / run_id
+        shadow_run_dir(repo_root, target_date, run_id, shadow_subdir)
     )
     as_of = as_of or _dt.datetime.now(_dt.timezone.utc).date()
     try:
@@ -1802,7 +1880,7 @@ def complete_settlement(
 
         # Grade against the frozen run with the fresh capture ------------
         selections_payload, manifest = load_prediction_run(
-            target_date, run_id, repo_root,
+            target_date, run_id, repo_root, shadow_subdir=shadow_subdir,
         )
         event_index = _build_event_index(selections_payload, manifest)
         fresh_grades = grade_all_entries(
@@ -1949,6 +2027,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    default=COMPLETION_RETRY_WINDOW_DAYS,
                    help=f"Maximum age (days) of a run the completion pass "
                         f"retries (default {COMPLETION_RETRY_WINDOW_DAYS}).")
+    p.add_argument("--shadow-subdir", default=STANDARD_SHADOW_SUBDIR,
+                   choices=list(KNOWN_SHADOW_SUBDIRS),
+                   help="Evidence tree under data/reports/ to settle in. "
+                        "'shadow' is the frozen 24h-contract record (default); "
+                        "'shadow_event_day' is the separate per-event "
+                        "kickoff-lead track. The two are never pooled.")
     return p
 
 
@@ -1969,6 +2053,7 @@ def main(argv: list[str] | None = None) -> int:
                 timeout=args.timeout,
                 sports=sports,
                 max_age_days=args.completion_window_days,
+                shadow_subdir=args.shadow_subdir,
             )
             print(json.dumps({
                 "target_date": completion.target_date,
@@ -1992,6 +2077,7 @@ def main(argv: list[str] | None = None) -> int:
                 settlement_receipt_path=args.settlement_receipt,
                 pause_seconds=args.pause_seconds,
                 timeout=args.timeout,
+                shadow_subdir=args.shadow_subdir,
             )
             print(json.dumps({
                 "target_date": args.date,
@@ -2014,6 +2100,7 @@ def main(argv: list[str] | None = None) -> int:
             pause_seconds=args.pause_seconds,
             timeout=args.timeout,
             sports=sports,
+            shadow_subdir=args.shadow_subdir,
         )
     except SettlementError as e:
         print(f"SETTLEMENT_FAILED: {e}", file=sys.stderr)
