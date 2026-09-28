@@ -1,5 +1,4 @@
 name: Probe kickoff timezone (one-shot, read-only)
-
 # One-shot diagnostic for the EVENT_DAY track's timezone hold.
 #
 # Read-only by construction: `permissions: contents: read`, nothing is
@@ -15,11 +14,19 @@ name: Probe kickoff timezone (one-shot, read-only)
 # Running it on a GitHub runner is the point: that is the exact relay + IP
 # combination production uses, so the answer is about the real pipeline and
 # not about some other machine's geolocation.
-
 on:
   push:
     branches:
-      - arena/01a0dd7a-slumdog
+      # A specific session branch here (as this line originally read) goes
+      # dead the moment that session ends: verified 2026-09-28 when pushes
+      # from a LATER session's branch (arena/01a0e863-slumdog) silently
+      # never triggered this workflow at all, because only an earlier
+      # session's branch (arena/01a0dd7a-slumdog) was ever listed. The
+      # trigger itself is durable (main plus any arena/* session branch);
+      # the workflow being one-shot and short-lived is still true and is
+      # about when it gets DELETED, not about which branches can run it.
+      - main
+      - 'arena/**'
     paths:
       - .github/workflows/probe_kickoff_timezone.yml
       - scripts/probe_kickoff_timezone.py
@@ -29,24 +36,19 @@ on:
         description: Board date to probe (YYYY-MM-DD, blank = tomorrow UTC)
         required: false
         default: ""
-
 permissions:
   contents: read
-
 jobs:
   probe:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # same pin as forward_shadow.yml
-
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # same pin as forward_shadow.yml
         with:
           python-version: '3.13'
-
       - name: Install
         run: python -m pip install --quiet -e .
-
       - name: Probe
         id: probe
         continue-on-error: true
@@ -57,7 +59,6 @@ jobs:
           python scripts/probe_kickoff_timezone.py \
             --date "$DATE" --sport basketball --pause 20 \
             --out probe_report.json | tee probe_stdout.txt
-
       - name: Upload report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # same pin as forward_shadow.yml
         with:
