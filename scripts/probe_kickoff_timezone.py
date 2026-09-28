@@ -65,6 +65,8 @@ from slumdog.forebet import (  # noqa: E402
 )
 from slumdog.parsers import BASE  # noqa: E402
 from slumdog.relay_columns import (  # noqa: E402
+    CAPTURED,
+    COVERAGE_GAP,
     COLUMN_SELECTORS,
     REQUIRED_COLUMNS,
     SETTLEMENT_COLUMN_SELECTORS,
@@ -1313,6 +1315,12 @@ def settlement_probe(date: str, *, timeout: int, pause: float,
             "reason": result.reason[:160],
             "partial": result.partial,
         }
+        if result.status != CAPTURED:
+            # A settlement gap is worth one diagnostic request: whether the
+            # board refused us, or rendered and simply held other days.
+            record["observed_dates"] = list(result.observed_dates)
+            if result.status == COVERAGE_GAP:
+                record["board"] = diagnose_board(url, timeout=min(timeout, 30))
         board = result.board
         if board is not None:
             statuses = Counter(
@@ -1320,6 +1328,10 @@ def settlement_probe(date: str, *, timeout: int, pause: float,
                 for value in board.columns.get("status", []))
             record["statuses_seen"] = dict(statuses.most_common(6))
             record["scores_sample"] = board.columns.get("score", [])[:3]
+            # The row text the day was read from, so a date mismatch is
+            # debuggable from the annotation instead of by inference.
+            record["link_sample"] = [
+                cell[:70] for cell in board.columns.get("link", [])[:3]]
             try:
                 graded = settled_rows(board)
             except Exception as exc:  # unreadable date order, etc.
