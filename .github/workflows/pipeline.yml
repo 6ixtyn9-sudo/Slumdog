@@ -23,6 +23,51 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  canary:
+    name: Canary — dual-path availability sample (2 requests, non-blocking)
+    # Folded in here rather than a separate cron'd workflow (owner
+    # directive, 2026-09-28): GitHub's own `schedule:` trigger is
+    # best-effort and silently skips runs, and this repo's workflows are
+    # triggered externally instead, so a standalone cron'd sampler would be
+    # exactly as unreliable as the thing it exists to measure. This job
+    # rides whatever already fires this workflow (the two schedules below,
+    # or workflow_dispatch) instead of adding a trigger of its own — no new
+    # workflow file, no new schedule. It has no `needs:` and nothing
+    # `needs:` it: a red canary here never blocks or slows down
+    # census/history/aggregate/research, it only records. See
+    # scripts/probe_kickoff_timezone.py's ``--canary-only`` mode and
+    # ``forebet.sample_canary`` for the dual-path (relay first, direct
+    # fallback only if relay fails) contract this reuses unchanged.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TZ: 'Africa/Johannesburg'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e .
+      - name: Dual-path canary sample (relay first, direct fallback only if relay fails)
+        run: |
+          # Exits 1 on an unhealthy sample, deliberately: this job's own
+          # green/red run history becomes a readable availability map with
+          # no owner paste and no annotation fetch required (the
+          # `probe:canary` annotation still carries the machine-readable
+          # reason). This is isolated to THIS job -- it cannot fail or
+          # delay any other job in this workflow.
+          SAMPLE_DATE="$(date +%F)"
+          python scripts/probe_kickoff_timezone.py \
+            --canary-only --date "$SAMPLE_DATE" --out canary_report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: slumdog-canary-${{ github.run_id }}
+          path: canary_report.json
+          retention-days: 14
+          if-no-files-found: warn
+
   census:
     name: Census — current board, all sports
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 1'
@@ -161,6 +206,79 @@ jobs:
           path: data/reports/history_${{ matrix.sport }}*
           retention-days: 30
 
+  backtest:
+    name: R1 backtest — replay the frozen rule over the historical corpus
+    # Runs after every history build (daily + weekly + dispatch), not only
+    # the weekly full run: unlike census/aggregate/research, this job makes
+    # no network request at all (it only reads the ledgers this same
+    # workflow just built), so there is no relay-load reason to gate it.
+    # always() so a partial ledger set (one sport's matrix leg failed) still
+    # gets an honest report instead of no report.
+    if: always()
+    needs: [history]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Job-level override only: the workflow default above stays
+    # `contents: read`; only this job gets write access, and only to commit
+    # the few-KB backtest report (see the persist step below), matching the
+    # "small evidence committed, full evidence as artifacts" rule already
+    # used by forward_shadow.yml.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e .
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: slumdog-history-*
+          path: depth-input
+      - name: Assemble ledgers from artifacts
+        run: |
+          mkdir -p data/reports
+          find depth-input -name 'history_*.jsonl.gz' -exec cp {} data/reports/ \;
+          find depth-input -name 'history_*.json' -exec cp {} data/reports/ \;
+      - name: Run R1 rule backtest (never fails this job)
+        shell: bash
+        run: |
+          # No `set -e`: the CLI's r1-backtest command is itself already
+          # internally defensive and always exits 0 (see cli.py / backtest.py),
+          # but this step must not become the one place that regresses that
+          # guarantee if the CLI is ever changed. An absent/thin ledger set
+          # produces an honest "0/N sports have a ledger" report, which is a
+          # valid, reportable outcome for this job, never a failure.
+          set -uo pipefail
+          SWEEP_DATE="$(date +%F)"
+          python -m slumdog.cli r1-backtest --root . --date "$SWEEP_DATE"
+          exit 0
+      - name: Publish backtest summary
+        if: always()
+        shell: bash
+        run: |
+          FILE="$(find data/reports -name 'r1_backtest_*.md' | head -1)"
+          if [ -n "$FILE" ]; then cat "$FILE" >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Persist small evidence to git (r1_backtest report only, a few KB)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f data/reports/r1_backtest_*.json data/reports/r1_backtest_*.md 2>/dev/null || true
+          if git diff --cached --quiet; then echo "no new backtest evidence"; exit 0; fi
+          git commit -m "chore: R1 historical backtest (run ${{ github.run_id }})"
+          git pull --rebase --autostash origin main || { git rebase --abort 2>/dev/null || true; exit 0; }
+          git push origin HEAD:main || { git pull --rebase --autostash origin main && git push origin HEAD:main; } || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: slumdog-r1-backtest
+          path: data/reports/r1_backtest_*
+          retention-days: 30
+
   aggregate:
     name: Aggregate — consolidated receipt
     if: always() && (github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 1')
@@ -239,3 +357,8 @@ jobs:
 # clock in TZ Africa/Johannesburg (census today, history through yesterday).
 # History ledgers are rolling and resumable per sport. Esoccer is
 # prospective-only. No model training or suggestion emission occurs here.
+# The `canary` job (dual-path availability sample) and the `backtest` job
+# (R1-rule replay over the ledgers this same run just built) both ride this
+# workflow's existing triggers rather than adding any schedule or file of
+# their own -- no new workflow, no new cron. Neither gates nor is gated by
+# census/history/aggregate/research; each reports independently.
