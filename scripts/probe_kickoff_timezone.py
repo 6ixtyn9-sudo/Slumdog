@@ -1119,6 +1119,97 @@ def render_clock_probe(date: str, *, timeout: int, pause: float,
     return record
 
 
+def collector_end_to_end(date: str, *, timeout: int, pause: float,
+                         sport: str = "hockey",
+                         slice_seconds: float = 150.0) -> dict[str, Any]:
+    """Drive the PRODUCTION capture path, not a probe-shaped copy of it.
+
+    Everything proven about the column route so far was proven by calling
+    ``capture_board`` directly. The path production actually takes is
+    longer than that, and every extra step is somewhere a capture can be
+    written that cannot be read back:
+
+        ForebetCollector._fetch  -> html rejected -> capture_board
+          -> serialise_columns   -> bytes on disk + receipt
+          -> parse_capture       -> EventSnapshots
+
+    So this runs exactly that, into a throwaway root, and reports what
+    came out the far end. A capture that parses to zero events here is a
+    capture that would produce no picks in the nightly job, however good
+    the board looked.
+    """
+    import tempfile
+
+    from slumdog.capture_loader import load_capture_records
+    from slumdog.forebet import ForebetCollector
+
+    record: dict[str, Any] = {"sport": sport, "target_date": date}
+    guard = slice_guard(slice_seconds)
+    started = time.monotonic()
+    try:
+        guard()
+    except BudgetExhausted as exc:
+        return {"verdict": f"skipped: {exc}"}
+
+    with tempfile.TemporaryDirectory(prefix="slumdog-e2e-") as tmp:
+        root = Path(tmp)
+        receipt = f"capture_probe_{date}.json"
+        try:
+            collector = ForebetCollector(root=root, timeout=timeout,
+                                         workers=1)
+            collector.capture_selected(date, [sport], force=True,
+                                       receipt_name=receipt,
+                                       pause_seconds=0)
+        except Exception as exc:  # noqa: BLE001 - reported, not raised
+            record["verdict"] = f"capture failed: {type(exc).__name__}: {exc}"[:240]
+            record["seconds"] = round(time.monotonic() - started, 1)
+            return record
+
+        receipt_path = root / "data" / "reports" / receipt
+        try:
+            payload = json.loads(receipt_path.read_text())
+        except Exception as exc:  # noqa: BLE001
+            record["verdict"] = f"no receipt: {type(exc).__name__}"
+            return record
+        captured = payload.get("captured") or []
+        record["captured"] = len(captured)
+        record["failures"] = (payload.get("failures") or [])[:2]
+        if captured:
+            first = captured[0]
+            record["route"] = first.get("route")
+            record["body_format"] = first.get("body_format")
+            record["bytes"] = first.get("bytes")
+            body_path = root / str(first.get("body_path") or "")
+            record["body_on_disk"] = body_path.is_file()
+
+        # The half that has never been exercised: reading back what was
+        # written, through the same loader the evaluator uses.
+        try:
+            loaded = load_capture_records(
+                target_date=date, capture_receipt_path=receipt_path,
+                repo_root=root)
+            records = list(loaded.records)
+            record["parsed_events"] = len(records)
+            if records:
+                best = max(records, key=lambda r: max(
+                    r.probability_1 or 0.0, r.probability_2 or 0.0))
+                record["top_by_probability"] = {
+                    "event_id": best.event_id,
+                    "match": f"{best.participant_1} vs {best.participant_2}",
+                    "p1": best.probability_1, "p2": best.probability_2,
+                    "kickoff": str(best.kickoff)[:24],
+                }
+            record["verdict"] = (
+                "capture -> disk -> parse produced events"
+                if records else
+                "capture written but parsed to zero events")
+        except Exception as exc:  # noqa: BLE001
+            record["verdict"] = (
+                f"capture unreadable: {type(exc).__name__}: {exc}"[:240])
+    record["seconds"] = round(time.monotonic() - started, 1)
+    return record
+
+
 def settlement_probe(date: str, *, timeout: int, pause: float,
                      sports: tuple[str, ...] = ("hockey",),
                      settled_date: str | None = None,
@@ -1194,7 +1285,7 @@ def settlement_probe(date: str, *, timeout: int, pause: float,
 
 def r1_coverage(date: str, *, timeout: int, pause: float,
                 sports: tuple[str, ...] = COVERAGE_SPORTS,
-                slice_seconds: float = 60.0) -> dict[str, Any]:
+                slice_seconds: float = 45.0) -> dict[str, Any]:
     """Can each sport produce a rankable field for this date?
 
     This calls the production capture path rather than a probe-local copy
@@ -2018,6 +2109,17 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
     report["stage_seconds"]["settlement_probe"] = round(
         time.monotonic() - stage_started, 1)
     emit_section("settlement_probe", report["settlement_probe"])
+
+    # The production capture path, end to end. Proving capture_board works
+    # is not the same as proving the collector writes something the
+    # evaluator can read.
+    stage_started = time.monotonic()
+    report["collector_end_to_end"] = collector_end_to_end(
+        date, timeout=timeout, pause=pause)
+    report["stage_seconds"]["collector_end_to_end"] = round(
+        time.monotonic() - stage_started, 1)
+    emit_section("collector_end_to_end", report["collector_end_to_end"])
+
     stage_started = time.monotonic()
 
     # Cricket is left out until its partially-rendered kickoff column is
@@ -2025,7 +2127,7 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
     # while costing eight requests that rugby and mma can use.
     report["horizon_coverage"] = horizon_coverage(
         date, timeout=timeout, pause=pause,
-        sports=("rugby", "mma"))
+        sports=("rugby",))
     report["stage_seconds"]["horizon_coverage"] = round(
         time.monotonic() - stage_started, 1)
     emit_section("horizon_coverage", report["horizon_coverage"])
@@ -2785,7 +2887,8 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     # One annotation per section: a single blob silently truncates at ~3000
     # characters and the interesting result is usually last.
     sections = (
-        "render_clock", "stage_seconds", "settlement_probe", "r1_coverage",
+        "render_clock", "stage_seconds", "settlement_probe",
+        "collector_end_to_end", "r1_coverage",
         "horizon_coverage",
         "capture_contract",
         "coverage_sweep", "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",

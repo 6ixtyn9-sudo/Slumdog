@@ -722,13 +722,16 @@ BODY_FORMAT = "columns_v1"
 
 #: Columns a D+1 settlement needs on top of identity: the score and the
 #: status that says the score is final.
+# Settling is a different job from ranking and needs a different board.
+# Only these five are read by settled_rows: the link (identity and the
+# row's own day), the two names, the score and the status. Fetching the
+# other three cost three requests per board and bought nothing - and it
+# was not free, because a column is a request: every settlement_probe run
+# up to 36404825813 spent its whole time slice and graded nothing.
 SETTLEMENT_COLUMN_SELECTORS: dict[str, str] = {
     "link": ".tnms",
     "home": ".homeTeam",
     "away": ".awayTeam",
-    "kickoff": ".date_bah",
-    "probabilities": ".fprc",
-    "pick": ".forepr",
     "score": ".lscr_td",
     "status": ".scoreLnk",
 }
@@ -736,7 +739,7 @@ SETTLEMENT_COLUMN_SELECTORS: dict[str, str] = {
 #: A settlement capture without these has nothing to grade: an empty score
 #: column on a results board is a refusal to answer, not a sport that lacks
 #: the field.
-SETTLEMENT_REQUIRED_COLUMNS = REQUIRED_COLUMNS + ("score", "status")
+SETTLEMENT_REQUIRED_COLUMNS = tuple(SETTLEMENT_COLUMN_SELECTORS)
 
 #: Statuses that mean the score on the board is final. Anything else — live,
 #: postponed, abandoned — is not settled and must not be graded.

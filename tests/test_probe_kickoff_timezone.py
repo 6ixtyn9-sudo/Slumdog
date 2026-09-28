@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 import datetime as dt
 import json
+from pathlib import Path
 
 import pytest
 
@@ -2632,3 +2633,132 @@ class TestAnUnparseableJsonEndpointSaysWhatItGot:
         monkeypatch.setattr(probe, "fetch", lambda *a, **k: None)
         assert probe.football_utc_kickoffs("2026-09-29", timeout=1) == {}
         assert probe.FOOTBALL_JSON_FINGERPRINT == {}
+
+
+class TestTheProductionPathIsDrivenEndToEnd:
+    """Proving capture_board works is not the same as proving the
+    collector writes something the evaluator can read. Everything between
+    them — serialise, receipt, disk, loader — had only ever been exercised
+    by tests."""
+
+    def _run(self, monkeypatch, *, capture, records=None, raises=None):
+        import scripts.probe_kickoff_timezone as probe
+
+        class _Collector:
+            def __init__(self, root=None, **kwargs):
+                self.root = Path(root)
+
+            def capture_selected(self, target_date, sports=None, force=False,
+                                 receipt_name=None, pause_seconds=0):
+                if raises:
+                    raise raises
+                reports = self.root / "data" / "reports"
+                reports.mkdir(parents=True, exist_ok=True)
+                (reports / receipt_name).write_text(json.dumps(capture))
+                return []
+
+        monkeypatch.setattr("slumdog.forebet.ForebetCollector", _Collector)
+
+        class _Loaded:
+            def __init__(self, rows):
+                self.records = rows
+
+        monkeypatch.setattr(
+            "slumdog.capture_loader.load_capture_records",
+            lambda **kwargs: _Loaded(records or []))
+        return probe.collector_end_to_end("2026-09-29", timeout=1, pause=0)
+
+    def _record(self, event_id="hockey:387418"):
+        class _R:
+            def __init__(self):
+                self.event_id = event_id
+                self.participant_1, self.participant_2 = "Sportul", "Gyergyoi"
+                self.probability_1, self.probability_2 = 0.03, 0.97
+                self.kickoff = "29/09/2026 19:00"
+        return _R()
+
+    def test_a_capture_that_parses_is_reported_with_its_route(
+            self, monkeypatch):
+        record = self._run(
+            monkeypatch,
+            capture={"captured": [{"route": "relay_columns",
+                                   "body_format": "columns_v1",
+                                   "bytes": 4096,
+                                   "body_path": "data/raw/x.txt"}],
+                     "failures": []},
+            records=[self._record()])
+        assert record["route"] == "relay_columns"
+        assert record["body_format"] == "columns_v1"
+        assert record["parsed_events"] == 1
+        assert record["top_by_probability"]["event_id"] == "hockey:387418"
+        assert "produced events" in record["verdict"]
+
+    def test_a_capture_that_parses_to_nothing_is_not_called_a_success(
+            self, monkeypatch):
+        """A board that writes bytes and yields no events produces no picks
+        in the nightly job, however good the board looked."""
+        record = self._run(
+            monkeypatch,
+            capture={"captured": [{"route": "relay_columns"}],
+                     "failures": []},
+            records=[])
+        assert record["parsed_events"] == 0
+        assert "zero events" in record["verdict"]
+
+    def test_an_unreadable_capture_is_reported_not_raised(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        class _Collector:
+            def __init__(self, root=None, **kwargs):
+                self.root = Path(root)
+
+            def capture_selected(self, target_date, sports=None, **kwargs):
+                reports = self.root / "data" / "reports"
+                reports.mkdir(parents=True, exist_ok=True)
+                (reports / kwargs["receipt_name"]).write_text(
+                    json.dumps({"captured": [{"route": "relay_columns"}],
+                                "failures": []}))
+                return []
+
+        monkeypatch.setattr("slumdog.forebet.ForebetCollector", _Collector)
+
+        def _boom(**kwargs):
+            raise ValueError("body_format columns_v1 not understood")
+
+        monkeypatch.setattr("slumdog.capture_loader.load_capture_records",
+                            _boom)
+        record = probe.collector_end_to_end("2026-09-29", timeout=1, pause=0)
+        assert "unreadable" in record["verdict"]
+        assert "columns_v1" in record["verdict"]
+
+    def test_a_failed_capture_is_reported_not_raised(self, monkeypatch):
+        record = self._run(monkeypatch, capture={},
+                           raises=RuntimeError("relay down"))
+        assert "capture failed" in record["verdict"]
+        assert "relay down" in record["verdict"]
+
+    def test_nothing_is_written_into_the_repository(self, monkeypatch):
+        """The probe must never leave a capture behind: a board fetched for
+        diagnosis is not evidence anybody decided from."""
+        import scripts.probe_kickoff_timezone as probe
+
+        seen: dict = {}
+
+        class _Collector:
+            def __init__(self, root=None, **kwargs):
+                seen["root"] = Path(root)
+                self.root = Path(root)
+
+            def capture_selected(self, target_date, sports=None, **kwargs):
+                reports = self.root / "data" / "reports"
+                reports.mkdir(parents=True, exist_ok=True)
+                (reports / kwargs["receipt_name"]).write_text(
+                    json.dumps({"captured": [], "failures": []}))
+                return []
+
+        monkeypatch.setattr("slumdog.forebet.ForebetCollector", _Collector)
+        monkeypatch.setattr("slumdog.capture_loader.load_capture_records",
+                            lambda **k: type("L", (), {"records": []})())
+        probe.collector_end_to_end("2026-09-29", timeout=1, pause=0)
+        assert not seen["root"].exists()   # temporary root, cleaned up
+        assert Path("data/reports/capture_probe_2026-09-29.json").exists() is False
