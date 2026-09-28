@@ -1230,6 +1230,14 @@ def collector_end_to_end(date: str, *, timeout: int, pause: float,
         captured = payload.get("captured") or []
         record["captured"] = len(captured)
         record["failures"] = (payload.get("failures") or [])[:2]
+        # 403 and 422 are different animals wearing one failure string:
+        # 422 is "your selector matched nothing", 403 is "you are being
+        # refused". Counting them per run is how the difference between a
+        # wrong selector and a rate limit became visible at all.
+        codes = Counter(re.findall(
+            r"HTTP (\d{3})", " ".join(payload.get("failures") or [])))
+        if codes:
+            record["column_http"] = dict(codes.most_common())
         if captured:
             first = captured[0]
             record["route"] = first.get("route")

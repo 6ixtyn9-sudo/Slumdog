@@ -2972,3 +2972,32 @@ class TestDiagnosingA422:
 
         monkeypatch.setattr(probe, "relay_get_selector", _boom)
         assert "451" in probe.diagnose_board("https://f/b", timeout=1)["error"]
+
+
+class TestTheFailureCodesAreCounted:
+    """422 is 'your selector matched nothing'; 403 is 'you are being
+    refused'. Reading them out of a prose failure string by eye is how
+    five runs mistook one for the other."""
+
+    def test_codes_are_tallied_from_the_receipt(self, monkeypatch,
+                                                 tmp_path):
+        import scripts.probe_kickoff_timezone as probe
+
+        class _Collector:
+            def __init__(self, root=None, **kwargs):
+                self.root = Path(root)
+
+            def capture_selected(self, target_date, sports=None, **kwargs):
+                reports = self.root / "data" / "reports"
+                reports.mkdir(parents=True, exist_ok=True)
+                (reports / kwargs["receipt_name"]).write_text(json.dumps({
+                    "captured": [],
+                    "failures": ["volleyball:ValueError: .tnms: HTTP 403; "
+                                 ".awayTeam: HTTP 403; .fprc: HTTP 422"]}))
+                return []
+
+        monkeypatch.setattr("slumdog.forebet.ForebetCollector", _Collector)
+        monkeypatch.setattr("slumdog.capture_loader.load_capture_records",
+                            lambda **k: type("L", (), {"records": []})())
+        record = probe.collector_end_to_end("2026-09-29", timeout=1, pause=0)
+        assert record["column_http"] == {"403": 2, "422": 1}
