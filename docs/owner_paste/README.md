@@ -25,6 +25,48 @@ The staged copy is deleted rather than kept as a record — git history is the
 record. `tests/test_workflow_persist_contract.py` now guards the live file
 directly, so the gap cannot silently reopen.
 
+## `forward_shadow.yml` — pending, staged 2026-09-28: persist step must survive cancellation
+
+**Proven, not inferred:** Forward Shadow #33 (run 36426785929) was dispatched
+2026-09-28T13:10:59Z and cancelled by the owner at 15:07:37Z after its one
+real step ran 1h56m without finishing (the run this session was told to read
+end-to-end — see `HANDOFF.md`). GitHub's own record for that job
+(`gh api repos/6ixtyn9-sudo/Slumdog/actions/jobs/108942599581`) shows:
+
+```
+step 6 "Settle overdue predictions ... forward batch ..." conclusion=cancelled
+step 7 "Persist small evidence to git (permanent ledger)"  conclusion=skipped
+step 8 "Upload full evidence as artifacts (30d retention)" conclusion=success
+```
+
+Step 8 carries `if: always()`; step 7 carries no `if:` at all, so it defaults
+to `if: success()` and was skipped. The D+1 settlement pass and the
+completion pass both run — and finish, and write their small-evidence files
+to disk — *before* the forward capture pass that is the part actually
+overrunning (Priority 1 in `HANDOFF.md`). Cancelling or timing out therefore
+discards graded settlements and receipts that had already finished, not just
+whatever the forward pass had in flight. The only copy of that evidence is
+now the 30-day artifact `forward-shadow-36426785929`, which nothing in this
+sandbox — `gh`, `curl`, nor the web-fetch tool — can currently read (see
+`HANDOFF.md`, "network reachability, corrected again").
+
+**The fix is one line:** `if: always()` on the persist step, nothing else.
+Small-evidence writes are already isolated per date and already the narrow,
+vetted glob list from the 2026-09-27 cycle above — running that step
+unconditionally does not widen what gets committed, only whether it runs
+when an earlier step failed or the job was cancelled/timed out. Staged at
+`docs/owner_paste/forward_shadow.yml`; `tests/test_workflow_persist_contract.py`
+(`TestTheStagedFixIsNarrowAndCorrect`) pins that the staged copy differs from
+the live file by exactly that one added line — nothing else — so pasting it
+cannot smuggle in a wider change.
+
+**To apply:** open `docs/owner_paste/forward_shadow.yml` on this branch,
+copy the whole file, paste it over `.github/workflows/forward_shadow.yml` on
+`main` in the GitHub web UI, commit. Then delete the staged copy (git history
+is the record, same as the 2026-09-27 paste) and move
+`TestTheStagedFixIsNarrowAndCorrect`'s two checks onto `live_text` in
+`TestEveryDeclaredArtifactIsPersisted` / `TestThePersistStepStaysNarrow`.
+
 ## `probe_kickoff_timezone.yml` — one-shot kickoff-timezone probe
 
 **Why:** the EVENT_DAY track currently refuses every sport except football
