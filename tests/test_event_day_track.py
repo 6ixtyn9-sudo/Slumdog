@@ -744,3 +744,90 @@ class TestFinishedRowsNeverEnterTheTrack:
             _html("88 - 81"), "basketball", TARGET_DATE,
             f"{TARGET_DATE}T04:00:00Z", "https://x.invalid")
         assert finished == []
+
+
+class TestAMeasuredClockOpensTheGate:
+    """The timezone hold is not a rule about sports, it is a rule about
+    evidence. When the renderer's offset has been measured in the same
+    capture, a rendered kickoff becomes an instant and the hold no longer
+    applies — and when it has not, nothing changes at all."""
+
+    def _clock(self, offset_minutes=-300):
+        from slumdog.render_clock import RenderClock
+
+        return RenderClock(
+            offset_minutes=offset_minutes, samples=40, distinct_hours=6,
+            target_date=TARGET_DATE, measured_at=f"{TARGET_DATE}T04:00:00Z")
+
+    def test_a_rendered_kickoff_is_converted_and_admitted(self):
+        """Rendered 18:00 on a renderer five hours behind UTC is 23:00 UTC,
+        seventeen hours after a 06:00 decision."""
+        decision = dt.datetime(2026, 9, 26, 6, 0, tzinfo=dt.timezone.utc)
+        rec = _record("hockey:1", sport="hockey", draw=None,
+                      kickoff="26/09/2026 18:00")
+        timed, rejected, _, reasons = _timing_classify_event_day(
+            [rec], target_date=TARGET_DATE, decision_dt=decision,
+            min_lead_minutes=MIN_EVENT_DAY_LEAD_MINUTES,
+            render_clock=self._clock())
+        assert [r.event_id for r in timed] == ["hockey:1"]
+        assert rejected == 0
+        assert reasons["KICKOFF_TIMEZONE_NOT_PROVEN_UTC"] == 0
+
+    def test_the_conversion_can_refuse_an_event_that_already_started(self):
+        """The offset is applied, not assumed away: a renderer AHEAD of UTC
+        makes a match look later than it is, and that is exactly the
+        leakage the hold existed to prevent."""
+        decision = dt.datetime(2026, 9, 26, 6, 0, tzinfo=dt.timezone.utc)
+        rec = _record("hockey:1", sport="hockey", draw=None,
+                      kickoff="26/09/2026 07:00")
+        timed, _, _, reasons = _timing_classify_event_day(
+            [rec], target_date=TARGET_DATE, decision_dt=decision,
+            min_lead_minutes=MIN_EVENT_DAY_LEAD_MINUTES,
+            render_clock=self._clock(offset_minutes=120))
+        # Rendered 07:00 on a clock two hours ahead is 05:00 UTC — an hour
+        # before the decision was even taken.
+        assert timed == []
+        assert reasons["INSUFFICIENT_LEAD_BEFORE_KICKOFF"] == 1
+
+    def test_without_a_clock_nothing_changes(self):
+        decision = dt.datetime(2026, 9, 26, 6, 0, tzinfo=dt.timezone.utc)
+        rec = _record("hockey:1", sport="hockey", draw=None,
+                      kickoff="26/09/2026 18:00")
+        timed, _, _, reasons = _timing_classify_event_day(
+            [rec], target_date=TARGET_DATE, decision_dt=decision,
+            min_lead_minutes=MIN_EVENT_DAY_LEAD_MINUTES)
+        assert timed == []
+        assert reasons["KICKOFF_TIMEZONE_NOT_PROVEN_UTC"] == 1
+
+    def test_an_unreadable_rendered_kickoff_is_still_refused(self):
+        decision = dt.datetime(2026, 9, 26, 6, 0, tzinfo=dt.timezone.utc)
+        rec = _record("hockey:1", sport="hockey", draw=None, kickoff="TBD")
+        timed, _, _, reasons = _timing_classify_event_day(
+            [rec], target_date=TARGET_DATE, decision_dt=decision,
+            min_lead_minutes=MIN_EVENT_DAY_LEAD_MINUTES,
+            render_clock=self._clock())
+        assert timed == []
+        assert reasons["KICKOFF_MISSING_OR_UNPARSEABLE"] == 1
+
+    def test_football_is_never_routed_through_the_conversion(self):
+        """Football's kickoff is already an instant from the tz=0 JSON.
+        Converting it would apply the offset twice."""
+        decision = dt.datetime(2026, 9, 26, 6, 0, tzinfo=dt.timezone.utc)
+        rec = _record("football:1", kickoff=f"{TARGET_DATE} 23:00")
+        timed, _, _, _ = _timing_classify_event_day(
+            [rec], target_date=TARGET_DATE, decision_dt=decision,
+            min_lead_minutes=MIN_EVENT_DAY_LEAD_MINUTES,
+            render_clock=self._clock(offset_minutes=-300))
+        assert [r.event_id for r in timed] == ["football:1"]
+
+    def test_a_shifted_kickoff_leaving_the_target_date_is_refused(self):
+        decision = dt.datetime(2026, 9, 26, 6, 0, tzinfo=dt.timezone.utc)
+        rec = _record("hockey:1", sport="hockey", draw=None,
+                      kickoff="26/09/2026 22:00")
+        # 22:00 on a clock five hours behind UTC is 03:00 the NEXT day.
+        timed, _, _, reasons = _timing_classify_event_day(
+            [rec], target_date=TARGET_DATE, decision_dt=decision,
+            min_lead_minutes=MIN_EVENT_DAY_LEAD_MINUTES,
+            render_clock=self._clock())
+        assert timed == []
+        assert reasons["KICKOFF_NOT_ON_TARGET_DATE"] == 1

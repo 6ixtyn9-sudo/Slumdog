@@ -216,6 +216,46 @@ stage. Two rules now hold:
   runs out catches `BudgetExhausted` and records `stopped: ...` rather than
   taking the run down with it.
 
+## Recovering The Renderer's Clock
+
+`UTC_KICKOFF_PROVEN_SPORTS` held football alone because football is
+captured from `getrs.php?...&tz=0`, which pins the timezone, while every
+other sport comes from a rendered listing whose times follow the relay's
+egress IP — measured at five hours out on 2026-09-26 (match 2468143
+rendered `09/25/2026 9:00 PM` against a `2026-09-26 02:00:00` JSON
+instant). That hold, not capture ability, is why thirteen sports produce
+nothing.
+
+`slumdog/render_clock.py` performs the per-capture calibration that
+constant's note asks for. Football is the one sport visible through **both**
+channels in the same run, and the same renderer serves every other sport
+from the same egress, so the offset measured on football is a measurement
+of the renderer — not an assumption about hockey.
+
+It refuses unless all of the following hold, because a wrong offset does
+not look wrong: it yields a kickoff that parses, sorts and prints
+perfectly while admitting a match that has already started.
+
+- at least `MIN_CALIBRATION_SAMPLES` (20) matches joined **by the site's own
+  match id**, never by name;
+- every joined match showing the *same* offset — scatter means a per-league
+  timezone or a DST boundary, and no single number is right for all of them;
+- at least `MIN_DISTINCT_RENDERED_HOURS` (3) distinct rendered hours, so an
+  offset cannot be confused with a coincidence;
+- an offset inside [UTC-12, UTC+14];
+- the calibration belonging to **this** date and run. The egress IP can
+  change between runs, so a calibration is never carried forward.
+
+Every refusal path and `load_render_clock` failure returns `None`, which is
+byte-identical to having no calibration at all: football only. A broken
+calibration must never be more permissive than no calibration.
+
+When a clock is present the event-day track converts a rendered kickoff and
+records the whole basis in the payload — `timing_contract.render_clock` and
+`kickoff_timezone_basis` — and commits `render_clock_offset_minutes` to the
+input digest, because a run that converted kickoffs made a different timing
+claim from one that refused them.
+
 ## Documentation Governance
 
 - `docs/STATE.md` is canonical current truth, not append-only diary. Git history is history.

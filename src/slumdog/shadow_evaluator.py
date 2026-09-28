@@ -61,6 +61,7 @@ from .capture_loader import (
     load_capture_records,
 )
 from .dataset import build_pre_event_features
+from .render_clock import load_render_clock
 from .history_loader import HistoryLoadResult, load_valid_history, DEFAULT_MAX_INTERIM_BYTES
 from .shadow_contracts import PreEventRecord, key_of
 from .underdog import identify_forebet_underdog
@@ -795,6 +796,7 @@ def _timing_classify_event_day(
     target_date: str,
     decision_dt: _dt.datetime,
     min_lead_minutes: int,
+    render_clock=None,
 ) -> tuple[list[PreEventRecord], int, int, dict[str, int]]:
     """Stage 1 for the EVENT_DAY track.
 
@@ -829,14 +831,23 @@ def _timing_classify_event_day(
         if cap_at > decision_dt:
             reasons["CAPTURED_AFTER_DECISION"] += 1
             continue
-        if r.sport not in UTC_KICKOFF_PROVEN_SPORTS:
-            # The lead proof is only as good as the kickoff's timezone.
-            # See UTC_KICKOFF_PROVEN_SPORTS: HTML boards render in the
-            # relay's local timezone, so their kickoff cannot be proven
+        if r.sport in UTC_KICKOFF_PROVEN_SPORTS:
+            kickoff_dt = parse_kickoff_utc(r.kickoff)
+        elif render_clock is not None:
+            # The kickoff's timezone is no longer unknown for this capture:
+            # football was seen through both the tz=0 JSON and the renderer
+            # in the same run, and the gap between them is the renderer's
+            # offset. The same renderer served this record, so its rendered
+            # time converts to an instant by measurement rather than by
+            # assumption. See slumdog.render_clock for what the measurement
+            # refuses.
+            kickoff_dt = render_clock.to_utc(r.kickoff)
+        else:
+            # No calibration for this capture. HTML boards render in the
+            # relay's local timezone, so the kickoff cannot be proven
             # pre-event. Refuse instead of assuming UTC.
             reasons["KICKOFF_TIMEZONE_NOT_PROVEN_UTC"] += 1
             continue
-        kickoff_dt = parse_kickoff_utc(r.kickoff)
         if kickoff_dt is None:
             reasons["KICKOFF_MISSING_OR_UNPARSEABLE"] += 1
             continue
@@ -1146,6 +1157,7 @@ def _emit_run(
     repo_root: Path,
     decision_clock: _dt.datetime | None = None,
     exclude_event_ids: frozenset[str] | None = None,
+    render_clock=None,
 ) -> ShadowRunResult:
     decision_dt = decision_clock or _now_utc()
     decision_committed_at = _now_utc_iso(decision_dt)
@@ -1219,6 +1231,7 @@ def _emit_run(
             target_date=target_date,
             decision_dt=decision_dt,
             min_lead_minutes=policy.min_lead_minutes,
+            render_clock=render_clock,
         )
     else:
         timed_records, timing_rejected, malformed_or_unkeyable = _timing_classify(
@@ -1610,6 +1623,11 @@ def _emit_run(
         input_digest_payload["timing_track"] = policy.name
         input_digest_payload["min_lead_minutes_before_kickoff"] = (
             policy.min_lead_minutes)
+        # A run that converted rendered kickoffs with a measured offset made
+        # a different timing claim from one that refused them, so the
+        # calibration is an input to the decision, not a footnote.
+        input_digest_payload["render_clock_offset_minutes"] = (
+            None if render_clock is None else render_clock.offset_minutes)
     input_digest = _canonical_sha256(input_digest_payload)
 
     # ``decision_digest`` commits to the conflict-resolved pool,
@@ -1699,6 +1717,13 @@ def _emit_run(
             "satisfies_frozen_24h_contract": False,
             "never_pooled_with_standard_track": True,
         }
+        # Anything reading this payload can see whether a kickoff was known
+        # to be UTC or converted, by how much, and on what evidence.
+        payload["timing_contract"]["render_clock"] = (
+            None if render_clock is None else render_clock.as_dict())
+        payload["timing_contract"]["kickoff_timezone_basis"] = (
+            "tz0_json_only" if render_clock is None
+            else "measured_render_offset")
     payload_bytes = canonical_json_bytes(payload)
     fd_p, tmp_p = tempfile.mkstemp(prefix="shadow_selections.", suffix=".json.tmp", dir=str(artifact_dir))
     try:
@@ -1859,6 +1884,7 @@ def evaluate_from_disk(
     decision_clock: _dt.datetime | None = None,
     history_max_interim_bytes: int | None = None,
     exclude_event_ids: frozenset[str] | None = None,
+    render_clock_path: str | Path | None = None,
 ) -> ShadowRunResult:
     """Top-level disk-to-artifact orchestration.
 
@@ -1915,6 +1941,11 @@ def evaluate_from_disk(
             block_reason=f"HISTORY_LOAD_FAILED:{type(e).__name__}:{e}",
             repo_root=repo_root,
         )
+    # A calibration is only ever read for the date it was measured on, and
+    # a missing or unreadable one simply leaves the run where it was:
+    # football only. It can never make a run stricter or looser by accident,
+    # because failure is indistinguishable from absence here by design.
+    render_clock = load_render_clock(render_clock_path, target_date)
     return _emit_run(
         target_date=target_date,
         capture_result=capture_result,
@@ -1923,6 +1954,7 @@ def evaluate_from_disk(
         repo_root=repo_root,
         decision_clock=decision_clock,
         exclude_event_ids=exclude_event_ids,
+        render_clock=render_clock,
     )
 
 

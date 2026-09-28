@@ -765,3 +765,20 @@ def settled_rows(board: BoardColumns) -> list[dict[str, Any]]:
             "source_url": url,
         })
     return out
+
+
+def rendered_kickoffs(board: BoardColumns) -> dict[str, str]:
+    """Event id -> the listing text the renderer produced for it.
+
+    One half of the render-clock calibration: the other half is the same
+    matches' instants from the tz=0 JSON. Keyed by the site's own match id
+    so the join is exact rather than by name.
+    """
+    out: dict[str, str] = {}
+    for row in board.rows():
+        cell = row.get("link", "")
+        url = match_url(cell)
+        if not url:
+            continue
+        out[f"{board.sport}:{event_id_from_url(url)}"] = cell
+    return out
