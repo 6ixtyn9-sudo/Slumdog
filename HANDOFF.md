@@ -48,6 +48,33 @@ underneath it, not a substitute for it.
 diff qualifies and auto-triggers the workflow per the trigger fix below) whose resulting run shows `canary.healthy == true` for its full duration, `trial_valid == true`, and reports near-board requests + outcome,
 far-board requests + outcome, and the canary state explicitly. That measurement is recorded in a follow-up entry once the run completes, not assumed here.
 
+**Re-measurement result (same push that landed this entry, run `36461512749`, job `probe`=`109060945399`, commit `04f6b77`): the canary caught a SECOND invalid trial. Item (iii) is still not closed.**
+
+```
+canary: {"checked": true, "healthy": false, "sport": "football",
+         "reason": "football tz=0 JSON looked like 'challenge_page' (272 bytes)"}
+circuit_breaker_comparison: {"trial_valid": false,
+  "invalid_reason": "canary (football tz=0 JSON) failed this run (football tz=0 JSON
+    looked like 'challenge_page' (272 bytes)) \u2014 near/far refusals cannot be
+    attributed to publication timing; re-run when the canary is healthy before
+    treating near_false_abort/far_breaker_tripped as evidence about the breaker",
+  "near_requests": 12, "near_outcome": "RAISED", "near_false_abort": false,
+  "far_requests": 3, "far_outcome": "COVERAGE_GAP", "far_breaker_tripped": true,
+  "far_requests_vs_measured_near_requests": -9,
+  "no_breaker_worst_case_requests": 24}
+```
+
+Forebet's Cloudflare WAF was challenging this runner's whole session again (`football tz=0 JSON` came back as a 272-byte "Performing security verification" page — the exact same signature as `36455080098`, and
+the volleyball board itself came back a 210-byte "Just a moment..." bot-check page per the run's own annotations). The tooling worked exactly as designed this time: **`trial_valid` is `false` and `invalid_reason`
+names the canary explicitly, so this run's `near_requests=12`/`far_requests=3`/`far_breaker_tripped=true` numbers are correctly excluded from any conclusion about the breaker's publication-gap behavior** — this
+is the mechanism landing in this same entry doing its job on the very first re-run, rather than a second silent mislabel. Note also `near_outcome="RAISED"` (a `BudgetExhausted` exception on the near board, not a
+clean `COVERAGE_GAP`) — a different failure shape from `36455080098`'s near-board 422, itself further evidence this WAF condition degrades requests inconsistently and is exactly the kind of run a canary is needed
+to flag rather than trust at face value.
+
+**Item (iii) remains open.** Two invalid trials now on record (`36455080098`, `36461512749`), both correctly labelled invalid by the canary, zero valid trials. Closing it needs a future push landing on a run
+where Forebet's WAF is not actively challenging this runner — no code fix will produce that condition; it requires re-running until the canary happens to read `healthy: true`. The next session should re-push
+(any touch to `scripts/probe_kickoff_timezone.py` auto-triggers the workflow) and check `report["canary"]["healthy"]` before reading anything else from that run's `circuit_breaker_comparison`.
+
 **2026-09-28 (same session, continued a third time) — RUN 36426785929's LOG IS PERMANENTLY CLOSED (owner instruction, do not re-ask); PROBE WORKFLOW TRIGGER FIX LANDED ON `main` AND MERGED IN; forward_shadow_batch.py NOW EMITS PER-PHASE CHECK-RUN ANNOTATIONS.**
 
 **Stop asking for run 36426785929 / job 108942599581's log — closed by explicit owner instruction.** The owner diagnosed, with verified evidence, exactly why it was never readable: GitHub's raw log/artifact endpoints
