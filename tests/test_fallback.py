@@ -19,31 +19,61 @@ def test_fetch_with_fallback_falls_back_to_direct(monkeypatch):
 
     monkeypatch.setattr(forebet, "relay_get", bad_relay)
     monkeypatch.setattr(forebet, "direct_get", lambda url, timeout=40, max_retries=3: b"direct-body")
-    # On a GitHub runner the direct fallback is intentionally skipped (fail
-    # fast); locally it falls back. The test asserts whichever the env implies.
-    if forebet.on_github_runner():
-        with pytest.raises(RuntimeError, match="relay auth-walled"):
-            forebet.fetch_with_fallback("relay", "direct")
-    else:
-        body, route = forebet.fetch_with_fallback("relay", "direct")
-        assert route == "direct"
-        assert body == b"direct-body"
+    # Owner finding, 2026-09-28 (direct-vs-relay probe): direct is now
+    # attempted EVERY time relay fails, MEASURED this run, on every
+    # network — a static on_github_runner() skip went stale silently.
+    body, route = forebet.fetch_with_fallback("relay", "direct")
+    assert route == "direct"
+    assert body == b"direct-body"
 
 
-def test_fetch_with_fallback_fails_fast_on_github_runner(monkeypatch):
+def test_fetch_with_fallback_now_tries_direct_even_on_a_github_runner(monkeypatch):
+    # Owner finding, 2026-09-28 (direct-vs-relay probe, run 36470920157):
+    # skipping direct on a GitHub runner was a hardcoded assumption from a
+    # measurement weeks old that went stale silently. Direct must now be
+    # attempted regardless of on_github_runner()'s answer.
     def bad_relay(url, timeout=45, max_retries=3):
         raise RuntimeError("relay auth-walled")
 
     monkeypatch.setattr(forebet, "relay_get", bad_relay)
     monkeypatch.setattr(forebet, "on_github_runner", lambda: True)
-    direct_called = {"n": 0}
-    monkeypatch.setattr(
-        forebet, "direct_get",
-        lambda url, timeout=40, max_retries=3: direct_called.__setitem__("n", direct_called["n"] + 1) or b"direct",
-    )
-    with pytest.raises(RuntimeError, match="relay auth-walled"):
+    direct_called = {"n": 0, "max_retries": None}
+
+    def fake_direct(url, timeout=40, max_retries=3):
+        direct_called["n"] += 1
+        direct_called["max_retries"] = max_retries
+        return b"direct-body"
+
+    monkeypatch.setattr(forebet, "direct_get", fake_direct)
+    body, route = forebet.fetch_with_fallback("relay", "direct")
+    assert route == "direct"
+    assert body == b"direct-body"
+    assert direct_called["n"] == 1
+    # Bounded to a single round regardless of this call's own max_retries
+    # (a bad run should cost one extra request, not repeat the relay's
+    # retry budget).
+    assert direct_called["max_retries"] == 1
+
+
+def test_fetch_with_fallback_names_both_failures_when_both_paths_are_down(monkeypatch):
+    # The outcome must stay visible (receipt/failures list) rather than
+    # silently collapsing to "direct wasn't even tried" or losing the
+    # direct-side reason entirely.
+    def bad_relay(url, timeout=45, max_retries=3):
+        raise RuntimeError("relay auth-walled")
+
+    def bad_direct(url, timeout=40, max_retries=3):
+        raise ValueError("direct also refused")
+
+    monkeypatch.setattr(forebet, "relay_get", bad_relay)
+    monkeypatch.setattr(forebet, "direct_get", bad_direct)
+    with pytest.raises(RuntimeError) as excinfo:
         forebet.fetch_with_fallback("relay", "direct")
-    assert direct_called["n"] == 0  # direct never attempted on a runner
+    message = str(excinfo.value)
+    assert "relay auth-walled" in message
+    assert "direct also refused" in message
+    assert "measured, not assumed" in message
+
 
 
 def test_direct_get_raises_when_all_transports_fail(monkeypatch):
@@ -96,6 +126,15 @@ def test_capture_selected_reuses_existing_same_day_capture(monkeypatch, tmp_path
         return cap
 
     monkeypatch.setattr(ForebetCollector, "_fetch", fake_fetch)
+    # Pre-existing, unrelated to this file's fetch_with_fallback coverage:
+    # capture_selected also fetches football's extra-market sidecar via a
+    # real relay_get_markdown call unless mocked, which — depending on
+    # what the relay actually returns this moment — can retry with
+    # multi-second backoff and turn this into a real-network-dependent,
+    # potentially very slow test. Kept a no-op here so this test measures
+    # only what it says it measures (fetch/reuse counting), deterministically.
+    monkeypatch.setattr(
+        "slumdog.forebet.fetch_football_markets", lambda *a, **k: None)
     c = ForebetCollector(tmp_path)
     # First call fetches all sports; second call reuses existing (no re-fetch).
     c.capture_selected("2026-08-19", ["football", "basketball"])

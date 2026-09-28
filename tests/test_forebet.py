@@ -578,11 +578,15 @@ class TestCanaryDiscriminatesPathBlockedFromPublicationGap:
 
 class TestSampleCanaryStandalone:
     """``sample_canary`` is the pre-flight version of ``_canary_state``:
-    one relay-path request, callable BEFORE any per-sport capture has
-    spent a single request — the check ``forward_shadow_batch.py`` now
-    runs before (and periodically during) its forward pass so a
-    relay-path WAF block never again grinds ~70 sport-dates through
-    their full retry budgets against a wall (run 36426785929).
+    a dual-path (relay, then direct on relay failure) request, callable
+    BEFORE any per-sport capture has spent a single request — the check
+    ``forward_shadow_batch.py`` now runs before (and periodically during)
+    its forward pass so a path WAF block never again grinds ~70 sport-dates
+    through their full retry budgets against a wall (run 36426785929).
+    Dual-path since 2026-09-28 (direct-vs-relay probe, run 36470920157):
+    mirrors ``fetch_with_fallback``'s now-measured-per-run direct fallback,
+    so the canary cannot abort a forward pass that a real capture would
+    actually have completed via direct.
     """
 
     def test_healthy_when_the_json_parses_cleanly(self, monkeypatch):
@@ -594,7 +598,8 @@ class TestSampleCanaryStandalone:
         result = sample_canary("2026-09-29", timeout=5)
         assert result == {
             "sport": "football", "checked": True, "healthy": True,
-            "reason": None, "sampled_at": result["sampled_at"],
+            "reason": None, "relay": {"ok": True, "reason": None},
+            "direct": None, "sampled_at": result["sampled_at"],
         }
         # sampled_at is a real UTC timestamp, not a placeholder.
         assert result["sampled_at"].endswith("+00:00")
@@ -608,11 +613,21 @@ class TestSampleCanaryStandalone:
         )
         monkeypatch.setattr(
             "slumdog.forebet.relay_get_markdown", lambda *a, **k: challenge)
+        monkeypatch.setattr(
+            "slumdog.forebet.direct_get",
+            lambda *a, **k: (_ for _ in ()).throw(
+                RuntimeError("direct also refused")))
         result = sample_canary("2026-09-29", timeout=5)
         assert result["checked"] is True
         assert result["healthy"] is False
         assert "challenge page" in result["reason"]
         assert str(len(challenge)) in result["reason"]
+        assert result["relay"] == {
+            "ok": False,
+            "reason": f"looked like a challenge page ({len(challenge)} bytes)",
+        }
+        assert result["direct"]["ok"] is False
+        assert "direct also refused" in result["direct"]["reason"]
 
     def test_unhealthy_when_the_fetch_itself_raises(self, monkeypatch):
         from slumdog.forebet import sample_canary
@@ -621,10 +636,16 @@ class TestSampleCanaryStandalone:
             raise TimeoutError("relay timed out")
 
         monkeypatch.setattr("slumdog.forebet.relay_get_markdown", _boom)
+        monkeypatch.setattr(
+            "slumdog.forebet.direct_get",
+            lambda *a, **k: (_ for _ in ()).throw(
+                TimeoutError("direct timed out too")))
         result = sample_canary("2026-09-29", timeout=5)
         assert result["checked"] is True
         assert result["healthy"] is False
         assert "TimeoutError" in result["reason"]
+        assert "relay timed out" in result["reason"]
+        assert "direct timed out too" in result["reason"]
 
     def test_unhealthy_when_the_body_is_not_challenge_but_still_unparseable(
             self, monkeypatch):
@@ -633,28 +654,90 @@ class TestSampleCanaryStandalone:
         monkeypatch.setattr(
             "slumdog.forebet.relay_get_markdown",
             lambda *a, **k: b"not json at all and not a challenge page")
+        monkeypatch.setattr(
+            "slumdog.forebet.direct_get",
+            lambda *a, **k: b"also not json at all")
         result = sample_canary("2026-09-29", timeout=5)
         assert result["checked"] is True
         assert result["healthy"] is False
         assert "failed to parse" in result["reason"]
 
+    def test_healthy_via_direct_when_relay_fails_but_direct_serves(
+            self, monkeypatch):
+        # Owner finding, 2026-09-28: a canary that only ever tested relay
+        # could abort a forward pass that a real capture would actually
+        # have completed via direct (fetch_with_fallback now tries both
+        # too). The canary must mirror that: healthy iff EITHER leg works.
+        from slumdog.forebet import sample_canary
+
+        monkeypatch.setattr(
+            "slumdog.forebet.relay_get_markdown",
+            lambda *a, **k: (_ for _ in ()).throw(
+                RuntimeError("relay challenged")))
+        monkeypatch.setattr(
+            "slumdog.forebet.direct_get", lambda *a, **k: b'[[{"id": 1}]]')
+        result = sample_canary("2026-09-29", timeout=5)
+        assert result["healthy"] is True
+        assert result["reason"] is None
+        assert result["relay"]["ok"] is False
+        assert result["direct"] == {"ok": True, "reason": None}
+
+    def test_direct_is_not_attempted_at_all_when_relay_already_succeeded(
+            self, monkeypatch):
+        # No reason to spend the extra request once relay has already
+        # answered the question.
+        from slumdog.forebet import sample_canary
+
+        direct_calls = {"n": 0}
+
+        def fake_direct(*a, **k):
+            direct_calls["n"] += 1
+            return b'[[{"id": 1}]]'
+
+        monkeypatch.setattr(
+            "slumdog.forebet.relay_get_markdown",
+            lambda *a, **k: b'[[{"id": 1}]]')
+        monkeypatch.setattr("slumdog.forebet.direct_get", fake_direct)
+        result = sample_canary("2026-09-29", timeout=5)
+        assert result["healthy"] is True
+        assert result["direct"] is None
+        assert direct_calls["n"] == 0
+
     def test_only_one_attempt_is_made_no_retry_on_a_refusal(self, monkeypatch):
         # Owner instruction, 2026-09-28: "Do not add retries or backoff to
         # cope with the WAF. It is a refusal, not congestion." The canary
-        # must ask relay_get_markdown for exactly one attempt.
+        # must ask relay_get_markdown for exactly one attempt, and — when
+        # it falls back — direct_get for exactly one attempt too.
         from slumdog.forebet import sample_canary
 
         seen_kwargs = {}
 
         def fake_relay_get_markdown(url, expected_url, timeout=45,
                                     max_retries=3):
-            seen_kwargs["max_retries"] = max_retries
+            seen_kwargs["relay_max_retries"] = max_retries
             return b'[[{"id": 1}]]'
 
         monkeypatch.setattr(
             "slumdog.forebet.relay_get_markdown", fake_relay_get_markdown)
         sample_canary("2026-09-29", timeout=5)
-        assert seen_kwargs["max_retries"] == 1
+        assert seen_kwargs["relay_max_retries"] == 1
+
+    def test_direct_fallback_also_gets_exactly_one_attempt(self, monkeypatch):
+        from slumdog.forebet import sample_canary
+
+        seen_kwargs = {}
+
+        monkeypatch.setattr(
+            "slumdog.forebet.relay_get_markdown",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("challenged")))
+
+        def fake_direct(url, timeout=40, max_retries=3):
+            seen_kwargs["direct_max_retries"] = max_retries
+            return b'[[{"id": 1}]]'
+
+        monkeypatch.setattr("slumdog.forebet.direct_get", fake_direct)
+        sample_canary("2026-09-29", timeout=5)
+        assert seen_kwargs["direct_max_retries"] == 1
 
     def test_defaults_to_todays_date_when_none_given(self, monkeypatch):
         from slumdog.forebet import sample_canary
@@ -673,3 +756,168 @@ class TestSampleCanaryStandalone:
         today = _dt.date.today().isoformat()
         assert today in seen["expected_url"]
         assert result["healthy"] is True
+
+
+class TestDiagnosticFetchesRecordStatusAndHeaders:
+    """Owner directive, 2026-09-28 (after run 36470920157): "Record the
+    STATUS CODE, not the exception class." ``direct_get_diagnostic``/
+    ``relay_get_diagnostic`` back ``direct_vs_relay_probe`` and must never
+    collapse a failure to an opaque exception name when the transport
+    actually returned an HTTP status.
+    """
+
+    def test_urllib_get_diagnostic_reports_status_and_a_header_snippet_on_success(
+            self, monkeypatch):
+        from slumdog import forebet
+
+        class _FakeResponse:
+            status = 200
+            headers = {"Server": "nginx", "Content-Type": "application/json",
+                      "Set-Cookie": "session=secret"}
+
+            def read(self):
+                return b'[[{"id": 1}]]'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(
+            forebet.urllib.request, "urlopen", lambda *a, **k: _FakeResponse())
+        result = forebet._urllib_get_diagnostic(
+            "https://www.forebet.com/x", 5, {"User-Agent": "test"})
+        assert result["ok"] is True
+        assert result["status"] == 200
+        assert result["headers"] == {"Server": "nginx",
+                                     "Content-Type": "application/json"}
+        # Set-Cookie is never persisted (owner directive: no sensitive
+        # headers in a public CI annotation).
+        assert "Set-Cookie" not in result["headers"]
+        assert result["body"] == b'[[{"id": 1}]]'
+
+    def test_urllib_get_diagnostic_reports_the_http_status_on_an_error_response(
+            self, monkeypatch):
+        import urllib.error
+        from slumdog import forebet
+
+        def _boom(*a, **k):
+            raise urllib.error.HTTPError(
+                "https://www.forebet.com/x", 403, "Forbidden",
+                {"Server": "cloudflare", "CF-Ray": "abc-DUR"}, None)
+
+        monkeypatch.setattr(forebet.urllib.request, "urlopen", _boom)
+        result = forebet._urllib_get_diagnostic(
+            "https://www.forebet.com/x", 5, {"User-Agent": "test"})
+        assert result["ok"] is False
+        assert result["status"] == 403
+        assert result["headers"]["Server"] == "cloudflare"
+        assert result["headers"]["CF-Ray"] == "abc-DUR"
+        assert "403" in result["error"]
+
+    def test_urllib_get_diagnostic_reports_no_status_on_a_connection_failure(
+            self, monkeypatch):
+        from slumdog import forebet
+
+        def _boom(*a, **k):
+            raise TimeoutError("connection timed out")
+
+        monkeypatch.setattr(forebet.urllib.request, "urlopen", _boom)
+        result = forebet._urllib_get_diagnostic(
+            "https://www.forebet.com/x", 5, {"User-Agent": "test"})
+        assert result["ok"] is False
+        assert result["status"] is None
+        assert "TimeoutError" in result["error"]
+
+    def test_direct_get_diagnostic_never_raises_and_reports_every_attempt(
+            self, monkeypatch):
+        from slumdog import forebet
+
+        monkeypatch.setattr(
+            forebet, "_urllib_get_diagnostic",
+            lambda *a, **k: {"ok": False, "transport": "urllib",
+                             "status": 403, "headers": {}, "error": "HTTP 403"})
+        monkeypatch.setattr(
+            "importlib.util.find_spec", lambda name: None)
+        result = forebet.direct_get_diagnostic("https://www.forebet.com/x", timeout=5)
+        assert result["ok"] is False
+        assert result["status"] == 403
+        assert len(result["attempts"]) == 1
+        assert result["attempts"][0]["transport"] == "urllib"
+        assert "body" not in result["attempts"][0]
+
+    def test_direct_get_diagnostic_falls_back_to_curl_cffi_when_urllib_fails(
+            self, monkeypatch):
+        from slumdog import forebet
+
+        monkeypatch.setattr(
+            forebet, "_urllib_get_diagnostic",
+            lambda *a, **k: {"ok": False, "transport": "urllib",
+                             "status": None, "headers": {},
+                             "error": "URLError: refused"})
+        monkeypatch.setattr("importlib.util.find_spec", lambda name: object())
+        monkeypatch.setattr(
+            forebet, "_cffi_get_diagnostic",
+            lambda url, impersonate, timeout: {
+                "ok": True, "transport": f"curl_cffi:{impersonate}",
+                "status": 200, "headers": {}, "body": b"real body"})
+        result = forebet.direct_get_diagnostic("https://www.forebet.com/x", timeout=5)
+        assert result["ok"] is True
+        assert result["status"] == 200
+        assert result["body"] == b"real body"
+        # Both the failed urllib attempt and the successful curl_cffi
+        # attempt are recorded — nothing about the path taken is hidden.
+        assert len(result["attempts"]) == 2
+        assert result["attempts"][0]["transport"] == "urllib"
+        assert result["attempts"][1]["ok"] is True
+
+    def test_relay_get_diagnostic_markdown_mode_unwraps_on_success(
+            self, monkeypatch):
+        from slumdog import forebet
+
+        wrapped = (
+            b"Title: \n\nURL Source: https://www.forebet.com/x\n\n"
+            b"Markdown Content:\n[[{\"id\": 1, \"padding\": \"enough-bytes-to-pass\"}]]"
+        )
+        monkeypatch.setattr(
+            forebet, "_urllib_get_diagnostic",
+            lambda url, timeout, headers: {
+                "ok": True, "transport": "urllib", "status": 200,
+                "headers": {}, "body": wrapped})
+        result = forebet.relay_get_diagnostic(
+            "https://r.jina.ai/https://www.forebet.com/x", markdown=True,
+            expected_url="https://www.forebet.com/x", timeout=5)
+        assert result["ok"] is True
+        assert result["body"] == \
+            b'[[{"id": 1, "padding": "enough-bytes-to-pass"}]]'
+
+    def test_relay_get_diagnostic_markdown_mode_reports_unwrap_failure(
+            self, monkeypatch):
+        from slumdog import forebet
+
+        monkeypatch.setattr(
+            forebet, "_urllib_get_diagnostic",
+            lambda url, timeout, headers: {
+                "ok": True, "transport": "urllib", "status": 200,
+                "headers": {}, "body": b"not a reader wrapper at all"})
+        result = forebet.relay_get_diagnostic(
+            "https://r.jina.ai/https://www.forebet.com/x", markdown=True,
+            expected_url="https://www.forebet.com/x", timeout=5)
+        assert result["ok"] is False
+        assert "unwrap failed" in result["error"]
+
+    def test_relay_get_diagnostic_html_mode_returns_the_raw_body(
+            self, monkeypatch):
+        from slumdog import forebet
+
+        monkeypatch.setattr(
+            forebet, "_urllib_get_diagnostic",
+            lambda url, timeout, headers: {
+                "ok": True, "transport": "urllib", "status": 200,
+                "headers": {}, "body": b"<html>board</html>"})
+        result = forebet.relay_get_diagnostic(
+            "https://r.jina.ai/https://www.forebet.com/en/x", markdown=False,
+            timeout=5)
+        assert result["ok"] is True
+        assert result["body"] == b"<html>board</html>"

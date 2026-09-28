@@ -179,6 +179,156 @@ def _urllib_get(url: str, timeout: int) -> bytes:
         return response.read()
 
 
+# Headers that discriminate WHY a fetch failed (Cloudflare's CF-Ray/Server
+# identify a WAF challenge; Retry-After identifies real throttling) without
+# persisting the full response header set — some carry Set-Cookie/session
+# tokens that must never land in a public CI annotation. Owner directive,
+# 2026-09-28: "urllib=HTTPError" alone is not a finding; 403 (blocked), 429
+# (rate-limited), 503 (challenge interstitial) and 451 mean different things
+# and imply different responses.
+_DIAGNOSTIC_HEADERS = (
+    "Server", "CF-Ray", "CF-Cache-Status", "cf-mitigated", "Retry-After",
+    "Content-Type",
+)
+
+
+def _response_header_snippet(headers: Any) -> dict[str, str]:
+    if headers is None:
+        return {}
+    out: dict[str, str] = {}
+    for name in _DIAGNOSTIC_HEADERS:
+        value = headers.get(name)
+        if value:
+            out[name] = str(value)
+    return out
+
+
+def _urllib_get_diagnostic(url: str, timeout: int, headers: dict[str, str]) -> dict[str, Any]:
+    """One urllib GET that never raises: every outcome — a clean 2xx, an
+    HTTP error response, or a connection-level failure with no HTTP
+    response at all — reports whatever status code and header snippet it
+    has. See ``_DIAGNOSTIC_HEADERS`` for why the status code is the
+    finding, not the exception's class name. On success the raw body is
+    returned under ``\"body\"``; callers that only want the diagnostic
+    metadata for logging should pop it.
+    """
+    request = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return {
+                "ok": True, "transport": "urllib", "status": response.status,
+                "headers": _response_header_snippet(response.headers),
+                "body": response.read(),
+            }
+    except urllib.error.HTTPError as exc:
+        return {
+            "ok": False, "transport": "urllib", "status": exc.code,
+            "headers": _response_header_snippet(exc.headers),
+            "error": f"HTTPError {exc.code}: {exc.reason}"[:200],
+        }
+    except Exception as exc:
+        return {
+            "ok": False, "transport": "urllib", "status": None,
+            "headers": {}, "error": f"{type(exc).__name__}: {exc}"[:200],
+        }
+
+
+def _cffi_get_diagnostic(url: str, impersonate: str, timeout: int) -> dict[str, Any]:
+    """Same never-raises, status-preserving contract as
+    ``_urllib_get_diagnostic``, for one curl_cffi TLS impersonation."""
+    transport = f"curl_cffi:{impersonate}"
+    try:
+        from curl_cffi import requests as curl_requests
+    except Exception as exc:
+        return {
+            "ok": False, "transport": transport, "status": None,
+            "headers": {}, "error": f"unavailable: {type(exc).__name__}: {exc}"[:200],
+        }
+    headers = {key: value for key, value in _BROWSER_HEADERS.items() if key.lower() != "user-agent"}
+    try:
+        response = curl_requests.get(url, impersonate=impersonate, headers=headers, timeout=timeout)
+    except Exception as exc:
+        return {
+            "ok": False, "transport": transport, "status": None,
+            "headers": {}, "error": f"{type(exc).__name__}: {exc}"[:200],
+        }
+    snippet = _response_header_snippet(response.headers)
+    if response.status_code != 200:
+        return {
+            "ok": False, "transport": transport, "status": response.status_code,
+            "headers": snippet, "error": f"HTTP {response.status_code}",
+        }
+    return {
+        "ok": True, "transport": transport, "status": response.status_code,
+        "headers": snippet, "body": bytes(response.content),
+    }
+
+
+def direct_get_diagnostic(url: str, timeout: int = 40) -> dict[str, Any]:
+    """Single-attempt (no retries — a WAF challenge is a refusal, not
+    congestion) direct fetch that reports the STATUS CODE and a header
+    snippet for every transport tried, never just the last exception's
+    class name. Tries the same transport chain as ``direct_get`` (urllib,
+    then curl_cffi impersonations when installed), but never collapses a
+    failure into one opaque ``RuntimeError`` — every attempt's diagnostic
+    is kept under ``\"attempts\"``, and the first success is merged in at
+    the top level (with its raw body under ``\"body\"``).
+
+    Distinct from ``direct_get`` (production's retrying fetch, used by
+    ``fetch_with_fallback``): this is diagnostic-only, for
+    ``direct_vs_relay_probe`` and similar one-shot measurements, and
+    intentionally makes no retry attempt of its own.
+    """
+    attempts: list[dict[str, Any]] = []
+    first = _urllib_get_diagnostic(url, timeout, _BROWSER_HEADERS)
+    attempts.append({k: v for k, v in first.items() if k != "body"})
+    if first["ok"]:
+        return {**first, "attempts": attempts}
+    import importlib.util
+    if importlib.util.find_spec("curl_cffi") is not None:
+        for impersonate in _CFFI_IMPERSONATIONS:
+            attempt = _cffi_get_diagnostic(url, impersonate, timeout)
+            attempts.append({k: v for k, v in attempt.items() if k != "body"})
+            if attempt["ok"]:
+                return {**attempt, "attempts": attempts}
+    last = attempts[-1] if attempts else {}
+    return {
+        "ok": False,
+        "transport": last.get("transport"),
+        "status": last.get("status"),
+        "headers": last.get("headers", {}),
+        "error": last.get("error", "no transports attempted"),
+        "attempts": attempts,
+    }
+
+
+def relay_get_diagnostic(url: str, *, markdown: bool, expected_url: str = "",
+                          timeout: int = 45) -> dict[str, Any]:
+    """Single-attempt relay fetch with the same status/header-preserving
+    contract as ``direct_get_diagnostic`` — see its docstring for why. Set
+    ``markdown=True`` (with ``expected_url``) for the reader-mode headers
+    ``relay_get_markdown`` uses (needed for football's JSON endpoint on a
+    GitHub runner, per Edge-Factory); ``markdown=False`` for
+    ``relay_get``'s forced-HTML mode (needed for listing boards).
+    """
+    headers = (
+        {"User-Agent": "EdgeFactory/1.0", "Accept": "text/plain", "X-No-Cache": "true"}
+        if markdown else
+        {"User-Agent": "Slumdog", "Accept": "text/plain", "X-No-Cache": "true",
+         "X-Return-Format": "html"}
+    )
+    result = _urllib_get_diagnostic(url, timeout, headers)
+    if not result["ok"]:
+        return result
+    if markdown:
+        try:
+            result = {**result, "body": unwrap_reader(result["body"], expected_url)}
+        except Exception as exc:
+            return {**result, "ok": False,
+                    "error": f"unwrap failed: {type(exc).__name__}: {exc}"[:200]}
+    return result
+
+
 def fetch_with_fallback(
     relay_url: str,
     direct_url: str,
@@ -187,20 +337,39 @@ def fetch_with_fallback(
 ) -> tuple[bytes, str]:
     """Fetch via the relay, falling back to a direct request on any failure.
 
-    Returns ``(body, route)`` where route is ``"relay"`` or ``"direct"``. The
-    relay is throttled/auth-walled on shared runner IPs (football hit
-    deterministic 401s), so a direct browser-like request is the fallback.
+    Returns ``(body, route)`` where route is ``"relay"`` or ``"direct"``.
+
+    Owner finding, 2026-09-28 (direct-vs-relay probe, run 36470920157): this
+    function used to skip the direct fallback entirely on GitHub runners
+    (``on_github_runner()``), based on a measurement taken weeks earlier
+    (Edge-Factory run #503, 2026-08-20) that direct could not succeed from
+    that network. That constant went stale silently — the 2026-09-28 probe
+    found BOTH paths currently failing from a GitHub runner, for different
+    reasons (direct: a transport-level HTTPError before any response at
+    all; relay: a real response that is a Cloudflare challenge page) — a
+    hardcoded rule decided on a network condition weeks old, with nobody
+    told when the condition changed underneath it. Direct is now attempted
+    EVERY time the relay fails, on every network, MEASURED this run rather
+    than assumed from history — bounded to a single round
+    (``max_retries=1``, independent of this function's own ``max_retries``
+    which only governs the relay leg) so a bad run costs exactly one extra
+    request, not a repeat of the relay's retry budget. When both legs fail,
+    the raised error names both failures explicitly, so the outcome is
+    always visible to whatever calls this (receipt/failures list), never
+    silently inherited as "direct wasn't even tried."
     """
     try:
         body = relay_get(relay_url, timeout=timeout, max_retries=max_retries)
         return body, "relay"
-    except Exception:
-        if on_github_runner():
-            # The direct path cannot succeed from a GitHub runner (provider
-            # blocks the IP even with browser TLS, per Edge-Factory). Fail
-            # fast so the date stays retryable instead of stalling the run.
-            raise
-        body = direct_get(direct_url, timeout=timeout, max_retries=max_retries)
+    except Exception as relay_exc:
+        try:
+            body = direct_get(direct_url, timeout=timeout, max_retries=1)
+        except Exception as direct_exc:
+            raise RuntimeError(
+                "both paths failed this run (measured, not assumed) \u2014 "
+                f"relay: {type(relay_exc).__name__}: {relay_exc}; "
+                f"direct: {type(direct_exc).__name__}: {direct_exc}"
+            ) from direct_exc
         return body, "direct"
 
 
@@ -486,73 +655,97 @@ def _classify_capture_outcome(exc: Exception) -> str:
     return "RAISED"
 
 
+def _football_json_leg_verdict(body: bytes) -> tuple[bool, str | None]:
+    """Classify one already-fetched football tz=0 JSON body: healthy iff it
+    parses as real Forebet JSON, not a WAF challenge page or anything else
+    unparseable. Shared so relay and direct legs of ``sample_canary`` are
+    judged by the identical rule."""
+    if looks_like_challenge_page(body):
+        return False, f"looked like a challenge page ({len(body)} bytes)"
+    try:
+        validate_football_json_body(body)
+    except Exception as exc:
+        return False, f"failed to parse: {exc}"[:200]
+    return True, None
+
+
 def sample_canary(target_date: str | None = None, *, timeout: int = 20) -> dict[str, Any]:
-    """One standalone request to football's tz=0 JSON, VIA THE RELAY —
-    production's default path, and the only path this function tests.
+    """One standalone, dual-path check of football's tz=0 JSON, BEFORE any
+    per-sport capture has started — the pre-flight the owner asked for
+    after two consecutive relay-path blocks (2026-09-28): "we've been
+    optimising how much we ask, when the binding constraint may be when we
+    ask." Callers: ``forward_shadow_batch.py``'s pre-flight/mid-run abort
+    (do not spend a forward pass's capture budget against a wall), and the
+    probe's ``--canary-only`` mode / staged cron (a few seconds, safe on a
+    tight schedule, versus the full multi-stage sweep). ``_canary_state``
+    below reads a different, free discriminator — whatever an in-progress
+    :meth:`ForebetCollector.capture_selected` call already fetched for
+    football — and is unaffected by this function.
 
-    ``_canary_state`` below reads this same discriminator for free, but
-    only after a call to :meth:`ForebetCollector.capture_selected` has
-    already fetched football as part of its normal sport selection. This
-    function makes the check available on its own, BEFORE any per-sport
-    capture has started — the pre-flight the owner asked for after two
-    consecutive relay-path blocks (2026-09-28): "we've been optimising how
-    much we ask, when the binding constraint may be when we ask."
-    Callers: ``forward_shadow_batch.py``'s pre-flight/mid-run abort (do not
-    spend a forward pass's capture budget against a wall), and the probe's
-    ``--canary-only`` mode (a few seconds, safe on a tight cron, versus the
-    full multi-stage sweep).
+    **Dual-path, 2026-09-28 (second correction, after the direct-vs-relay
+    probe, run 36470920157):** relay is tried first (production's default
+    path). Only when relay fails or looks unhealthy does this ALSO try
+    direct once — mirroring ``fetch_with_fallback``'s now-measured-per-run
+    fallback (see its docstring): a canary that only ever tested relay
+    could abort a forward pass that a real capture, using that same
+    fallback, would actually have completed via direct. ``healthy`` is
+    True iff EITHER leg produced real JSON; ``direct`` is left ``None``
+    when relay already succeeded, since there is then no reason to spend
+    the extra request.
 
-    **Relabelled 2026-09-28, second correction — read this before trusting
-    a ``healthy: False`` reading:** a server-side fetch got a REAL response
-    direct from ``forebet.com`` at the exact moment a relay fetch of the
-    identical URL returned a challenge page. This function only ever goes
-    through the relay (``relay_get_markdown``) — it therefore measures
-    whether OUR PATH is currently reachable, not whether the source itself
-    is refusing this runner. A ``False`` here is evidence the relay is
-    blocked, not evidence the board is unpublished AND not proof Forebet
-    itself is down — see ``direct_vs_relay_probe`` for the runner-side
-    test of the direct path this function deliberately does not take.
-
-    Deliberately ONE attempt (``relay_get_markdown(..., max_retries=1)``):
+    Deliberately at most ONE attempt per leg (``max_retries=1`` on both):
     a WAF challenge is a refusal, not congestion, and retrying it harder is
     how run 36426785929 spent two hours grinding ~70 sport-dates through
     their full retry budgets against a wall. A canary that itself retried
     would only be a slower, quieter version of that same mistake.
 
     Returns ``{"sport": "football", "checked": True, "healthy": bool,
-    "reason": str | None, "sampled_at": <UTC ISO8601>}``. Never raises: a
-    connection failure or an unparseable body IS an unhealthy canary —
-    that is the entire reason to call this. ``reason`` says "via the
-    relay" explicitly so the receipt cannot be misread as a source-level
-    finding.
+    "reason": str | None, "relay": {"ok": bool, "reason": str | None},
+    "direct": {"ok": bool, "reason": str | None} | None,
+    "sampled_at": <UTC ISO8601>}``. Never raises. ``reason`` is only set
+    when unhealthy, and names both legs' outcomes explicitly so a
+    ``healthy: False`` reading can never be misread as "the source is
+    down" when in fact only OUR two tested paths were blocked this run.
     """
     target_date = target_date or date.today().isoformat()
     sampled_at = datetime.now(timezone.utc).isoformat()
     target = source_url(SPORTS["football"], target_date)
-    relay = RELAY_BASE + target
+    relay_url = RELAY_BASE + target
+
+    relay_ok = False
+    relay_reason: str | None
     try:
-        body = relay_get_markdown(relay, target, timeout=timeout, max_retries=1)
+        relay_body = relay_get_markdown(relay_url, target, timeout=timeout, max_retries=1)
     except Exception as exc:
-        return {"sport": "football", "checked": True, "healthy": False,
-                "reason": f"football tz=0 JSON via the relay raised "
-                          f"{type(exc).__name__}: {exc}"[:200],
-                "sampled_at": sampled_at}
-    if looks_like_challenge_page(body):
-        return {"sport": "football", "checked": True, "healthy": False,
-                "reason": f"football tz=0 JSON via the relay looked like "
-                          f"a challenge page ({len(body)} bytes) — this "
-                          f"is a relay-path finding, not proof the "
-                          f"source itself refused us",
-                "sampled_at": sampled_at}
+        relay_reason = f"{type(exc).__name__}: {exc}"[:200]
+    else:
+        relay_ok, relay_reason = _football_json_leg_verdict(relay_body)
+
+    if relay_ok:
+        return {"sport": "football", "checked": True, "healthy": True,
+                "reason": None, "relay": {"ok": True, "reason": None},
+                "direct": None, "sampled_at": sampled_at}
+
+    direct_ok = False
+    direct_reason: str | None
     try:
-        validate_football_json_body(body)
+        direct_body = direct_get(target, timeout=timeout, max_retries=1)
     except Exception as exc:
-        return {"sport": "football", "checked": True, "healthy": False,
-                "reason": f"football tz=0 JSON via the relay failed to "
-                          f"parse: {exc}"[:200],
-                "sampled_at": sampled_at}
-    return {"sport": "football", "checked": True, "healthy": True,
-            "reason": None, "sampled_at": sampled_at}
+        direct_reason = f"{type(exc).__name__}: {exc}"[:200]
+    else:
+        direct_ok, direct_reason = _football_json_leg_verdict(direct_body)
+
+    healthy = direct_ok
+    reason = None
+    if not healthy:
+        reason = (f"football tz=0 JSON via the relay {relay_reason}; via "
+                  f"direct {direct_reason} \u2014 both paths tested this "
+                  f"run were blocked; not proof the source itself is down")
+    return {"sport": "football", "checked": True, "healthy": healthy,
+            "reason": reason,
+            "relay": {"ok": False, "reason": relay_reason},
+            "direct": {"ok": direct_ok, "reason": direct_reason},
+            "sampled_at": sampled_at}
 
 
 def _canary_state(selected: list[str], existing: set[str],
@@ -576,17 +769,21 @@ def _canary_state(selected: list[str], existing: set[str],
     discarded instead of misread as a publication-timing finding.
 
     **Relabelled 2026-09-28, second correction:** this reads football's
-    result from ``_fetch`` — relay-only on a GitHub runner (direct
-    fallback is skipped there by ``on_github_runner()``; see
-    ``fetch_with_fallback``). A ``healthy: False`` reading on a runner
-    therefore means "the relay path was blocked this run", not "the
-    source refused us" — a server-side fetch got a real response direct
-    from ``forebet.com`` at the exact moment the relay returned a
-    challenge page for the identical URL. See ``sample_canary`` (the
-    pre-flight sibling, same relay-only scope) and
-    ``direct_vs_relay_probe`` (the runner-side confirmation) for the full
-    finding. Do not read a ``False`` here as proof the site itself is
-    down.
+    result from whatever fetched it, i.e. ``fetch_with_fallback`` via
+    ``fetch_football_markets`` — relay first, with a direct attempt now
+    MEASURED every run rather than skipped by a hardcoded
+    ``on_github_runner()`` check (that guard was removed from
+    ``fetch_with_fallback`` the same day this docstring was last
+    corrected). A ``healthy: False`` reading therefore means "both paths
+    tested this run were blocked", not "the source refused us" — a
+    server-side fetch once got a real response direct from
+    ``forebet.com`` at the exact moment the relay returned a challenge
+    page for the identical URL, so either leg succeeding alone is a live
+    possibility, not a foregone conclusion. See ``sample_canary`` (the
+    pre-flight sibling, same dual-path scope) and
+    ``direct_vs_relay_probe`` (the runner-side confirmation, now also
+    dual-path plus status/header capture) for the full finding. Do not
+    read a ``False`` here as proof the site itself is down.
     """
     if "football" not in selected:
         return {"sport": "football", "checked": False, "healthy": None,

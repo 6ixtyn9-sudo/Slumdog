@@ -59,9 +59,9 @@ from bs4 import BeautifulSoup  # noqa: E402
 from slumdog.forebet import board_url, looks_like_challenge_page  # noqa: E402
 from slumdog.forebet import (  # noqa: E402
     RELAY_BASE,
-    direct_get,
+    direct_get_diagnostic,
     fetch_with_fallback,
-    relay_get,
+    relay_get_diagnostic,
     relay_get_markdown,
     source_url,
 )
@@ -1358,6 +1358,53 @@ def canary_from_render_clock(render_clock: dict[str, Any]) -> dict[str, Any]:
                      "json_body to judge from"}
 
 
+def _direct_leg(url: str, timeout: int) -> dict[str, Any]:
+    """One diagnostic direct leg for ``direct_vs_relay_probe``/its alt-host
+    extension: STATUS CODE + a header snippet, never just an exception
+    class name — see ``direct_get_diagnostic``'s docstring (owner
+    directive, 2026-09-28: "urllib=HTTPError" alone is not a finding).
+    ``direct_get_diagnostic`` never raises by contract, but this stays
+    defensive (belt and suspenders) — a failed leg must be REPORTED, never
+    let it crash the whole probe.
+    """
+    try:
+        diag = direct_get_diagnostic(url, timeout=timeout)
+    except Exception as exc:
+        return {"ok": False, "status": None, "headers": {},
+                "error": f"{type(exc).__name__}: {exc}"[:300]}
+    body = diag.pop("body", None)
+    if diag["ok"]:
+        return {**diag, **body_fingerprint(body)}
+    return diag
+
+
+def _relay_leg(url: str, expected_url: str, timeout: int, *, markdown: bool) -> dict[str, Any]:
+    """Same diagnostic, never-raises contract as ``_direct_leg``, for one
+    relay leg."""
+    try:
+        diag = relay_get_diagnostic(
+            url, markdown=markdown, expected_url=expected_url, timeout=timeout)
+    except Exception as exc:
+        return {"ok": False, "status": None, "headers": {},
+                "error": f"{type(exc).__name__}: {exc}"[:300]}
+    body = diag.pop("body", None)
+    if diag["ok"]:
+        return {**diag, **body_fingerprint(body)}
+    return diag
+
+
+def _direct_vs_relay_pair(direct_url: str, relay_target: str, timeout: int,
+                           *, markdown: bool) -> dict[str, Any]:
+    """One {url, direct, relay} leaf, reused for football's tz=0 JSON on
+    every hostname variant (see ``direct_vs_relay_probe``'s ``alt_hosts``)."""
+    return {
+        "url": direct_url,
+        "direct": _direct_leg(direct_url, timeout),
+        "relay": _relay_leg(RELAY_BASE + relay_target, relay_target, timeout,
+                            markdown=markdown),
+    }
+
+
 def direct_vs_relay_probe(date: str, *, timeout: int, sport: str) -> dict[str, Any]:
     """Owner finding, 2026-09-28: a server-side fetch on the SAME network
     class as the relay's own egress got a REAL, full JSON response direct
@@ -1368,53 +1415,73 @@ def direct_vs_relay_probe(date: str, *, timeout: int, sport: str) -> dict[str, A
     source refusing this runner — the opposite of what every canary
     reading up to this function assumed.
 
-    Production's skip-direct-on-runners decision (``on_github_runner()``,
-    Edge-Factory run #503 / addendum 2026-08-20) predates this finding and
-    may itself be stale. This function answers the question directly, from
-    THIS runner, deliberately bypassing ``on_github_runner()``'s guard —
-    that guard is exactly what is in question, not a rule to respect here.
+    **2026-09-28 second correction, after run 36470920157's runner-side
+    result:** that result was more nuanced than "it's the relay" — direct
+    failed OUTRIGHT (``urllib=HTTPError``, no response at all) while relay
+    at least got a real HTTP response (a Cloudflare challenge page). Two
+    owner-directed follow-ups landed in this same function as a result:
 
-    Fetches, from this runner, at (as close to) the same moment as the
-    relay/direct pair can be requested one after another:
-      1. football's tz=0 JSON: direct (no relay) and via the relay
-      2. one HTML board (``sport``): direct (no relay) and via the relay
-    Four requests total, each a SINGLE attempt (``max_retries=1`` — a WAF
+    1. **Status codes, not exception class names.** Every leg now reports
+       ``status`` and a small ``headers`` snippet (``Server``, ``CF-Ray``,
+       ``CF-Cache-Status``, ``Retry-After``, ``Content-Type`` — see
+       ``direct_get_diagnostic``/``relay_get_diagnostic`` in
+       ``slumdog.forebet``) instead of only an opaque exception name. 403
+       (blocked), 429 (rate-limited), 503 (challenge interstitial) and 451
+       mean different things and imply different fixes.
+    2. **Alternate hostnames.** Different hostnames often sit behind
+       different WAF rules than ``www.forebet.com``. ``alt_hosts`` repeats
+       the football tz=0 JSON check (direct + relay) against
+       ``m.forebet.com`` and bare ``forebet.com`` — both already present in
+       the probe's own endpoint inventory (``m.forebet.com`` is used
+       elsewhere as a mobile-host fallback candidate) — four more requests,
+       one stage, either finding an open door or closing the question with
+       evidence instead of assumption.
+
+    Production's skip-direct-on-runners decision (``on_github_runner()``)
+    predated this finding and has SINCE BEEN REMOVED from
+    ``fetch_with_fallback`` (see its docstring) — direct is now measured
+    every run rather than assumed stale. This function still deliberately
+    bypasses ``fetch_with_fallback`` itself (it wants BOTH legs' results,
+    not the first one that works) and tests both paths from THIS runner,
+    one after another, as close to the same moment as sequential requests
+    allow.
+
+    Fetches, from this runner:
+      1. football's tz=0 JSON: direct and via the relay, on ``www.``,
+         ``m.``, and bare ``forebet.com`` (``alt_hosts``) — six requests
+      2. one HTML board (``sport``): direct and via the relay — two
+         requests
+    Eight requests total, each a SINGLE attempt (``max_retries=1`` — a WAF
     challenge is a refusal, not congestion; see ``sample_canary``'s same
-    rule). Never raises: a failed fetch on either path IS the answer, not
-    a probe crash.
+    rule). Never raises: a failed fetch on any leg IS the answer, not a
+    probe crash.
 
-    Returns ``{"target_date", "sport", "football_json": {direct, relay},
-    "html_board": {direct, relay}}`` where each leaf is
-    ``{"ok": bool, ...body_fingerprint(body) if ok else {"error": str}}``.
+    Returns ``{"target_date", "sport", "football_json": {url, direct,
+    relay}, "html_board": {url, direct, relay}, "alt_hosts": {"m":
+    {url, direct, relay}, "bare": {url, direct, relay}}}`` where every
+    leaf is ``{"ok": bool, "status": int | None, "headers": {...},
+    ...body_fingerprint(body) if ok else {"error": str}}``.
     """
     result: dict[str, Any] = {"target_date": date, "sport": sport}
 
-    def _attempt(fn) -> dict[str, Any]:
-        try:
-            body = fn()
-        except Exception as exc:
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:300]}
-        return {"ok": True, **body_fingerprint(body)}
-
     json_url = source_url(SPORTS["football"], date)
-    result["football_json"] = {
-        "url": json_url,
-        "direct": _attempt(
-            lambda: direct_get(json_url, timeout=timeout, max_retries=1)),
-        "relay": _attempt(
-            lambda: relay_get_markdown(
-                RELAY_BASE + json_url, json_url, timeout=timeout,
-                max_retries=1)),
-    }
+    result["football_json"] = _direct_vs_relay_pair(
+        json_url, json_url, timeout, markdown=True)
 
     board = board_url(SPORTS[sport], date)
     result["html_board"] = {
         "url": board,
-        "direct": _attempt(
-            lambda: direct_get(board, timeout=timeout, max_retries=1)),
-        "relay": _attempt(
-            lambda: relay_get(
-                RELAY_BASE + board, timeout=timeout, max_retries=1)),
+        "direct": _direct_leg(board, timeout),
+        "relay": _relay_leg(RELAY_BASE + board, board, timeout, markdown=False),
+    }
+
+    # Alternate hostnames for the SAME football tz=0 JSON query — different
+    # hostnames often sit behind different WAF rules than www.forebet.com.
+    alt_json_url_m = json_url.replace("https://www.forebet.com", "https://m.forebet.com", 1)
+    alt_json_url_bare = json_url.replace("https://www.forebet.com", "https://forebet.com", 1)
+    result["alt_hosts"] = {
+        "m": _direct_vs_relay_pair(alt_json_url_m, alt_json_url_m, timeout, markdown=True),
+        "bare": _direct_vs_relay_pair(alt_json_url_bare, alt_json_url_bare, timeout, markdown=True),
     }
     return result
 
@@ -3462,28 +3529,39 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--canary-only", action="store_true",
         help=("Measuring HOW MUCH to ask is moot if WHEN to ask is the "
-              "binding constraint — or, per --direct-vs-relay-only's "
-              "finding, if the wrong PATH is the binding constraint. One "
-              "direct request to football's tz=0 JSON, classified, one "
-              "annotation, exit — seconds, not the full multi-stage "
-              "sweep's ~13 minutes. Read-only: no capture, no evidence "
-              "tree, no disk writes beyond --out. A staged cron "
-              "(docs/owner_paste/probe_canary_cron.yml) is PAUSED pending "
-              "--direct-vs-relay-only's answer — see that flag's help."))
+              "binding constraint, or WHICH PATH is (direct-vs-relay "
+              "probe finding, run 36470920157). Dual-path since "
+              "2026-09-28: football's tz=0 JSON via the relay, falling "
+              "back to direct ONCE (mirroring fetch_with_fallback's "
+              "now-measured-per-run behaviour) only when relay fails — "
+              "healthy iff EITHER path serves, which path served is "
+              "recorded explicitly. One or two requests, one annotation, "
+              "exit — seconds, not the full multi-stage sweep's ~13 "
+              "minutes. Read-only: no capture, no evidence tree, no disk "
+              "writes beyond --out. The staged cron "
+              "(docs/owner_paste/probe_canary_cron.yml) uses this mode "
+              "every two hours to build a which-path-is-open availability "
+              "map."))
     parser.add_argument(
         "--direct-vs-relay-only", action="store_true",
-        help=("PRIORITY, owner directive 2026-09-28: a server-side fetch "
-              "got a REAL response direct from forebet.com at the exact "
-              "moment the relay (r.jina.ai) returned a challenge page for "
-              "the identical URL — every 'site-wide refusal' this session "
-              "may have been the RELAY's egress being challenged, not the "
-              "source. This settles it FROM THIS RUNNER: fetches "
-              "football's tz=0 JSON and one HTML board (--sport) both "
-              "direct and via the relay (4 requests, one attempt each, "
-              "no retries), fingerprints all four bodies, one annotation, "
-              "exit. Deliberately bypasses the on_github_runner() "
-              "direct-fallback skip — that guard is what is in question. "
-              "Run this BEFORE --circuit-breaker-probe or the full sweep."))
+        help=("PRIORITY, owner directive 2026-09-28, updated after run "
+              "36470920157's runner-side result: direct failed outright "
+              "(HTTPError, no response) while relay got a real response "
+              "that was a Cloudflare challenge page — 'it's just the "
+              "relay' did not hold as stated. This settles it FROM THIS "
+              "RUNNER, with the evidence needed to tell WHY, not just "
+              "whether: fetches football's tz=0 JSON and one HTML board "
+              "(--sport) both direct and via the relay, PLUS the same "
+              "football JSON check on m.forebet.com and bare forebet.com "
+              "(different hostnames often sit behind different WAF rules) "
+              "— 8 requests, one attempt each, no retries — records the "
+              "STATUS CODE and a header snippet (Server/CF-Ray/etc.) for "
+              "every leg, not just an exception class name, fingerprints "
+              "every body, one annotation, exit. fetch_with_fallback no "
+              "longer skips direct on a GitHub runner (that guard was the "
+              "thing in question and has been removed); this flag remains "
+              "useful for the side-by-side comparison itself. Run this "
+              "BEFORE --circuit-breaker-probe or the full sweep."))
     args = parser.parse_args(argv)
 
     dt.date.fromisoformat(args.date)
@@ -3514,8 +3592,12 @@ def main(argv: list[str] | None = None) -> int:
             args.out.write_text(json.dumps(report, indent=2, sort_keys=True))
         print(json.dumps(report, indent=2, sort_keys=True))
         if os.environ.get("GITHUB_ACTIONS") == "true":
+            # Cap raised from 2600 (2026-09-28, alt_hosts addition): the
+            # payload nearly doubled (8 requests vs 4) once status codes,
+            # header snippets and the m./bare-host legs were added; the
+            # full untruncated report is still always in --out.
             blob = json.dumps(
-                report.get("direct_vs_relay") or {}, sort_keys=True)[:2600]
+                report.get("direct_vs_relay") or {}, sort_keys=True)[:3800]
             print(f"::notice title=probe:direct_vs_relay::"
                   f"{_annotation_escape(blob)}", flush=True)
         # Exit 0 whenever both endpoints produced a fingerprinted result on

@@ -116,21 +116,26 @@ without an owner paste.
 Priority 1 breaker measurement are both settled for good.** It is a
 diagnostic, not part of the pipeline.
 
-## `probe_canary_cron.yml` — PAUSED, staged 2026-09-28: continuous availability sampling
+## `probe_canary_cron.yml` — staged 2026-09-28, UN-PAUSED, dual-path: continuous availability sampling
 
-**PAUSED — do not apply yet.** Later the same day, a server-side fetch got
-a REAL response direct from `forebet.com` at the exact moment a relay
-(`r.jina.ai`) fetch of the identical URL returned a challenge page. This
-job's sample — like `sample_canary`/`_canary_state` on a GitHub runner —
-goes via the relay only, so a red run of it may only prove the relay's
-egress was challenged, not that Forebet itself refused the runner. Applying
-it now would build an availability map of the wrong thing. Hold until
-`scripts/probe_kickoff_timezone.py --direct-vs-relay-only` has run from an
-actual GitHub Actions runner and the result is recorded in `HANDOFF.md`
-(see "direct vs relay"); the staged file itself now carries the same note
-at the top. See also `_CANARY_PATH_BLOCKED_PREFIX` / `_mark_canary_path_blocked`
-in `src/slumdog/forebet.py` for the same relabeling applied to the
-production canary code path.
+**Un-paused (2026-09-28, same day it was first paused).** It was held
+because a server-side fetch got a REAL response direct from `forebet.com`
+at the exact moment a relay (`r.jina.ai`) fetch of the identical URL
+returned a challenge page, and this job's sample — like
+`sample_canary`/`_canary_state` on a GitHub runner at the time — went via
+the relay only. The runner-side follow-up (`--direct-vs-relay-only`, run
+`36470920157`) then showed the pause's own premise was incomplete: direct
+FAILED OUTRIGHT from a GitHub runner (no response at all), relay at least
+got a real, challenged, response — neither path alone was the "true"
+availability signal. `sample_canary`/`_canary_state` were made **dual-path**
+instead (relay first, direct fallback attempted once only if relay fails,
+the fact of which path served recorded rather than assumed), and this
+staged cron inherits that behaviour for free via `--canary-only`. A red
+cron run now means both paths were blocked this sample; a green run
+records which one served. See also `_CANARY_PATH_BLOCKED_PREFIX` /
+`_mark_canary_path_blocked` in `src/slumdog/forebet.py` for the matching
+relabeling in the production canary code path, and `HANDOFF.md`'s
+"MEASURED ROUTING REPLACES HARDCODED ROUTING" entry for the full change.
 
 **Why it exists:** two consecutive site-wide WAF blocks this session
 (`36455080098`, `36461512749`), the same afternoon that had served cleanly
@@ -140,9 +145,10 @@ reframe: "we've been optimising how much we ask, when the binding
 constraint may be when we ask." You cannot catch a healthy window by luck
 with a handful of 13-minute probe runs; you need continuous, cheap
 sampling. `scripts/probe_kickoff_timezone.py --canary-only` (added this
-session) answers in one request — football's tz=0 JSON, classified, one
-annotation, exit — instead of sharing a budget scheduler with the full
-multi-stage sweep.
+session, made dual-path this pass) answers in one or two requests —
+football's tz=0 JSON via the relay, then direct only if the relay leg
+failed, classified, one annotation, exit — instead of sharing a budget
+scheduler with the full multi-stage sweep.
 
 **What is staged:** a brand-new, separate workflow file
 (`docs/owner_paste/probe_canary_cron.yml`), not an edit to

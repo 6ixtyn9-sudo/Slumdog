@@ -27,23 +27,25 @@ from scripts.probe_kickoff_timezone import (
 @pytest.fixture(autouse=True)
 def _no_network_direct_vs_relay(monkeypatch):
     """``direct_vs_relay_probe`` (owner finding, 2026-09-28) is now
-    ``run_probe``'s first stage and makes four real network calls through
-    ``direct_get``/``relay_get``/``relay_get_markdown``. This file's own
-    header promises no test touches the network, so default those three to
-    a fast, deterministic failure for every test — ``direct_vs_relay_probe``
-    already turns a raised exception into a reported ``{"ok": False, ...}``
-    leaf rather than propagating it, so this is a harmless no-op for every
-    test that does not care about this stage. Tests in
-    ``TestDirectVsRelayProbe``/``TestDirectVsRelayOnlyCLIMode`` override
-    these explicitly, which simply wins over this fixture's setup.
+    ``run_probe``'s first stage and makes eight real network calls (six
+    football-JSON legs across ``www.``/``m.``/bare ``forebet.com``, two
+    HTML-board legs) through ``direct_get_diagnostic``/
+    ``relay_get_diagnostic``/``relay_get_markdown``. This file's own header
+    promises no test touches the network, so default those to a fast,
+    deterministic failure for every test — ``direct_vs_relay_probe``
+    already turns a raised exception (or an ``{"ok": False, ...}``
+    diagnostic result) into a reported leaf rather than propagating it, so
+    this is a harmless no-op for every test that does not care about this
+    stage. Tests in ``TestDirectVsRelayProbe``/``TestDirectVsRelayOnlyCLIMode``
+    override these explicitly, which simply wins over this fixture's setup.
     """
     import scripts.probe_kickoff_timezone as probe
 
     def _stub(*a, **k):
         raise RuntimeError("network disabled in tests")
 
-    monkeypatch.setattr(probe, "direct_get", _stub)
-    monkeypatch.setattr(probe, "relay_get", _stub)
+    monkeypatch.setattr(probe, "direct_get_diagnostic", _stub)
+    monkeypatch.setattr(probe, "relay_get_diagnostic", _stub)
     monkeypatch.setattr(probe, "relay_get_markdown", _stub)
 
 
@@ -3080,33 +3082,53 @@ class TestCanaryFromRenderClock:
 class TestDirectVsRelayProbe:
     """Owner finding, 2026-09-28: a server-side fetch got a real response
     DIRECT from forebet.com at the exact moment the relay (r.jina.ai)
-    returned a challenge page for the identical URL. This is the runner-
-    side settlement of that question — four single-attempt requests (json
-    x {direct, relay}, one HTML board x {direct, relay}), never retried,
-    never raising.
+    returned a challenge page for the identical URL. Runner-side settlement
+    of that question via ``direct_get_diagnostic``/``relay_get_diagnostic``
+    (STATUS CODE + header snippet, never just an exception class name —
+    2026-09-28 second correction, after run 36470920157 showed the
+    original finding was more nuanced: direct failed outright while relay
+    at least got a real, challenged, response). Eight single-attempt
+    requests total (football JSON x {direct, relay} on www./m./bare hosts,
+    one HTML board x {direct, relay}), never retried, never raising.
     """
 
-    def test_reports_all_four_legs_when_everything_succeeds(self, monkeypatch):
+    def test_reports_every_leg_when_everything_succeeds(self, monkeypatch):
         import scripts.probe_kickoff_timezone as probe
 
         monkeypatch.setattr(
-            probe, "direct_get", lambda url, **k: b'[[{"id": 1}]]')
+            probe, "direct_get_diagnostic",
+            lambda url, timeout=40: {
+                "ok": True, "transport": "urllib", "status": 200,
+                "headers": {}, "body": b'[[{"id": 1}]]'})
         monkeypatch.setattr(
-            probe, "relay_get_markdown", lambda *a, **k: b'[[{"id": 1}]]')
-        monkeypatch.setattr(
-            probe, "relay_get",
-            lambda *a, **k: b"<html>rcnt board content here</html>")
+            probe, "relay_get_diagnostic",
+            lambda url, *, markdown, expected_url="", timeout=45: {
+                "ok": True, "transport": "urllib", "status": 200,
+                "headers": {},
+                "body": (b'[[{"id": 1}]]' if markdown
+                        else b"<html>rcnt board content here</html>")})
 
         result = probe.direct_vs_relay_probe(
             "2026-09-29", timeout=5, sport="basketball")
         assert result["target_date"] == "2026-09-29"
         assert result["sport"] == "basketball"
         assert result["football_json"]["direct"]["ok"] is True
+        assert result["football_json"]["direct"]["status"] == 200
         assert result["football_json"]["relay"]["ok"] is True
         assert result["html_board"]["direct"]["ok"] is True
         assert result["html_board"]["relay"]["ok"] is True
+        # Alternate hostnames (owner directive, 2026-09-28): different
+        # hostnames often sit behind different WAF rules.
+        assert result["alt_hosts"]["m"]["direct"]["ok"] is True
+        assert result["alt_hosts"]["m"]["relay"]["ok"] is True
+        assert "m.forebet.com" in result["alt_hosts"]["m"]["url"]
+        assert result["alt_hosts"]["bare"]["direct"]["ok"] is True
+        assert result["alt_hosts"]["bare"]["relay"]["ok"] is True
+        assert result["alt_hosts"]["bare"]["url"].startswith(
+            "https://forebet.com/")
+        assert "www.forebet.com" not in result["alt_hosts"]["bare"]["url"]
 
-    def test_the_exact_finding_direct_works_relay_is_challenged(
+    def test_the_finding_reports_status_and_headers_not_just_exception_names(
             self, monkeypatch):
         import scripts.probe_kickoff_timezone as probe
 
@@ -3115,15 +3137,29 @@ class TestDirectVsRelayProbe:
             b"security service to protect against malicious bots."
         )
         monkeypatch.setattr(
-            probe, "direct_get", lambda url, **k: b'[[{"id": 1}]]')
+            probe, "direct_get_diagnostic",
+            lambda url, timeout=40: {
+                "ok": False, "transport": "urllib", "status": None,
+                "headers": {}, "error": "HTTPError: connection refused"})
         monkeypatch.setattr(
-            probe, "relay_get_markdown", lambda *a, **k: challenge)
-        monkeypatch.setattr(probe, "relay_get", lambda *a, **k: challenge)
+            probe, "relay_get_diagnostic",
+            lambda url, *, markdown, expected_url="", timeout=45: {
+                "ok": True, "transport": "urllib", "status": 200,
+                "headers": {"Server": "cloudflare", "CF-Ray": "abc123-DUR"},
+                "body": challenge})
 
         result = probe.direct_vs_relay_probe(
             "2026-09-29", timeout=5, sport="basketball")
-        assert result["football_json"]["direct"]["ok"] is True
+        # Owner directive, 2026-09-28: "urllib=HTTPError" alone is not a
+        # finding — the status code and a header snippet must be present.
+        assert result["football_json"]["direct"]["ok"] is False
+        assert result["football_json"]["direct"]["status"] is None
         assert result["football_json"]["relay"]["ok"] is True
+        assert result["football_json"]["relay"]["status"] == 200
+        assert result["football_json"]["relay"]["headers"]["Server"] == \
+            "cloudflare"
+        assert result["football_json"]["relay"]["headers"]["CF-Ray"] == \
+            "abc123-DUR"
         assert result["football_json"]["relay"]["looks_like"] == \
             "challenge_page"
         assert result["html_board"]["relay"]["looks_like"] == \
@@ -3135,44 +3171,55 @@ class TestDirectVsRelayProbe:
         def _boom(*a, **k):
             raise TimeoutError("connection timed out")
 
-        monkeypatch.setattr(probe, "direct_get", _boom)
+        monkeypatch.setattr(probe, "direct_get_diagnostic", _boom)
         monkeypatch.setattr(
-            probe, "relay_get_markdown", lambda *a, **k: b'[[{"id": 1}]]')
-        monkeypatch.setattr(
-            probe, "relay_get",
-            lambda *a, **k: b"<html>rcnt board content here</html>")
+            probe, "relay_get_diagnostic",
+            lambda url, *, markdown, expected_url="", timeout=45: {
+                "ok": True, "transport": "urllib", "status": 200,
+                "headers": {},
+                "body": (b'[[{"id": 1}]]' if markdown
+                        else b"<html>rcnt board content here</html>")})
 
         result = probe.direct_vs_relay_probe(
             "2026-09-29", timeout=5, sport="basketball")
         assert result["football_json"]["direct"]["ok"] is False
         assert "TimeoutError" in result["football_json"]["direct"]["error"]
         assert result["html_board"]["direct"]["ok"] is False
+        assert result["alt_hosts"]["m"]["direct"]["ok"] is False
 
     def test_each_leg_is_exactly_one_attempt_no_retries(self, monkeypatch):
         seen = {}
 
         import scripts.probe_kickoff_timezone as probe
 
-        def fake_direct_get(url, timeout=40, max_retries=3):
-            seen.setdefault("direct_retries", []).append(max_retries)
-            return b'[[{"id": 1}]]'
+        def fake_direct_get(url, timeout=40):
+            seen.setdefault("direct_urls", []).append(url)
+            return {"ok": True, "transport": "urllib", "status": 200,
+                    "headers": {}, "body": b'[[{"id": 1}]]'}
 
-        def fake_relay_markdown(url, expected_url, timeout=45, max_retries=3):
-            seen.setdefault("relay_markdown_retries", []).append(max_retries)
-            return b'[[{"id": 1}]]'
+        def fake_relay_get(url, *, markdown, expected_url="", timeout=45):
+            seen.setdefault("relay_markdown_flags", []).append(markdown)
+            return {"ok": True, "transport": "urllib", "status": 200,
+                    "headers": {},
+                    "body": (b'[[{"id": 1}]]' if markdown
+                            else b"<html>rcnt board content here</html>")}
 
-        def fake_relay_get(url, timeout=45, max_retries=3):
-            seen.setdefault("relay_get_retries", []).append(max_retries)
-            return b"<html>rcnt board content here</html>"
-
-        monkeypatch.setattr(probe, "direct_get", fake_direct_get)
-        monkeypatch.setattr(probe, "relay_get_markdown", fake_relay_markdown)
-        monkeypatch.setattr(probe, "relay_get", fake_relay_get)
+        monkeypatch.setattr(probe, "direct_get_diagnostic", fake_direct_get)
+        monkeypatch.setattr(probe, "relay_get_diagnostic", fake_relay_get)
 
         probe.direct_vs_relay_probe("2026-09-29", timeout=5, sport="basketball")
-        assert seen["direct_retries"] == [1, 1]
-        assert seen["relay_markdown_retries"] == [1]
-        assert seen["relay_get_retries"] == [1]
+        # One direct + one relay call per leg: football_json (www), the
+        # HTML board, and each of the two alt hosts — 4 direct + 4 relay.
+        assert len(seen["direct_urls"]) == 4
+        assert len(seen["relay_markdown_flags"]) == 4
+        # Three football-JSON legs (www/m/bare) use markdown mode, the one
+        # HTML board leg uses HTML mode.
+        assert seen["relay_markdown_flags"].count(True) == 3
+        assert seen["relay_markdown_flags"].count(False) == 1
+        # direct_get_diagnostic/relay_get_diagnostic are themselves
+        # documented as single-attempt (max_retries=1 internally, no
+        # parameter for this caller to even request more) — nothing here
+        # passes a retryable count through, which is the point.
 
 
 class TestDirectVsRelayOnlyCLIMode:

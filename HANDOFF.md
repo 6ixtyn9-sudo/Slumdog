@@ -1,5 +1,53 @@
 # Slumdog Living Handoff
 
+**2026-09-28 (same session, continued a seventh time) — MEASURED ROUTING REPLACES HARDCODED ROUTING: `on_github_runner()` NO LONGER GATES `fetch_with_fallback`/`sample_canary`; THE DIRECT-VS-RELAY PROBE NOW RECORDS STATUS CODES + HEADERS AND TESTS TWO EXTRA HOSTNAMES; THE STAGED CANARY CRON IS UN-PAUSED AND DUAL-PATH.**
+
+**Why this entry exists:** four owner directives landed together this pass, following directly from the previous entry's finding that "it's just the relay" did not hold as stated (direct failed outright, relay was
+merely challenged) and that recording only an exception class name (`"urllib=HTTPError"`) hid the very information (a status code, `Server`/`CF-Ray` headers) needed to tell WHY a leg failed, not just whether it
+did. The owner's framing: stop hardcoding routing decisions off a stale measurement, start measuring per run and recording the fact; stop reporting failures as opaque exception names.
+
+**What changed, in the owner's stated order:**
+
+1. **`direct_vs_relay_probe()` now captures HTTP status + a header snippet (`Server`, `CF-Ray`) per leg**, not just an exception class. It routes every leg through two new never-raising helpers in
+   `src/slumdog/forebet.py`, `direct_get_diagnostic()`/`relay_get_diagnostic()`, which return `{"ok", "status", "headers", "body"|"error", ...}` — `_urllib_get_diagnostic()` underneath pulls `e.code` off
+   `urllib.error.HTTPError` even on failure, so a 403/429/503/451 is visible even when the fetch itself did not succeed. `direct_get_diagnostic()` also records every transport attempt tried (urllib, then each
+   curl_cffi impersonation) in an `attempts` list rather than only the last one.
+2. **The probe now tests two extra hostnames** (`m.forebet.com`, bare `forebet.com`, no `www`) against football's tz=0 JSON, both direct and via relay, under a new `alt_hosts` key — 8 requests total per run
+   (was 4). The exit-code gate (`--direct-vs-relay-only`'s pass/fail) is deliberately left keyed only on the original `football_json`/`html_board` leaves; `alt_hosts` is additional diagnostic signal, not a
+   gating condition, since a different hostname succeeding doesn't change what the pipeline can actually fetch from today without further plumbing.
+3. **`fetch_with_fallback()` and `sample_canary()` no longer call `on_github_runner()` to skip the direct leg.** Both now attempt direct once every run (never hardcoded off), record the measured outcome, and
+   route/report off that fact instead of a static guess about what kind of machine is running. `on_github_runner()` itself is still defined (harmless, no longer load-bearing for this decision) — grepped for
+   stale callers referencing the old skip-direct behaviour; none found outside its own definition.
+4. **`docs/owner_paste/probe_canary_cron.yml` is un-paused.** It inherits `sample_canary`'s new dual-path behaviour for free via `--canary-only` (relay first, direct fallback once only on relay failure) — a red
+   cron run now means both paths were blocked this sample, which is the availability signal the cron was always meant to produce, rather than the relay-only signal it paused on. `docs/owner_paste/README.md`'s
+   matching section was updated out of PAUSED state to match.
+
+**Test coverage added/updated this pass:** `tests/test_probe_kickoff_timezone.py::TestDirectVsRelayProbe` (4 tests) rewritten against the new `direct_get_diagnostic`/`relay_get_diagnostic` mock surface, plus
+new assertions on `status`, `headers`, and the `alt_hosts.m`/`alt_hosts.bare` sub-dicts; the file's autouse no-network fixture updated to match. `tests/test_forebet.py::TestDiagnosticFetchesRecordStatusAndHeaders`
+(8 new tests) added, covering `_urllib_get_diagnostic`'s status/header capture on success, on an `HTTPError`, and on a connectionless failure; `direct_get_diagnostic`'s never-raise/every-attempt-recorded
+contract and its urllib→curl_cffi fallback; `relay_get_diagnostic`'s markdown-unwrap success/failure paths and HTML passthrough. Also fixed a **pre-existing, unrelated hang** found while verifying this work:
+`tests/test_fallback.py::test_capture_selected_reuses_existing_same_day_capture` was making a real unmocked network call through `capture_selected` → `fetch_football_markets`; now mocked to a no-op. Full runs
+this pass: `tests/test_fallback.py` 8/8, `tests/test_forebet.py` 44/44, `tests/test_forward_shadow_batch.py` 109/109, `tests/test_probe_kickoff_timezone.py` 242/242, `tests/test_probe_canary_cron_contract.py`
+9/9 — all green.
+
+**Still open, unchanged from the prior entry:** item (iii) (a valid circuit-breaker trial) remains not closed and must not be pursued by repeated re-running — it depends on this new dual-path availability map
+actually showing an open window, not on luck.
+
+**Priority #3 addendum, read-only (no live fetches issued), answered by reading the existing code and captured payloads:**
+
+- **Non-football sports' board endpoint does NOT expose a standings/form equivalent.** `parse_html_events()` (`src/slumdog/parsers.py`), the generic HTML-board parser every non-football sport goes through, only
+  ever populates `{league_code, probability_values_raw, odds_values_raw, selected_odds_raw, period_values, prediction_cell_text, raw_row_text}` in `facets` — no `standings_*`, no `recent_*` form counts.
+  Those keys exist only via `promote_football_listing()`, which reads them off football's separate `getrs.php` 1X2 JSON row (`host_pos`/`guest_pos`/`host_form`/`guest_form`). `docs/STATE.md` already
+  established there is no working `getrs.php`-equivalent for any other sport ("every candidate getrs.php sport code returns empty") — so this is a real gap, not an oversight in `parse_html_events`.
+- **A sport-agnostic per-match detail-page extractor already exists and would supply it** (`src/slumdog/detail_worker.py` + `detail_facets.py`) — `capture_detail_batch()` filters candidates only on
+  `"/matches/" in source_url`, with no sport gate, and `parse_detail()` extracts standings/H2H/form/travel-distance/etc. generically. **It has never actually been run**: `data/raw/details/` does not exist and
+  no `data/reports/detail_capture_latest.json` is present, so whether Forebet's per-match pages are reachable for non-football sports (same WAF, presumably harder — an individual match page is a smaller,
+  more bot-suspicious surface than a listing board) is unverified. Confirming that requires a live fetch, which is explicitly out of scope for this read-only check.
+- **The pipeline is not actually blocked on this today.** A live basketball selection (`data/reports/shadow/2026-09-10/a38dc533b32b3d92/shadow_selections.json`, `basketball:284473`) already carries
+  `favorite_prior_win_rate`, `recent_win_rate_gap`, `h2h_prior_games`, etc. in its `features` — a "prior form" signal synthesized from the pipeline's OWN historical snapshot captures, independent of whether
+  Forebet supplies a native standings/form facet for that sport. Per-match detail pages would add Forebet's own standings/H2H numbers on top, but are not required for a form-like feature to already exist for
+  non-football sports.
+
 **2026-09-28 (same session, continued a sixth time) — DIRECT-VS-RELAY PROBE RESULT FROM AN ACTUAL GITHUB RUNNER: NEITHER PATH WORKS FROM THIS RUNNER TODAY — DIRECT FAILS OUTRIGHT, RELAY GETS CHALLENGED. THE "IT'S JUST THE RELAY" READING DOES NOT HOLD AS STATED; CANARY WORDING RELABELLED TO "PATH BLOCKED", NOT "SITE REFUSED".**
 
 **Why this entry exists:** the owner reported that their own server-side fetch, same moment, same URL, got a real response direct from `forebet.com` while a relay (`r.jina.ai`) fetch of the identical URL returned a
