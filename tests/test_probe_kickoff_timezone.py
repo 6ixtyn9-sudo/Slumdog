@@ -2762,3 +2762,112 @@ class TestTheProductionPathIsDrivenEndToEnd:
         probe.collector_end_to_end("2026-09-29", timeout=1, pause=0)
         assert not seen["root"].exists()   # temporary root, cleaned up
         assert Path("data/reports/capture_probe_2026-09-29.json").exists() is False
+
+
+class TestTheOpenQuestionsAreAskedInPasses:
+    """Run 36407370005 spent three stages' slices retrying refusals that
+    were still in force seconds later, and answered nothing. The refusals
+    last minutes; the retries were seconds apart. Spacing beats
+    persistence."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        probe.EMITTED_SECTIONS.clear()
+        probe.set_deadline(None)
+        yield
+        probe.EMITTED_SECTIONS.clear()
+        probe.set_deadline(None)
+
+    def test_a_stage_that_answers_is_not_asked_again(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        calls = {"clock": 0, "e2e": 0, "settle": 0}
+
+        def clock(*a, **k):
+            calls["clock"] += 1
+            return {"proven": True, "offset_minutes": -120}
+
+        def e2e(*a, **k):
+            calls["e2e"] += 1
+            return {"parsed_events": 3}
+
+        def settle(*a, **k):
+            calls["settle"] += 1
+            return {"hockey": {"graded": 5}}
+
+        monkeypatch.setattr(probe, "render_clock_probe", clock)
+        monkeypatch.setattr(probe, "collector_end_to_end", e2e)
+        monkeypatch.setattr(probe, "settlement_probe", settle)
+        out = probe.run_open_questions("2026-09-29", timeout=1, pause=0)
+        assert calls == {"clock": 1, "e2e": 1, "settle": 1}
+        assert out["passes_used"]["render_clock"] == 1
+
+    def test_a_stage_that_refuses_is_retried_in_a_later_pass(self,
+                                                             monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        calls = {"n": 0}
+
+        def flaky(*a, **k):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                return {"verdict": "rendered column unavailable: 422"}
+            return {"proven": True, "offset_minutes": -120}
+
+        monkeypatch.setattr(probe, "render_clock_probe", flaky)
+        monkeypatch.setattr(probe, "collector_end_to_end",
+                            lambda *a, **k: {"parsed_events": 1})
+        monkeypatch.setattr(probe, "settlement_probe",
+                            lambda *a, **k: {"hockey": {"graded": 1}})
+        out = probe.run_open_questions("2026-09-29", timeout=1, pause=0)
+        assert calls["n"] == 3
+        assert out["render_clock"]["proven"] is True
+        assert out["passes_used"]["render_clock"] == 3
+
+    def test_a_later_refusal_does_not_unprove_an_earlier_answer(
+            self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        answers = iter([
+            {"proven": True, "offset_minutes": -120},
+            {"verdict": "422"}, {"verdict": "422"}])
+        monkeypatch.setattr(probe, "render_clock_probe",
+                            lambda *a, **k: next(answers))
+        monkeypatch.setattr(probe, "collector_end_to_end",
+                            lambda *a, **k: {"parsed_events": 0})
+        monkeypatch.setattr(probe, "settlement_probe",
+                            lambda *a, **k: {"hockey": {"graded": 0}})
+        out = probe.run_open_questions("2026-09-29", timeout=1, pause=0)
+        assert out["render_clock"]["proven"] is True
+
+    def test_running_without_raising_is_not_answering(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        assert not probe.stage_succeeded("render_clock", {"json_matches": 0})
+        assert probe.stage_succeeded("render_clock", {"proven": True})
+        assert not probe.stage_succeeded("collector_end_to_end",
+                                         {"captured": 1, "parsed_events": 0})
+        assert probe.stage_succeeded("collector_end_to_end",
+                                     {"parsed_events": 2})
+        assert not probe.stage_succeeded("settlement_probe",
+                                         {"hockey": {"graded": 0}})
+        assert probe.stage_succeeded("settlement_probe",
+                                     {"hockey": {"graded": 4}})
+
+    def test_a_crashing_stage_is_recorded_and_the_others_still_run(
+            self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "render_clock_probe",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                RuntimeError("relay exploded")))
+        monkeypatch.setattr(probe, "collector_end_to_end",
+                            lambda *a, **k: {"parsed_events": 1})
+        monkeypatch.setattr(probe, "settlement_probe",
+                            lambda *a, **k: {"hockey": {"graded": 1}})
+        out = probe.run_open_questions("2026-09-29", timeout=1, pause=0,
+                                       passes=2)
+        assert "relay exploded" in out["render_clock"]["verdict"]
+        assert out["collector_end_to_end"]["parsed_events"] == 1

@@ -1009,7 +1009,8 @@ def slice_guard(seconds: float):
 
 
 def render_clock_probe(date: str, *, timeout: int, pause: float,
-                       slice_seconds: float = 150.0) -> dict[str, Any]:
+                       slice_seconds: float = 150.0,
+                       attempts: int = 3) -> dict[str, Any]:
     """Measure the renderer's offset live, the way the nightly stage will.
 
     This is the measurement that decides whether thirteen sports can ever
@@ -1032,9 +1033,9 @@ def render_clock_probe(date: str, *, timeout: int, pause: float,
     # verification". Joint success on single attempts is a coin flip on a
     # coin flip, so each channel retries inside the slice.
     instants: dict[str, str] = {}
-    attempts = 0
+    attempts_made = 0
     try:
-        for attempts in range(1, 4):
+        for json_try in range(1, max(1, attempts) + 1):
             instants = {
                 f"football:{match_id}": moment.strftime("%Y-%m-%d %H:%M:%S")
                 for match_id, moment in football_utc_kickoffs(
@@ -1044,9 +1045,10 @@ def render_clock_probe(date: str, *, timeout: int, pause: float,
                 break
             guard()
             pace(min(pause, 6))
+        attempts_made = json_try
     except BudgetExhausted as exc:
         return {"verdict": f"stopped: {exc}"}
-    record["json_attempts"] = attempts
+    record["json_attempts"] = attempts_made
     record["json_matches"] = len(instants)
     record["json_seconds"] = round(time.monotonic() - started, 1)
     if not instants:
@@ -1074,7 +1076,7 @@ def render_clock_probe(date: str, *, timeout: int, pause: float,
         # bounds the cost either way.
         cells = fetch_column(url, scoped(".tnms"),
                              timeout=min(timeout, 40),
-                             column="link", attempts=3, backoff=6.0,
+                             column="link", attempts=attempts, backoff=6.0,
                              sleep=pace, before_request=guard)
         record["column_seconds"] = round(time.monotonic() - column_started, 1)
     except BudgetExhausted as exc:
@@ -1213,7 +1215,8 @@ def collector_end_to_end(date: str, *, timeout: int, pause: float,
 def settlement_probe(date: str, *, timeout: int, pause: float,
                      sports: tuple[str, ...] = ("hockey",),
                      settled_date: str | None = None,
-                     slice_seconds: float = 150.0) -> dict[str, Any]:
+                     slice_seconds: float = 150.0,
+                     attempts: int = 3) -> dict[str, Any]:
     """Does a captured pick actually settle the next day, by the same id?
 
     Coverage without settlement is half a system: a rank-1 pick that can
@@ -1243,7 +1246,7 @@ def settlement_probe(date: str, *, timeout: int, pause: float,
         try:
             result = capture_board(
                 url, sport, yesterday, captured_at=date + "T00:00:00Z",
-                timeout=timeout, attempts=3, backoff=7.0, sleep=pace,
+                timeout=timeout, attempts=attempts, backoff=7.0, sleep=pace,
                 selectors=SETTLEMENT_COLUMN_SELECTORS,
                 required=SETTLEMENT_REQUIRED_COLUMNS,
                 before_request=slice_guard(slice_seconds))
@@ -2060,6 +2063,85 @@ def emit_section(key: str, value: Any) -> None:
           flush=True)
 
 
+def stage_succeeded(name: str, record: dict[str, Any]) -> bool:
+    """Did this stage actually answer its question?
+
+    "Ran without raising" is not the same as "answered". A calibration
+    that found no instants and a settlement that graded nothing both
+    return perfectly well-formed records.
+    """
+    if not record:
+        return False
+    if name == "render_clock":
+        return bool(record.get("proven"))
+    if name == "collector_end_to_end":
+        return (record.get("parsed_events") or 0) > 0
+    if name == "settlement_probe":
+        return any((rec.get("graded") or 0) > 0
+                   for rec in record.values() if isinstance(rec, dict))
+    return True
+
+
+def run_open_questions(date: str, *, timeout: int, pause: float,
+                       passes: int = 3) -> dict[str, Any]:
+    """Run the unanswered stages in passes, not in one long grind.
+
+    Every run so far spent each stage's whole slice retrying a refusal
+    that was still in force seconds later, then moved on for good.
+    Run 36407370005 is the clearest case: three stages, three slices
+    spent, nothing answered, and the refusals were minutes long while the
+    retries were seconds apart.
+
+    Spacing beats persistence here. Each stage gets ONE cheap attempt per
+    pass, and the passes are naturally minutes apart because the other
+    stages run in between. A stage that has answered is not asked again.
+    """
+    stages = (
+        ("render_clock", lambda: render_clock_probe(
+            date, timeout=timeout, pause=pause, slice_seconds=70,
+            attempts=1)),
+        ("collector_end_to_end", lambda: collector_end_to_end(
+            date, timeout=timeout, pause=pause, slice_seconds=110)),
+        ("settlement_probe", lambda: settlement_probe(
+            date, timeout=timeout, pause=pause, slice_seconds=110,
+            attempts=1)),
+    )
+    results: dict[str, Any] = {}
+    stage_meta: dict[str, dict[str, Any]] = {}
+    attempts_used: dict[str, int] = {name: 0 for name, _ in stages}
+    for attempt in range(1, passes + 1):
+        outstanding = [item for item in stages
+                       if not stage_succeeded(item[0], results.get(item[0]))]
+        if not outstanding or time_left() < 80:
+            break
+        for name, run in outstanding:
+            if time_left() < 80:
+                break
+            started = time.monotonic()
+            try:
+                record = run()
+            except Exception as exc:  # noqa: BLE001 - reported, not raised
+                record = {"verdict": f"{type(exc).__name__}: {exc}"[:200]}
+            # Meta lives beside the record, never inside it: the
+            # settlement record is keyed BY SPORT, and a "pass" key added
+            # to it reads as a sport called "pass" to everything
+            # downstream.
+            attempts_used[name] = attempt
+            stage_meta[name] = {"pass": attempt,
+                                "seconds": round(time.monotonic() - started, 1)}
+            # Keep the answer if one was ever obtained: a later refusal
+            # does not unprove an earlier measurement.
+            if stage_succeeded(name, record) or name not in results:
+                results[name] = record
+            if stage_succeeded(name, record):
+                emit_section(name, record)
+    for name, record in results.items():
+        emit_section(name, record)
+    results["passes_used"] = attempts_used
+    results["stage_meta"] = stage_meta
+    return results
+
+
 def run_probe(date: str, *, sport: str, timeout: int, pause: float,
               run_hunt: bool = False, run_browser: bool = False) -> dict[str, Any]:
     EMITTED_SECTIONS.clear()
@@ -2094,50 +2176,26 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
     # The offset decides whether any sport but football can ever produce a
     # pick, and it costs two requests. Nothing else in this probe earns its
     # budget as cheaply.
-    stage_started = time.monotonic()
-    report["render_clock"] = render_clock_probe(date, timeout=timeout,
-                                                pause=pause)
-    report["render_clock"]["budget_left_after"] = round(time_left())
-    emit_section("render_clock", report["render_clock"])
+    # The three questions this branch is blocked on, run in passes so a
+    # refusal that lasts minutes does not cost a stage its only chance.
+    open_questions = run_open_questions(date, timeout=timeout, pause=pause)
+    report["passes_used"] = open_questions.pop("passes_used", {})
+    stage_meta = open_questions.pop("stage_meta", {})
+    report.update(open_questions)
     report["stage_seconds"] = {
-        "render_clock": round(time.monotonic() - stage_started, 1)}
-
-    stage_started = time.monotonic()
-
-    report["settlement_probe"] = settlement_probe(
-        date, timeout=timeout, pause=pause)
-    report["stage_seconds"]["settlement_probe"] = round(
-        time.monotonic() - stage_started, 1)
-    emit_section("settlement_probe", report["settlement_probe"])
-
-    # The production capture path, end to end. Proving capture_board works
-    # is not the same as proving the collector writes something the
-    # evaluator can read.
-    stage_started = time.monotonic()
-    report["collector_end_to_end"] = collector_end_to_end(
-        date, timeout=timeout, pause=pause)
-    report["stage_seconds"]["collector_end_to_end"] = round(
-        time.monotonic() - stage_started, 1)
-    emit_section("collector_end_to_end", report["collector_end_to_end"])
-
-    stage_started = time.monotonic()
-
-    # Cricket is left out until its partially-rendered kickoff column is
-    # handled: it fails the same way every run and teaches nothing new,
-    # while costing eight requests that rugby and mma can use.
-    report["horizon_coverage"] = horizon_coverage(
-        date, timeout=timeout, pause=pause,
-        sports=("rugby",))
-    report["stage_seconds"]["horizon_coverage"] = round(
-        time.monotonic() - stage_started, 1)
-    emit_section("horizon_coverage", report["horizon_coverage"])
-    stage_started = time.monotonic()
-
-    report["r1_coverage"] = r1_coverage(date, timeout=timeout, pause=pause)
-    report["stage_seconds"]["r1_coverage"] = round(
-        time.monotonic() - stage_started, 1)
+        name: meta.get("seconds") for name, meta in stage_meta.items()}
     report["stage_seconds"]["budget_left"] = round(time_left())
-    emit_section("r1_coverage", report["r1_coverage"])
+
+    # Coverage for the proven sports only runs on what is left: those
+    # sports have produced rank-1 fields repeatedly, and re-proving them
+    # was costing the stages that have never succeeded.
+    if time_left() > 200:
+        stage_started = time.monotonic()
+        report["r1_coverage"] = r1_coverage(date, timeout=timeout,
+                                            pause=pause)
+        report["stage_seconds"]["r1_coverage"] = round(
+            time.monotonic() - stage_started, 1)
+        emit_section("r1_coverage", report["r1_coverage"])
     emit_section("stage_seconds", report["stage_seconds"])
 
     if time_left() > 300:
@@ -2497,6 +2555,8 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
     if settling:
         lines.append("D+1 settlement through the same route:")
         for sport, rec in settling.items():
+            if not isinstance(rec, dict):
+                continue
             lines.append(
                 f"  {sport}: {rec.get('status', rec.get('verdict'))} "
                 f"date={rec.get('settled_date')} rows={rec.get('rows')} "
@@ -2888,7 +2948,7 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     # characters and the interesting result is usually last.
     sections = (
         "render_clock", "stage_seconds", "settlement_probe",
-        "collector_end_to_end", "r1_coverage",
+        "collector_end_to_end", "passes_used", "r1_coverage",
         "horizon_coverage",
         "capture_contract",
         "coverage_sweep", "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",
