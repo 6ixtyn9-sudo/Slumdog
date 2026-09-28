@@ -202,6 +202,73 @@ class TestRows:
         assert isinstance(board, BoardColumns)
 
 
+class TestCircuitBreaker:
+    """Priority 1 (2026-09-28): a board that is not coming should cost 2-3
+    requests, not 8 columns x 3 attempts = 24. Forward Shadow #33 (run
+    36426785929) ran the forward pass's undifferentiated capture step for
+    >=1h56m without finishing, mostly discovering "no board for this date"
+    the expensive way for sport-dates D+4..D+6 out."""
+
+    def test_the_board_is_not_attempted_further_once_the_first_two_columns_refuse(self):
+        seen: list[str] = []
+        with pytest.raises(ColumnFetchError, match="circuit breaker"):
+            fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                                sleep=lambda _s: None, opener=_opener({}, seen))
+        # link, home: one request each (circuit_breaker_attempts=1 default),
+        # nothing for away/kickoff/probabilities/pick/predicted_score/average.
+        assert seen == [scoped(".tnms"), scoped(".homeTeam")]
+
+    def test_a_single_answering_column_keeps_the_whole_board_in_play(self):
+        # Only "link" answers; every other column (including the second
+        # probed column, "home") 422s. A board that answers even one
+        # arbitrary field is alive, so every other column still gets its
+        # full retry budget rather than being abandoned with the probe.
+        bodies = {scoped(".tnms"): _full_board(2)[scoped(".tnms")]}
+        seen: list[str] = []
+        with pytest.raises(ColumnFetchError, match="missing required"):
+            fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                                sleep=lambda _s: None, opener=_opener(bodies, seen))
+        # home was retried at the full attempts (3), not left on the
+        # single-attempt probe; every other column was tried too.
+        assert seen.count(scoped(".homeTeam")) == 3
+        assert scoped(".awayTeam") in seen and scoped(".fprc") in seen
+
+    def test_a_probed_column_that_recovers_on_retry_is_not_lost(self):
+        # "home" 422s on the cheap probe attempt but the board is alive
+        # (link answered) and home itself recovers by its second full-policy
+        # attempt — the existing "throttling recovers on retry" guarantee
+        # must still hold for a circuit-breaker-probed column.
+        bodies = _full_board(2)
+        calls = {"n": 0}
+        home_selector = scoped(".homeTeam")
+        base_opener = _opener(bodies)
+
+        def flaky(request, timeout=None):
+            selector = (request.headers.get("X-target-selector")
+                        or request.headers.get("X-Target-Selector"))
+            if selector == home_selector:
+                calls["n"] += 1
+                if calls["n"] <= 2:  # fails the probe attempt AND retry #1
+                    raise urllib.error.HTTPError("u", 422, "no", {}, None)
+            return base_opener(request, timeout=timeout)
+
+        board = fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                                    sleep=lambda _s: None, opener=flaky)
+        assert board.columns["home"] == ["Team0", "Team1"]
+
+    def test_circuit_breaker_columns_zero_restores_the_old_behaviour(self):
+        # The escape hatch: every column gets the full attempts budget from
+        # its first request, exactly like before 2026-09-28.
+        seen: list[str] = []
+        with pytest.raises(ColumnFetchError, match="missing required"):
+            fetch_board_columns(BOARD, "basketball", "2026-09-27",
+                                sleep=lambda _s: None,
+                                opener=_opener({}, seen),
+                                circuit_breaker_columns=0)
+        assert seen.count(scoped(".tnms")) == 3
+        assert len(seen) == 3 * len(COLUMN_SELECTORS)
+
+
 class TestMatchIdentity:
     """Columns carry no id except inside the .tnms link, and an event
     without identity cannot be settled later."""

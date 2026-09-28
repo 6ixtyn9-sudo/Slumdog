@@ -468,6 +468,24 @@ def validate_capture_body(body: bytes, sport: str, target_date: str, route: str)
     validate_html_body(body, sport, target_date)
 
 
+def _classify_capture_outcome(exc: Exception) -> str:
+    """Label a failed ``_fetch`` for the per-sport-date timing instrument.
+
+    ``_fetch``'s column-route failure message embeds
+    ``relay_columns.BoardCapture.status`` verbatim (``"... column capture
+    returned {result.status}: {result.reason}"``), so the two board-read
+    outcomes are recoverable from the exception text without a second
+    return channel. Anything else — a network error, a validation error
+    from a route that never reached the column fallback — is ``RAISED``:
+    an exception this collector did not classify, not a quiet gap.
+    """
+    text = str(exc)
+    for status in ("COVERAGE_GAP", "NO_ROWS_FOR_DATE"):
+        if status in text:
+            return status
+    return "RAISED"
+
+
 class ForebetCollector:
     def __init__(self, root: Path | str = ".", timeout: int = 35,
                  workers: int = 4, before_request=None):
@@ -609,18 +627,53 @@ class ForebetCollector:
         to_fetch = [sport for sport in selected if sport not in existing]
         captures: list[RawCapture] = [cap for cap in self._existing_captures(target_date) if cap.sport in selected]
         failures: list[str] = []
+        # Per-sport-date instrumentation (Priority 1, 2026-09-28): the
+        # forward pass captures D+2..D+6 x 14 sports through this loop with
+        # zero internal timing, which is why Forward Shadow #33 (run
+        # 36426785929) could only be described as ">=1h56m on one
+        # undifferentiated step" — nobody could say which sport-date cost
+        # what. Only the paced serial path gets this (the parallel path
+        # below is used for historical backfill, not the timing-sensitive
+        # forward pass). ``requests`` counts ``before_request`` calls, which
+        # fire once before the initial fetch and once per column-route
+        # attempt (``relay_columns.fetch_column``) — the same seam a request
+        # budget would hook into, so the count is what a budget would see.
+        capture_timing: list[dict] = []
         if pause_seconds and pause_seconds > 0:
             # Paced serial path. A same-day stage fetches every sport in one
             # burst; ``pause_seconds`` spaces those requests the same way the
             # settlement capture does, so an extra daily stage does not raise
             # the request rate seen by the source.
+            outer_before_request = self.before_request
             for i, sport in enumerate(to_fetch):
                 if i > 0:
                     time.sleep(pause_seconds)
+                request_count = {"n": 0}
+
+                def _counted_before_request(_outer=outer_before_request,
+                                            _count=request_count):
+                    _count["n"] += 1
+                    if _outer is not None:
+                        _outer()
+
+                self.before_request = _counted_before_request
+                started = time.monotonic()
+                outcome = "CAPTURED"
                 try:
-                    captures.append(self._fetch(sport, target_date))
+                    cap = self._fetch(sport, target_date)
+                    captures.append(cap)
+                    outcome = f"CAPTURED:{cap.route}"
                 except Exception as exc:  # each satellite fails independently
                     failures.append(f"{sport}:{type(exc).__name__}:{exc}")
+                    outcome = _classify_capture_outcome(exc)
+                finally:
+                    self.before_request = outer_before_request
+                    capture_timing.append({
+                        "sport": sport,
+                        "elapsed_seconds": round(time.monotonic() - started, 3),
+                        "requests": request_count["n"],
+                        "outcome": outcome,
+                    })
         else:
             with ThreadPoolExecutor(max_workers=self.workers) as executor:
                 futures = {sport: executor.submit(self._fetch, sport, target_date) for sport in to_fetch}
@@ -654,6 +707,11 @@ class ForebetCollector:
                 str(markets_path.relative_to(self.root))
                 if markets_path is not None else None
             ),
+            # Empty on the parallel (workers>1) path — only the paced
+            # serial path (pause_seconds>0, what every production stage
+            # uses) times individual sports. See the comment above the
+            # serial loop for why.
+            "capture_timing": capture_timing,
         }
         (report_dir / receipt_filename).write_text(
             json.dumps(receipt, indent=2, sort_keys=True)

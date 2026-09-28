@@ -1,5 +1,64 @@
 # Slumdog Living Handoff
 
+**2026-09-28 (same session, continued) — NETWORK-REACHABILITY CLAIM CORRECTED A THIRD TIME (this is the one to trust); OWNER PROVED THE WEB-FETCH TOOL READS A PASTED SIGNED BLOB URL.**
+
+The entry directly below this one ("FORWARD SHADOW #33 READ END TO END...")
+said *"annotations are the only channel this sandbox can read a run's real
+findings through, full stop."* **That is wrong, and it is the same mistake
+in the opposite direction from the original "blob storage is unreachable"
+claim it was trying to fix: promoting "the method I tried failed" into "no
+method could work."** The owner supplied the counter-example from a prior
+session's chat log: pasting a signed `productionresultssa10.blob.core.windows.net`
+job-log URL let the WEB FETCH tool read an entire job log across seven
+chunks — the full probe report JSON, far more than an annotation carries.
+
+**The corrected, per-method rule now lives in `AGENTS.md` → "Remote Probing"
+as a table; read it there before trusting any paraphrase of it, including
+this one.** In short: `gh`/`curl` from this sandbox cannot reach
+`*.blob.core.windows.net` or `results-receiver.actions.githubusercontent.com`
+(no general egress — that part of every prior correction was right). The
+WEB FETCH tool cannot mint its own signed URL and gets 401/403 hitting the
+raw `/logs` or `/zip` endpoints (no credential) — also right. But the WEB
+FETCH tool CAN follow a signed URL it is simply given, because the `sig=`
+query parameter IS the credential and the tool needs no header. Nobody had
+tried that third path before concluding "full stop." **The takeaway to
+carry forward, independent of GitHub specifics: when a read method fails,
+report which method failed and under which condition — never generalize a
+tested failure into an untested impossibility.**
+
+**Next actions this session (owner-directed, in order):**
+1. Ask the owner to paste a fresh signed log URL for run 36426785929 (the
+   run page's Download-log link; window ~10 minutes, ask again if it's
+   gone stale) and read it via WEB FETCH, chunk by chunk. Answer the
+   original four questions from stdout in that log — the driver prints its
+   receipt there — not from the 59.7MB artifact, which is too big to fetch
+   usefully by this route.
+2. Instrument `forward_shadow_batch.py` BEFORE touching Priority 1's fix:
+   one line per phase and per sport-date (elapsed seconds, request count,
+   outcome: `CAPTURED` / `NO_ROWS_FOR_DATE` / `COVERAGE_GAP` / raised).
+   Without this, "about two hours" is the only fact anyone has, and a fix
+   would be unmeasurable.
+3. Then the actual Priority 1 fix, in order: (a) circuit breaker — stop
+   after the first two column refusals, not eight; (b) gate the column
+   fallback by measured publication horizon (rugby +2d, mma +4d, most
+   ~1d) so D+6 volleyball is never attempted; (c) a per-run request
+   budget through the existing unused `ForebetCollector(before_request=...)`
+   seam. Report timings from step 2's instrumentation, not wall clock.
+4. Do not re-dispatch Forward Shadow until 2 and 3 land on `main` —
+   `workflow_dispatch: {}` takes no inputs, so code is the only lever, and
+   `cancel-in-progress: false` means a second dispatch would just queue.
+
+**Context to hold, not act on yet:** `data/reports/shadow_event_day/` has
+never been committed for any sport in this repo's history — expected, since
+the track was football-only by design before PR #21 — so its first real
+entry is the actual proof the column route works for the event-day track,
+and should be checked hard, not celebrated on sight. And the owner's real
+goal is R1 **quality**, not throughput: today's R1 is Forebet's own
+top-probability pick, sorted, so it cannot beat Forebet by construction.
+The only legitimate order is settled outcomes → hit rate per sport/band →
+a baseline to beat → new features. No improvement claim is a claim before
+outcomes are graded.
+
 **2026-09-28 (this session) — FORWARD SHADOW #33 READ END TO END (cancelled, not completed); NETWORK-REACHABILITY CLAIM CORRECTED A SECOND TIME; PERSIST-STEP CANCELLATION GAP FOUND AND STAGED.**
 
 **What was asked:** read Forward Shadow run 36426785929 end to end and report the event-day `render_clock` block, `selected_sports`, capture-receipt routes, `shadow_event_day/` contents, and per-phase timings — the baseline for Priority 1 (the forward-pass cost regression).
@@ -45,7 +104,7 @@
 - **Route comparison.** `X-Return-Format: html` → challenge; `X-Engine: browser` / `cf-browser-rendering` → 401 (paid relay key required); Markdown reader → real content (15KB) but basketball markdown has no team names and no per-match times, so it cannot feed the parser as-is.
 - **Open decision (owner).** (a) add a relay API key as a repo secret and re-probe the browser engine, (b) keep probing for per-sport JSON endpoints like football's `getrs.php` (no owner action needed, a few automated rounds), or (c) accept football-only.
 - **The EVENT_DAY timezone hold stands and is now moot for those sports** — an unfetchable board cannot be timed. No calibration work should start before a capture route exists.
-- **How results come back.** ~~Actions logs and artifacts are served from blob storage, which the agent sandbox cannot reach~~ — **corrected 2026-09-28, then corrected again the same day once actually tested end to end (full account in this file's top 2026-09-28 entry; do not trust the intermediate version of this note that existed briefly between the two corrections).** The final, tested state: `api.github.com` metadata endpoints (run/job status, step timestamps, `::notice` annotations) ARE directly reachable from the Arena sandbox via `gh`/`curl` (`curl -s -o /dev/null -w '%{http_code}' https://api.github.com` → `200`) and via the unauthenticated WEB FETCH tool, even though general internet egress is not (`https://example.com`, `https://raw.githubusercontent.com/...`, `https://www.forebet.com/...` all → `exit 35`, `http_code=000`). But the actual **log and artifact bytes are not** reachable by any tool tried this session, completed job or not: `gh run view --job <id> --log` and `gh run download` both obtain a valid signed URL from `api.github.com` and then fail fetching it (`...blob.core.windows.net`/`...results-receiver.actions.githubusercontent.com` → `EOF`, the same general-egress block, confirmed on different domains); the WEB FETCH tool hitting the jobs `/logs` endpoint returns `403 Must have admin rights to Repository` regardless of job status, and the artifacts `/zip` endpoint returns `401 Requires authentication` — it carries no GitHub credential, so it can only read the same public unauthenticated JSON `gh api` can. **Annotations remain the only channel this sandbox can read out of a run's substantive content; full logs and artifacts require the owner's own authenticated browser.** The original claim was closer to right than either correction attempt initially gave it credit for — it just misattributed *why*.
+- **How results come back.** ~~Actions logs and artifacts are served from blob storage, which the agent sandbox cannot reach~~ — **corrected 2026-09-28, three times in one day; see `AGENTS.md` → "Remote Probing" for the per-method table that is the one to trust.** Summary: `api.github.com` JSON and `raw.githubusercontent.com` are readable via the WEB FETCH tool with no credential (public repo). `gh`/`curl` from the sandbox cannot reach the blob-storage domains that actually serve log/artifact bytes (no egress) — true of the first two correction attempts too. But the WEB FETCH tool reading a **pre-signed** blob URL (the one behind the run page's Download-log button) DOES work — the owner proved this by pasting one and the tool read the full job log across seven chunks. So logs are NOT gated on annotations; they're gated on getting a signed URL into the session, which only the owner's authenticated browser can mint. The lesson that survives all three corrections: report which specific method failed under which specific condition, not a claim about every method.
 
 **Last updated:** 2026-09-26 (UTC, later session) — **RENAMED TO `EVENT_DAY` + KICKOFF-TIMEZONE PROBE.**
 

@@ -98,6 +98,131 @@ def test_football_fetch_retries_truncated_then_succeeds(tmp_path, monkeypatch):
     assert (tmp_path / cap.body_path).read_bytes() == good
 
 
+class TestCaptureTimingInstrumentation:
+    """Priority 1 (2026-09-28): before this, ``forward_shadow_batch.py`` had
+    zero internal timing (``grep -c 'time.time()\\|elapsed'`` was 0), so
+    Forward Shadow #33 (run 36426785929) could only be reported as ">=1h56m
+    on one undifferentiated step" — nobody could say which sport-date cost
+    what. ``capture_timing`` is per-sport-date elapsed time, request count
+    and outcome, the measurement Priority 1's actual fix needs to prove
+    itself against."""
+
+    def test_a_successful_capture_is_timed_and_labelled_by_route(
+        self, tmp_path, monkeypatch
+    ):
+        from slumdog.forebet import ForebetCollector, RawCapture
+
+        def fake_fetch(self, sport, target_date):
+            self.before_request()  # the initial-attempt call every _fetch makes
+            self.before_request()  # a simulated column-route attempt
+            return RawCapture(
+                sport, target_date, "2026-09-29T04:00:00+00:00", "u", "r",
+                "columns_v1", "abc", 3, "p.txt", "p.json", route="relay_columns")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        collector.capture_selected(
+            "2026-09-29", sports=["volleyball"], pause_seconds=0.01)
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        [timing] = receipt["capture_timing"]
+        assert timing["sport"] == "volleyball"
+        assert timing["outcome"] == "CAPTURED:relay_columns"
+        assert timing["requests"] == 2
+        assert timing["elapsed_seconds"] >= 0
+
+    def test_a_column_route_gap_is_labelled_from_the_raised_message(
+        self, tmp_path, monkeypatch
+    ):
+        def fake_fetch(self, sport, target_date):
+            raise ValueError(
+                f"{sport} {target_date}: html capture rejected and column "
+                f"capture returned COVERAGE_GAP: missing required column(s)")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        from slumdog.forebet import ForebetCollector
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        collector.capture_selected(
+            "2026-09-29", sports=["rugby"], pause_seconds=0.01)
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        [timing] = receipt["capture_timing"]
+        assert timing["outcome"] == "COVERAGE_GAP"
+        assert receipt["failures"] == [
+            "rugby:ValueError:rugby 2026-09-29: html capture rejected and "
+            "column capture returned COVERAGE_GAP: missing required "
+            "column(s)"]
+
+    def test_an_unclassified_exception_is_labelled_raised_not_silently_dropped(
+        self, tmp_path, monkeypatch
+    ):
+        def fake_fetch(self, sport, target_date):
+            raise RuntimeError("connection reset")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        from slumdog.forebet import ForebetCollector
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        collector.capture_selected(
+            "2026-09-29", sports=["mma"], pause_seconds=0.01)
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        [timing] = receipt["capture_timing"]
+        assert timing["outcome"] == "RAISED"
+
+    def test_the_parallel_path_is_not_timed(self, tmp_path, monkeypatch):
+        # capture_timing is a serial-path (pause_seconds>0) instrument only;
+        # the parallel path (workers>1, used for historical backfill, not
+        # the timing-sensitive forward pass) is left as it was.
+        from slumdog.forebet import ForebetCollector, RawCapture
+
+        def fake_fetch(self, sport, target_date):
+            return RawCapture(
+                sport, target_date, "2026-09-29T04:00:00+00:00", "u", "r",
+                "html", "abc", 3, "p.txt", "p.json", route="direct")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=2)
+        collector.capture_selected("2026-09-29", sports=["football"])
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        assert receipt["capture_timing"] == []
+
+    def test_a_caller_supplied_before_request_still_runs_under_the_counter(
+        self, tmp_path, monkeypatch
+    ):
+        # The counting wrapper must delegate to whatever before_request the
+        # caller already installed (e.g. a request budget), not replace it.
+        from slumdog.forebet import ForebetCollector, RawCapture
+
+        outer_calls = {"n": 0}
+
+        def fake_fetch(self, sport, target_date):
+            self.before_request()
+            return RawCapture(
+                sport, target_date, "2026-09-29T04:00:00+00:00", "u", "r",
+                "html", "abc", 3, "p.txt", "p.json", route="direct")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        collector = ForebetCollector(
+            root=tmp_path, timeout=5, workers=1,
+            before_request=lambda: outer_calls.__setitem__(
+                "n", outer_calls["n"] + 1))
+        collector.capture_selected(
+            "2026-09-29", sports=["hockey"], pause_seconds=0.01)
+        assert outer_calls["n"] == 1
+        # And the caller's own before_request is restored afterwards.
+        assert collector.before_request is not None
+
+
 class TestCaptureSelectedRefreshParams:
     def test_receipt_name_validation(self, tmp_path):
         from slumdog.forebet import ForebetCollector
