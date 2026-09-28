@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .analyze import analyze_depth
+from .analyze import analyze_depth, r1_scorecard
 from .backfill import backfill, backfill_sport
 from .clock import today_iso
 from .detail_worker import capture_detail_batch, enrich_events_from_details
@@ -113,6 +113,15 @@ def main() -> int:
     _date_arg(analysis, help_text="YYYY-MM-DD label for the report (default: today)")
     analysis.add_argument("--root", default=".")
 
+    scorecard = sub.add_parser(
+        "r1-scorecard",
+        help=("offline R1 performance scorecard from committed shadow evidence "
+              "only (no network): overall + per-sport + per-probability-band "
+              "hit rates with Wilson intervals, plus always-favourite/always-"
+              "underdog/forebet_pick baselines on the same rows"))
+    _date_arg(scorecard, help_text="YYYY-MM-DD label for the report (default: today)")
+    scorecard.add_argument("--root", default=".")
+
     research = sub.add_parser("research", help="model cards + feature ablations from settled ledgers")
     research.add_argument("--root", default=".")
     research.add_argument("--min-rows", type=int, default=100)
@@ -206,6 +215,10 @@ def main() -> int:
         return 0
     if args.command == "analyze":
         path = analyze_depth(args.root, args.date)
+        print(path)
+        return 0
+    if args.command == "r1-scorecard":
+        path = r1_scorecard(args.root, args.date)
         print(path)
         return 0
     if args.command == "research":

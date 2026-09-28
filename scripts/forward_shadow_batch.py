@@ -1201,8 +1201,33 @@ def run_capture(target_date: str, repo_root: Path, *, pause_seconds: int = 62, t
     and run_event_day_for_date (today) deliberately do NOT pass this —
     their boards usually already exist, and a false trip there would
     silently cost a real pick or a real grade instead of a wasted probe.
+
+    Also the ONLY call site gated by the publication-horizon check
+    (Priority 1, item v, 2026-09-28, ``slumdog.horizon``): before any
+    request is issued, each sport is checked against its own observed
+    forward-reachability ceiling (computed offline from every committed
+    capture receipt — see ``horizon.compute_observed_horizons``) and
+    dropped from this date's ``sports`` list if the offset has never once
+    been confirmed reachable for it. This is deliberately narrower than a
+    fixed "N days ahead" table: most sports here turn out to have been
+    confirmed reachable at every offset this pass ever requests (their
+    boards are calendar-driven, not offset-gated), so the gate mostly
+    protects against sports with zero confirmed forward reachability at
+    all (e.g. esports) and against any future widening of ``--dates``
+    past what has actually been observed. Every decision — allowed and
+    refused — is written into this date's receipt under
+    ``horizon_gate`` so the refusal (and its evidence) is auditable from
+    the committed artifact itself, not just this function's return value.
     """
     from slumdog.forebet import ForebetCollector
+    from slumdog.horizon import compute_observed_horizons, filter_sports_by_horizon
+    from slumdog.sports import SPORTS
+
+    as_of_date = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    horizons = compute_observed_horizons(repo_root)
+    allowed_sports, horizon_decisions = filter_sports_by_horizon(
+        list(SPORTS), target_date, as_of_date, horizons)
+    refused = [d for d in horizon_decisions if not d.allowed]
 
     # NOTE (found 2026-09-28, while wiring per-sport-date timing): this
     # function accepted `pause_seconds` and its docstring above claimed
@@ -1218,11 +1243,23 @@ def run_capture(target_date: str, repo_root: Path, *, pause_seconds: int = 62, t
                                  circuit_breaker_columns=2,
                                  circuit_breaker_attempts=1)
     captures = collector.capture_selected(
-        target_date, pause_seconds=pause_seconds,
+        target_date, sports=allowed_sports, pause_seconds=pause_seconds,
         on_capture_timing=_capture_timing_logger("forward", target_date))
     receipt_path = repo_root / "data" / "reports" / f"capture_{target_date}.json"
     if receipt_path.is_file():
-        return json.loads(receipt_path.read_text())
+        receipt = json.loads(receipt_path.read_text())
+        receipt["horizon_gate"] = {
+            "as_of_date": as_of_date,
+            "method": (
+                "slumdog.horizon.filter_sports_by_horizon, evaluated "
+                "against every committed data/reports/capture_*.json "
+                "receipt at call time (no hardcoded table)"),
+            "refused": [d.to_dict() for d in refused],
+            "allowed_count": len(allowed_sports),
+            "refused_count": len(refused),
+        }
+        receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True))
+        return receipt
     return {
         "target_date": target_date,
         "captured": [{"sport": c.sport, "sha256": c.sha256} for c in captures],

@@ -1309,10 +1309,11 @@ class TestCaptureTimingStderrLogging:
                         circuit_breaker_attempts=1):
                 seen["circuit_breaker_columns"] = circuit_breaker_columns
 
-            def capture_selected(self, target_date, force=False,
+            def capture_selected(self, target_date, sports=None, force=False,
                                  receipt_name=None, pause_seconds=0,
                                  on_capture_timing=None):
                 seen["pause_seconds"] = pause_seconds
+                seen["sports"] = sports
                 assert on_capture_timing is not None
                 on_capture_timing({"sport": "hockey", "elapsed_seconds": 0.5,
                                    "requests": 2, "outcome": "CAPTURED:relay_columns"})
