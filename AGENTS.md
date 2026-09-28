@@ -278,6 +278,18 @@ Every refusal path and `load_render_clock` failure returns `None`, which is
 byte-identical to having no calibration at all: football only. A broken
 calibration must never be more permissive than no calibration.
 
+**A converted kickoff owes a margin.** The offset is measured on
+football's board and applied to every other sport's. One renderer, one
+egress, one clock is a sound inference and is not a measurement, and the
+error it would make is one-directional: a match looks LATER than it is,
+and a pick is admitted against a match already under way.
+`CONVERTED_KICKOFF_MARGIN_MINUTES` (90) is demanded on top of the declared
+lead for any kickoff that was converted rather than read, and rejections
+land in their own bucket
+(`INSUFFICIENT_LEAD_FOR_CONVERTED_KICKOFF`). The margin covers a clock
+that shifts mid-run; a clock that is simply unknown is refused outright,
+not margined.
+
 When a clock is present the event-day track converts a rendered kickoff and
 records the whole basis in the payload — `timing_contract.render_clock` and
 `kickoff_timezone_basis` — and commits `render_clock_offset_minutes` to the

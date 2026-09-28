@@ -785,9 +785,10 @@ class TestAMeasuredClockOpensTheGate:
             min_lead_minutes=MIN_EVENT_DAY_LEAD_MINUTES,
             render_clock=self._clock(offset_minutes=120))
         # Rendered 07:00 on a clock two hours ahead is 05:00 UTC — an hour
-        # before the decision was even taken.
+        # before the decision was even taken. Refused either way; it lands
+        # in the converted bucket because the kickoff was converted.
         assert timed == []
-        assert reasons["INSUFFICIENT_LEAD_BEFORE_KICKOFF"] == 1
+        assert reasons["INSUFFICIENT_LEAD_FOR_CONVERTED_KICKOFF"] == 1
 
     def test_without_a_clock_nothing_changes(self):
         decision = dt.datetime(2026, 9, 26, 6, 0, tzinfo=dt.timezone.utc)
@@ -831,3 +832,63 @@ class TestAMeasuredClockOpensTheGate:
             render_clock=self._clock())
         assert timed == []
         assert reasons["KICKOFF_NOT_ON_TARGET_DATE"] == 1
+
+
+class TestAConvertedKickoffOwesAMargin:
+    """The offset is measured on football's board and applied to every
+    other sport's. One renderer, one egress, one clock is a sound
+    inference — and it is not a measurement. The error it would make is
+    one-directional: a match looks LATER than it is, and a pick is
+    admitted against a match already under way."""
+
+    def _clock(self, offset_minutes=-120):
+        from slumdog.render_clock import RenderClock
+
+        return RenderClock(
+            offset_minutes=offset_minutes, samples=40, distinct_hours=10,
+            target_date=TARGET_DATE, measured_at=f"{TARGET_DATE}T04:00:00Z")
+
+    def _classify(self, kickoff, decision_hour=6):
+        decision = dt.datetime(2026, 9, 26, decision_hour, 0,
+                               tzinfo=dt.timezone.utc)
+        rec = _record("hockey:1", sport="hockey", draw=None, kickoff=kickoff)
+        return _timing_classify_event_day(
+            [rec], target_date=TARGET_DATE, decision_dt=decision,
+            min_lead_minutes=MIN_EVENT_DAY_LEAD_MINUTES,
+            render_clock=self._clock())
+
+    def test_a_kickoff_inside_the_margin_is_refused(self):
+        from slumdog.shadow_evaluator import CONVERTED_KICKOFF_MARGIN_MINUTES
+
+        assert CONVERTED_KICKOFF_MARGIN_MINUTES == 90
+        # Rendered 07:00 on a UTC-2 clock is 09:00 UTC — one hour after an
+        # 08:00 decision, which clears the 30-minute declared lead but not
+        # the 90 minutes a converted kickoff owes on top of it.
+        timed, _, _, reasons = self._classify("26/09/2026 07:00",
+                                              decision_hour=8)
+        assert timed == []
+        assert reasons["INSUFFICIENT_LEAD_FOR_CONVERTED_KICKOFF"] == 1
+        assert reasons["INSUFFICIENT_LEAD_BEFORE_KICKOFF"] == 0
+
+    def test_a_kickoff_clear_of_the_margin_is_admitted(self):
+        timed, _, _, reasons = self._classify("26/09/2026 18:00")
+        assert [r.event_id for r in timed] == ["hockey:1"]
+        assert reasons["INSUFFICIENT_LEAD_FOR_CONVERTED_KICKOFF"] == 0
+
+    def test_football_owes_no_margin_because_nothing_was_converted(self):
+        decision = dt.datetime(2026, 9, 26, 6, 0, tzinfo=dt.timezone.utc)
+        # 07:00 UTC is one hour out: inside the margin, but football's
+        # kickoff is read, not converted, so the margin does not apply.
+        rec = _record("football:1", kickoff=f"{TARGET_DATE} 07:00")
+        timed, _, _, reasons = _timing_classify_event_day(
+            [rec], target_date=TARGET_DATE, decision_dt=decision,
+            min_lead_minutes=MIN_EVENT_DAY_LEAD_MINUTES,
+            render_clock=self._clock())
+        assert [r.event_id for r in timed] == ["football:1"]
+        assert reasons["INSUFFICIENT_LEAD_FOR_CONVERTED_KICKOFF"] == 0
+
+    def test_the_margin_is_named_in_the_rejection_buckets(self):
+        from slumdog.shadow_evaluator import EVENT_DAY_REJECTION_REASONS
+
+        assert ("INSUFFICIENT_LEAD_FOR_CONVERTED_KICKOFF"
+                in EVENT_DAY_REJECTION_REASONS)

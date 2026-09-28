@@ -787,7 +787,27 @@ EVENT_DAY_REJECTION_REASONS = (
     "KICKOFF_MISSING_OR_UNPARSEABLE",
     "KICKOFF_NOT_ON_TARGET_DATE",
     "INSUFFICIENT_LEAD_BEFORE_KICKOFF",
+    "INSUFFICIENT_LEAD_FOR_CONVERTED_KICKOFF",
 )
+
+
+# Extra lead demanded of a kickoff that was CONVERTED rather than read.
+#
+# The offset is measured on football's board and applied to every other
+# sport's board. That rests on an inference — one renderer, one egress, one
+# clock — which is well founded and is not a measurement. The error it
+# would produce is not symmetric: an offset wrong in one direction makes a
+# match look LATER than it is, and admits a pick against a match already
+# under way. That is the leakage the timezone hold existed to prevent, so
+# while the inference is young a converted kickoff must clear the declared
+# lead by this margin as well.
+#
+# 90 minutes is chosen against the observed drift: the renderer moved from
+# UTC-5 to UTC-2 over two days, but within a single run every one of the 40
+# joined matches agreed exactly. The margin covers a clock that shifts
+# mid-run, not one that is simply unknown — an unknown clock is refused
+# outright, not margined.
+CONVERTED_KICKOFF_MARGIN_MINUTES = 90
 
 
 def _timing_classify_event_day(
@@ -819,6 +839,8 @@ def _timing_classify_event_day(
     malformed = 0
     reasons = {reason: 0 for reason in EVENT_DAY_REJECTION_REASONS}
     min_kickoff = decision_dt + _dt.timedelta(minutes=min_lead_minutes)
+    min_converted_kickoff = min_kickoff + _dt.timedelta(
+        minutes=CONVERTED_KICKOFF_MARGIN_MINUTES)
     for r in records:
         if _extract_decision_fingerprint(r) is None:
             malformed += 1
@@ -831,9 +853,11 @@ def _timing_classify_event_day(
         if cap_at > decision_dt:
             reasons["CAPTURED_AFTER_DECISION"] += 1
             continue
+        converted = False
         if r.sport in UTC_KICKOFF_PROVEN_SPORTS:
             kickoff_dt = parse_kickoff_utc(r.kickoff)
         elif render_clock is not None:
+            converted = True
             # The kickoff's timezone is no longer unknown for this capture:
             # football was seen through both the tz=0 JSON and the renderer
             # in the same run, and the gap between them is the renderer's
@@ -853,6 +877,11 @@ def _timing_classify_event_day(
             continue
         if kickoff_dt.date().isoformat() != target_date:
             reasons["KICKOFF_NOT_ON_TARGET_DATE"] += 1
+            continue
+        if converted and kickoff_dt < min_converted_kickoff:
+            # Cleared the declared lead, but not the margin a converted
+            # kickoff owes. See CONVERTED_KICKOFF_MARGIN_MINUTES.
+            reasons["INSUFFICIENT_LEAD_FOR_CONVERTED_KICKOFF"] += 1
             continue
         if kickoff_dt < min_kickoff:
             reasons["INSUFFICIENT_LEAD_BEFORE_KICKOFF"] += 1
@@ -1628,6 +1657,9 @@ def _emit_run(
         # calibration is an input to the decision, not a footnote.
         input_digest_payload["render_clock_offset_minutes"] = (
             None if render_clock is None else render_clock.offset_minutes)
+        input_digest_payload["converted_kickoff_margin_minutes"] = (
+            None if render_clock is None
+            else CONVERTED_KICKOFF_MARGIN_MINUTES)
     input_digest = _canonical_sha256(input_digest_payload)
 
     # ``decision_digest`` commits to the conflict-resolved pool,
@@ -1724,6 +1756,9 @@ def _emit_run(
         payload["timing_contract"]["kickoff_timezone_basis"] = (
             "tz0_json_only" if render_clock is None
             else "measured_render_offset")
+        payload["timing_contract"]["converted_kickoff_margin_minutes"] = (
+            None if render_clock is None
+            else CONVERTED_KICKOFF_MARGIN_MINUTES)
     payload_bytes = canonical_json_bytes(payload)
     fd_p, tmp_p = tempfile.mkstemp(prefix="shadow_selections.", suffix=".json.tmp", dir=str(artifact_dir))
     try:
