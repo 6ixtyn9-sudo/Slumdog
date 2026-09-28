@@ -367,3 +367,208 @@ class TestTheBoardIsNotTheSource:
                 continue
             assert board_url(spec, "2026-09-29") == source_url(
                 spec, "2026-09-29")
+
+
+class TestCanaryDiscriminatesSiteWideRefusalFromPublicationGap:
+    """Owner finding, 2026-09-28 (Priority 1, item iii): a near/far
+    circuit-breaker comparison run while Cloudflare was challenge-blocking
+    the whole site could not tell "not published yet" from "refused right
+    now" apart — both surface identically as an HTTP 422 / COVERAGE_GAP.
+    Football's tz=0 JSON is the cheap, already-fetched discriminator: if
+    it also failed this same run, no other sport's COVERAGE_GAP may be
+    read as evidence of absence.
+    """
+
+    def test_canary_healthy_when_football_succeeds(self, tmp_path, monkeypatch):
+        from slumdog.forebet import ForebetCollector, RawCapture
+
+        def fake_fetch(self, sport, target_date):
+            return RawCapture(
+                sport, target_date, "2026-09-29T04:00:00+00:00", "u", "r",
+                "html", "abc", 3, "p.txt", "p.json", route="relay_markdown")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        monkeypatch.setattr(
+            "slumdog.forebet.fetch_football_markets", lambda *a, **k: None)
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        collector.capture_selected(
+            "2026-09-29", sports=["football", "hockey"], pause_seconds=0.01)
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        assert receipt["canary"] == {
+            "sport": "football", "checked": True, "healthy": True,
+            "reason": None,
+        }
+        # Nothing to correct: hockey succeeded too, so its outcome is
+        # untouched.
+        [hockey_timing] = [t for t in receipt["capture_timing"]
+                           if t["sport"] == "hockey"]
+        assert hockey_timing["outcome"] == "CAPTURED:relay_markdown"
+
+    def test_canary_down_relabels_other_sports_coverage_gap_but_not_football(
+            self, tmp_path, monkeypatch):
+        from slumdog.forebet import ForebetCollector
+
+        def fake_fetch(self, sport, target_date):
+            if sport == "football":
+                raise ValueError(
+                    f"{sport} {target_date}: football JSON body missing: "
+                    "challenge page")
+            raise ValueError(
+                f"{sport} {target_date}: html capture rejected and column "
+                "capture returned COVERAGE_GAP: circuit breaker tripped "
+                "\u2014 the first 2 column(s) all refused with a "
+                "not-published signal (HTTP 422)")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        monkeypatch.setattr(
+            "slumdog.forebet.fetch_football_markets", lambda *a, **k: None)
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        collector.capture_selected(
+            "2026-09-29", sports=["football", "volleyball"],
+            pause_seconds=0.01)
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        assert receipt["canary"]["healthy"] is False
+        assert "football" in receipt["canary"]["reason"]
+
+        [volleyball_timing] = [t for t in receipt["capture_timing"]
+                               if t["sport"] == "volleyball"]
+        assert volleyball_timing["outcome"] == "COVERAGE_GAP:site_wide_refusal"
+        [volleyball_failure] = [f for f in receipt["failures"]
+                                if "volleyball:" in f]
+        assert volleyball_failure.startswith("[SITE-WIDE REFUSAL")
+        assert "not evidence the board is unpublished" in \
+            volleyball_failure.lower()
+
+        # Football's own entry is never relabelled by this pass — it IS
+        # the canary, not a sport being corrected by it.
+        [football_timing] = [t for t in receipt["capture_timing"]
+                             if t["sport"] == "football"]
+        assert football_timing["outcome"] == "RAISED"
+
+    def test_no_rows_for_date_is_never_touched_even_when_canary_is_down(
+            self, tmp_path, monkeypatch):
+        # NO_ROWS_FOR_DATE is only ever returned on POSITIVE evidence (the
+        # board rendered cleanly and held nothing for this date) — a sport
+        # that reached that status was not refused, regardless of what
+        # happened to football in the same run.
+        from slumdog.forebet import ForebetCollector
+
+        def fake_fetch(self, sport, target_date):
+            if sport == "football":
+                raise ValueError(f"{sport} {target_date}: challenge page")
+            raise ValueError(
+                f"{sport} {target_date}: html capture rejected and column "
+                "capture returned NO_ROWS_FOR_DATE: board rendered 40 rows,"
+                " none on this date")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        monkeypatch.setattr(
+            "slumdog.forebet.fetch_football_markets", lambda *a, **k: None)
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        collector.capture_selected(
+            "2026-09-29", sports=["football", "rugby"], pause_seconds=0.01)
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        assert receipt["canary"]["healthy"] is False
+        [rugby_timing] = [t for t in receipt["capture_timing"]
+                          if t["sport"] == "rugby"]
+        assert rugby_timing["outcome"] == "NO_ROWS_FOR_DATE"
+        [rugby_failure] = [f for f in receipt["failures"]
+                           if f.startswith("rugby:")]
+        assert not rugby_failure.startswith("[SITE-WIDE REFUSAL")
+
+    def test_canary_not_checked_when_football_was_not_requested(
+            self, tmp_path, monkeypatch):
+        from slumdog.forebet import ForebetCollector, RawCapture
+
+        def fake_fetch(self, sport, target_date):
+            return RawCapture(
+                sport, target_date, "2026-09-29T04:00:00+00:00", "u", "r",
+                "html", "abc", 3, "p.txt", "p.json", route="direct")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        monkeypatch.setattr(
+            "slumdog.forebet.fetch_football_markets", lambda *a, **k: None)
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        collector.capture_selected(
+            "2026-09-29", sports=["hockey"], pause_seconds=0.01)
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        assert receipt["canary"] == {
+            "sport": "football", "checked": False, "healthy": None,
+            "reason": "football was not requested in this capture",
+        }
+
+    def test_canary_not_rechecked_when_football_is_reused_from_disk(
+            self, tmp_path, monkeypatch):
+        from slumdog.forebet import ForebetCollector, RawCapture
+
+        # Simulate a football capture already frozen on disk for this date
+        # (same-day re-dispatch) — capture_selected's reuse rule skips
+        # re-fetching it, so this call's canary must say "not rechecked"
+        # rather than silently reporting a stale "healthy".
+        directory = tmp_path / "data" / "raw" / "football" / "2026-09-29"
+        directory.mkdir(parents=True)
+        cap = RawCapture(
+            "football", "2026-09-29", "2026-09-28T00:00:00+00:00",
+            "u", "r", "html", "abc", 3,
+            str((directory / "body.txt").relative_to(tmp_path)),
+            str((directory / "meta.json").relative_to(tmp_path)))
+        (directory / "body.txt").write_text("x")
+        (directory / "meta.json").write_text(json.dumps(vars(cap)))
+
+        def fake_fetch(self, sport, target_date):
+            return RawCapture(
+                sport, target_date, "2026-09-29T04:00:00+00:00", "u", "r",
+                "html", "abc", 3, "p.txt", "p.json", route="direct")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        monkeypatch.setattr(
+            "slumdog.forebet.fetch_football_markets", lambda *a, **k: None)
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        collector.capture_selected(
+            "2026-09-29", sports=["football", "hockey"],
+            pause_seconds=0.01)
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        assert receipt["canary"]["checked"] is False
+        assert receipt["canary"]["healthy"] is None
+        assert "reused" in receipt["canary"]["reason"]
+
+
+    def test_parallel_path_also_records_a_canary(self, tmp_path, monkeypatch):
+        # capture_timing is serial-only, but canary is not — the parallel
+        # (historical-backfill) path still has captures/failures to read
+        # football's outcome from.
+        from slumdog.forebet import ForebetCollector, RawCapture
+
+        def fake_fetch(self, sport, target_date):
+            if sport == "football":
+                raise ValueError("challenge page")
+            return RawCapture(
+                sport, target_date, "2026-09-29T04:00:00+00:00", "u", "r",
+                "html", "abc", 3, "p.txt", "p.json", route="direct")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        monkeypatch.setattr(
+            "slumdog.forebet.fetch_football_markets", lambda *a, **k: None)
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=2)
+        collector.capture_selected("2026-09-29", sports=["football", "hockey"])
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        assert receipt["canary"]["checked"] is True
+        assert receipt["canary"]["healthy"] is False

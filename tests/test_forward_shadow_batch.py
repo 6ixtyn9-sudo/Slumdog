@@ -1484,6 +1484,8 @@ class TestProcessDateCarriesCaptureTimingSummary:
                     {"sport": "football", "elapsed_seconds": 1.0,
                      "requests": 2, "outcome": "CAPTURED:relay_columns"},
                 ],
+                "canary": {"sport": "football", "checked": True,
+                          "healthy": True, "reason": None},
             }
 
         def _fake_evaluator(target_date, repo_root, **kwargs):
@@ -1498,6 +1500,12 @@ class TestProcessDateCarriesCaptureTimingSummary:
             "total_elapsed_seconds": 1.0,
             "by_outcome": {"CAPTURED": 1},
         }
+        # The receipt's canary field (see forebet._canary_state) rides
+        # along into the result untouched — this is the per-date
+        # discriminator a killed run's annotation needs (see
+        # TestPhaseAnnotationOrdering / main()'s forward-pass loop).
+        assert result["canary"] == {"sport": "football", "checked": True,
+                                    "healthy": True, "reason": None}
 
 
 class TestPhaseAnnotationOrdering:

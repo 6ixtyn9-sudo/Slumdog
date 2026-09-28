@@ -318,18 +318,28 @@ def body_fingerprint(body: bytes | None, *, sample: int = 320) -> dict[str, Any]
     challenge page), a different format (the relay's Markdown instead of
     HTML), or a genuinely empty board. These three need different fixes, so
     the probe must say which one it got.
+
+    The challenge-page check reuses ``forebet.looks_like_challenge_page`` —
+    the same list production validates every capture against — rather than
+    a second, independently-maintained keyword list. Found missing a real
+    hit 2026-09-28 (run 36455080098): this function's own list had no entry
+    for "performing security verification" even though forebet.py's list
+    has carried it since the 2026-09-28 challenge-wording addition, so a
+    272-byte challenge page came back ``looks_like: "unknown"`` here and the
+    canary derived from it (see ``canary_from_render_clock``) would have
+    missed a live site-wide block. One classifier, not two that can drift
+    apart.
     """
     if not body:
         return {"bytes": 0, "sample": "", "has_rcnt": False, "looks_like": "empty"}
     text = body.decode("utf-8", "replace")
     lowered = text.lower()
-    if "rcnt" in lowered:
+    if looks_like_challenge_page(body):
+        looks_like = "challenge_page"
+    elif "rcnt" in lowered:
         looks_like = "board_html"
     elif "markdown content" in lowered or text.lstrip().startswith("Title:"):
         looks_like = "relay_markdown_wrapper"
-    elif any(t in lowered for t in ("just a moment", "cf-browser", "cloudflare",
-                                    "captcha", "attention required")):
-        looks_like = "challenge_page"
     elif "<html" in lowered:
         looks_like = "other_html"
     else:
@@ -340,6 +350,7 @@ def body_fingerprint(body: bytes | None, *, sample: int = 320) -> dict[str, Any]
         "has_rcnt": "rcnt" in lowered,
         "looks_like": looks_like,
     }
+
 
 
 def html_board_rows(body: bytes) -> list[dict[str, str]]:
@@ -1303,8 +1314,52 @@ def collector_end_to_end(date: str, *, timeout: int, pause: float,
     return record
 
 
+def canary_from_render_clock(render_clock: dict[str, Any]) -> dict[str, Any]:
+    """Was football's tz=0 JSON itself reachable this run?
+
+    Owner finding, 2026-09-28 (Priority 1, item iii): run 36455080098's
+    near/far circuit-breaker comparison both refused with HTTP 422 while
+    Cloudflare was challenge-blocking the whole site (``render_clock``'s
+    own ``json_body`` showed ``looks_like: "unknown"`` — since fixed, see
+    ``body_fingerprint`` — for a body reading "Performing security
+    verification"). A refusal on a board that has never once failed to
+    publish and a refusal because the source is blocking this run entirely
+    produce the exact same HTTP 422 signal; nothing in the near/far
+    comparison alone can tell them apart.
+
+    Football's tz=0 JSON is the discriminator, and it costs nothing extra
+    here: ``render_clock_probe`` already fetches it every run to measure
+    the renderer's offset. This function only reads that already-computed
+    record — it makes no request of its own.
+
+    ``healthy=True`` when at least one instant was parsed (proof the
+    endpoint served real JSON this run); ``healthy=False`` with a reason
+    when it was attempted and failed; ``healthy=None`` ("not checked")
+    when the render_clock stage never got its turn (time ran out) — a
+    trial with no canary reading is unverified, not assumed healthy.
+    """
+    if not render_clock:
+        return {"sport": "football", "checked": False, "healthy": None,
+                "reason": "render_clock stage did not run this pass"}
+    matches = render_clock.get("json_matches")
+    if matches:
+        return {"sport": "football", "checked": True, "healthy": True,
+                "reason": None}
+    json_body = render_clock.get("json_body")
+    if json_body is not None:
+        return {"sport": "football", "checked": True, "healthy": False,
+                "reason": (f"football tz=0 JSON looked like "
+                          f"{json_body.get('looks_like', 'unknown')!r} "
+                          f"({json_body.get('bytes', 0)} bytes)")}
+    return {"sport": "football", "checked": False, "healthy": None,
+            "reason": "render_clock ran but reported no json_matches or "
+                     "json_body to judge from"}
+
+
 def circuit_breaker_comparison(near: dict[str, Any],
-                               far: dict[str, Any]) -> dict[str, Any]:
+                               far: dict[str, Any],
+                               canary: dict[str, Any] | None = None
+                               ) -> dict[str, Any]:
     """Read the breaker's two live questions straight off two already-run
     ``collector_end_to_end`` records — not inferred, not assumed:
 
@@ -1320,31 +1375,58 @@ def circuit_breaker_comparison(near: dict[str, Any],
     can be called on the SAME near-board record ``run_probe`` already
     produces for the plain ``collector_end_to_end`` stage instead of paying
     for a second capture of a board this probe already fetched.
+
+    ``canary`` (see :func:`canary_from_render_clock`) gates whether this
+    trial's refusals mean anything. Owner finding, 2026-09-28: run
+    36455080098 reported ``near_false_abort=True`` while Cloudflare was
+    challenge-blocking the whole site — the near board's refusal was real,
+    but attributing it to the breaker was wrong, because a site-wide block
+    produces the identical signal. When ``canary["healthy"]`` is not
+    ``True``, this function still reports the raw booleans (the
+    measurement itself is not discarded) but marks ``trial_valid`` false
+    and explains why: a run with no healthy canary reading proves nothing
+    about the breaker either way, favourable or not.
     """
     near_timing = (near.get("capture_timing") or [{}])[0]
     far_timing = (far.get("capture_timing") or [{}])[0]
-    return {
-        "near_requests": near_timing.get("requests"),
+    near_requests = near_timing.get("requests")
+    far_requests = far_timing.get("requests")
+    out = {
+        "near_requests": near_requests,
         "near_outcome": near_timing.get("outcome"),
         "near_false_abort": bool(
             near_timing.get("outcome", "").startswith("COVERAGE_GAP")
             and "circuit breaker" in "; ".join(near.get("failures") or [])),
-        "far_requests": far_timing.get("requests"),
+        "far_requests": far_requests,
         "far_outcome": far_timing.get("outcome"),
         "far_breaker_tripped": "circuit breaker" in "; ".join(
             far.get("failures") or []),
-        # A theoretical ceiling, not a live measurement: production never
-        # actually runs with the breaker off (circuit_breaker_columns=0),
-        # so there is no "off" request count to compare against directly.
-        # len(selectors) * default attempts is the worst case every column
-        # fails once and is retried to exhaustion; a real successful
-        # capture (see collector_end_to_end's own "requests", i.e.
-        # near_requests above) is typically far cheaper than this ceiling
-        # even with the breaker off, because most columns succeed first
-        # try. This is context for the far side's savings, not a baseline
-        # to expect near_requests to have hit.
+        # Compared against a MEASURED near-board figure, not a theoretical
+        # denominator — 2026-09-28 correction: a prior write-up compared
+        # far_requests to the line below as if it were an observed
+        # baseline. It never has been observed; production never runs with
+        # the breaker off, so there is no real "off" request count. This
+        # stays for context (how far a total board retry could go) but is
+        # explicitly NOT the savings claim.
         "no_breaker_worst_case_requests": len(COLUMN_SELECTORS) * 3,
     }
+    if near_requests is not None and far_requests is not None:
+        out["far_requests_vs_measured_near_requests"] = far_requests - near_requests
+    if canary is None or canary.get("healthy") is None:
+        out["trial_valid"] = None
+        out["invalid_reason"] = "canary not checked this run"
+    elif canary.get("healthy") is False:
+        out["trial_valid"] = False
+        out["invalid_reason"] = (
+            "canary (football tz=0 JSON) failed this run "
+            f"({canary.get('reason')}) \u2014 near/far refusals cannot be "
+            "attributed to publication timing; re-run when the canary is "
+            "healthy before treating near_false_abort/far_breaker_tripped "
+            "as evidence about the breaker")
+    else:
+        out["trial_valid"] = True
+        out["invalid_reason"] = None
+    return out
 
 
 def circuit_breaker_measurement(date: str, *, timeout: int, pause: float,
@@ -2443,6 +2525,14 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
         name: meta.get("seconds") for name, meta in stage_meta.items()}
     report["stage_seconds"]["budget_left"] = round(time_left())
 
+    # The discriminator between "not published yet" and "the whole site is
+    # refusing us right now" (owner finding, 2026-09-28) — read off
+    # render_clock's already-computed record, no extra request. Emitted
+    # unconditionally, even when render_clock never got its turn, so a
+    # killed run still shows whether the canary was ever checked.
+    report["canary"] = canary_from_render_clock(report.get("render_clock") or {})
+    emit_section("canary", report["canary"])
+
     # Priority 1, item (iii): the live circuit-breaker measurement, built
     # from the two records open_questions already produced above (near =
     # collector_end_to_end, far = circuit_breaker_far) rather than a fresh
@@ -2452,7 +2542,8 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
     # comparison built from one real record and one empty one.
     if report.get("collector_end_to_end") and report.get("circuit_breaker_far"):
         report["circuit_breaker_comparison"] = circuit_breaker_comparison(
-            report["collector_end_to_end"], report["circuit_breaker_far"])
+            report["collector_end_to_end"], report["circuit_breaker_far"],
+            canary=report["canary"])
         emit_section("circuit_breaker_comparison",
                      report["circuit_breaker_comparison"])
 

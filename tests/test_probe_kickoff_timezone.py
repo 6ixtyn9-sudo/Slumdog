@@ -301,6 +301,26 @@ class TestBodyFingerprint:
 
         assert body_fingerprint(None)["looks_like"] == "empty"
 
+    def test_the_second_challenge_wording_is_caught_here_too(self):
+        """Regression for the exact miss found in run 36455080098
+        (2026-09-28): this function's own challenge-marker list had no
+        entry for "performing security verification" even though
+        forebet.py's canonical list has carried it since the 2026-09-28
+        wording addition, so a real 272-byte challenge page came back
+        ``looks_like: "unknown"`` here — and the canary derived from it
+        (canary_from_render_clock) would have silently read a site-wide
+        block as "unknown", not "challenge_page". Fixed by reusing
+        forebet.looks_like_challenge_page instead of a second list.
+        """
+        from scripts.probe_kickoff_timezone import body_fingerprint
+
+        body = (
+            b"## www.forebet.com ## Performing security verification "
+            b"This website uses a security service to protect against "
+            b"malicious bots."
+        )
+        assert body_fingerprint(body)["looks_like"] == "challenge_page"
+
     def test_verdict_calls_out_a_board_that_never_arrived(self):
         from scripts.probe_kickoff_timezone import summarise_offsets, verdict
 
@@ -2919,6 +2939,120 @@ class TestCircuitBreakerComparison:
         assert out["far_requests"] is None
         assert out["far_breaker_tripped"] is False
 
+    def test_far_requests_are_reported_against_a_measured_near_figure(self):
+        # 2026-09-28 correction: no_breaker_worst_case_requests is a
+        # theoretical ceiling that has never been observed; the honest
+        # comparison is against near_requests, which IS measured.
+        import scripts.probe_kickoff_timezone as probe
+
+        out = probe.circuit_breaker_comparison(
+            {"capture_timing": [{"requests": 10,
+                                 "outcome": "CAPTURED:relay_columns"}],
+             "failures": []},
+            {"capture_timing": [{"requests": 3, "outcome": "COVERAGE_GAP"}],
+             "failures": ["v 2026-10-04: circuit breaker tripped — ..."]})
+        assert out["far_requests_vs_measured_near_requests"] == 3 - 10
+
+
+class TestCircuitBreakerComparisonCanaryGate:
+    """Owner finding, 2026-09-28: run 36455080098's near board and far
+    board both refused with HTTP 422 while Cloudflare was
+    challenge-blocking the whole site. Read alone, that run's
+    ``near_false_abort=True`` looked like a breaker defect; read against
+    the canary, it was an invalid trial — the site was refusing
+    everything, near board included, so nothing in that run can be
+    attributed to the breaker's own judgement.
+    """
+
+    NEAR_ABORT = {
+        "capture_timing": [{"requests": 3, "outcome": "COVERAGE_GAP"}],
+        "failures": ["v 2026-09-29: circuit breaker tripped — ..."],
+    }
+    FAR_ABORT = {
+        "capture_timing": [{"requests": 3, "outcome": "COVERAGE_GAP"}],
+        "failures": ["v 2026-10-04: circuit breaker tripped — ..."],
+    }
+
+    def test_canary_down_marks_the_trial_invalid_but_keeps_the_raw_numbers(
+            self):
+        import scripts.probe_kickoff_timezone as probe
+
+        canary = {"sport": "football", "checked": True, "healthy": False,
+                  "reason": "football tz=0 JSON looked like 'unknown' "
+                           "(272 bytes)"}
+        out = probe.circuit_breaker_comparison(
+            self.NEAR_ABORT, self.FAR_ABORT, canary=canary)
+        # The measurement is not thrown away...
+        assert out["near_false_abort"] is True
+        assert out["far_breaker_tripped"] is True
+        # ...but it is explicitly not evidence about the breaker.
+        assert out["trial_valid"] is False
+        assert "canary" in out["invalid_reason"].lower()
+        assert "unknown" in out["invalid_reason"]
+
+    def test_canary_healthy_marks_the_trial_valid(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        canary = {"sport": "football", "checked": True, "healthy": True,
+                  "reason": None}
+        out = probe.circuit_breaker_comparison(
+            self.NEAR_ABORT, self.FAR_ABORT, canary=canary)
+        assert out["trial_valid"] is True
+        assert out["invalid_reason"] is None
+
+    def test_no_canary_argument_is_reported_as_unchecked_not_valid(self):
+        # A caller that forgot to pass canary must not silently read as a
+        # clean trial — "no reading" and "healthy reading" must not look
+        # the same.
+        import scripts.probe_kickoff_timezone as probe
+
+        out = probe.circuit_breaker_comparison(self.NEAR_ABORT, self.FAR_ABORT)
+        assert out["trial_valid"] is None
+        assert "not checked" in out["invalid_reason"]
+
+
+class TestCanaryFromRenderClock:
+    """The discriminator behind TestCircuitBreakerComparisonCanaryGate —
+    derived purely from render_clock's already-computed record, no
+    request of its own."""
+
+    def test_healthy_when_instants_were_parsed(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        canary = probe.canary_from_render_clock(
+            {"json_matches": 139, "proven": True})
+        assert canary == {"sport": "football", "checked": True,
+                          "healthy": True, "reason": None}
+
+    def test_down_when_the_json_endpoint_returned_a_fingerprinted_failure(
+            self):
+        import scripts.probe_kickoff_timezone as probe
+
+        canary = probe.canary_from_render_clock({
+            "json_matches": 0,
+            "json_body": {"looks_like": "challenge_page", "bytes": 272},
+        })
+        assert canary["healthy"] is False
+        assert canary["checked"] is True
+        assert "challenge_page" in canary["reason"]
+        assert "272" in canary["reason"]
+
+    def test_not_checked_when_render_clock_never_ran(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        canary = probe.canary_from_render_clock({})
+        assert canary == {"sport": "football", "checked": False,
+                          "healthy": None,
+                          "reason": "render_clock stage did not run this pass"}
+
+    def test_not_checked_when_render_clock_ran_but_judged_nothing(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        canary = probe.canary_from_render_clock(
+            {"verdict": "stopped: stage slice of 90s spent"})
+        assert canary["checked"] is False
+        assert canary["healthy"] is None
+
 
 class TestCircuitBreakerFarStageInRunProbe:
     """Item (iii)'s default-sweep wiring: circuit_breaker_far must be a
@@ -2978,6 +3112,47 @@ class TestCircuitBreakerFarStageInRunProbe:
         assert report["circuit_breaker_comparison"]["near_requests"] == 10
         assert report["circuit_breaker_comparison"]["far_breaker_tripped"]
         assert report["circuit_breaker_comparison"]["near_false_abort"] is False
+        # render_clock_probe here returned {"proven": True} with no
+        # json_matches/json_body — the canary was never actually read, so
+        # the comparison must say "not checked", not silently "valid".
+        assert report["canary"]["checked"] is False
+        assert report["circuit_breaker_comparison"]["trial_valid"] is None
+
+    def test_run_probe_marks_the_comparison_invalid_when_the_canary_is_down(
+            self, monkeypatch):
+        """The exact scenario run 36455080098 hit: near AND far both
+        refuse, and football's own tz=0 JSON was ALSO a challenge page.
+        run_probe must surface report["canary"] and mark the comparison
+        invalid, not report near_false_abort as a breaker finding."""
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "circuit_breaker_measurement",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("must not re-capture")))
+        monkeypatch.setattr(probe, "fetch", lambda *a, **k: b"")
+        monkeypatch.setattr(probe, "render_clock_probe", lambda *a, **k: {
+            "json_matches": 0,
+            "json_body": {"looks_like": "challenge_page", "bytes": 272},
+            "verdict": "no tz=0 instants; nothing to join against",
+        })
+        monkeypatch.setattr(probe, "settlement_probe",
+                            lambda *a, **k: {"hockey": {"graded": 0}})
+
+        def e2e(date, *a, **k):
+            return {"capture_timing": [
+                {"requests": 3, "outcome": "COVERAGE_GAP"}],
+                "failures": [f"v {date}: circuit breaker tripped — ..."]}
+
+        monkeypatch.setattr(probe, "collector_end_to_end", e2e)
+        monkeypatch.setattr(probe, "r1_coverage", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "coverage_sweep", lambda *a, **k: {})
+        report = probe.run_probe("2026-09-29", sport="volleyball",
+                                 timeout=1, pause=0)
+        assert report["canary"]["healthy"] is False
+        assert report["circuit_breaker_comparison"]["near_false_abort"] is True
+        assert report["circuit_breaker_comparison"]["trial_valid"] is False
+        assert "canary" in \
+            report["circuit_breaker_comparison"]["invalid_reason"].lower()
 
     def test_r1_coverage_gets_what_is_left_not_a_flat_45s(self, monkeypatch):
         """Run a5e5720 (2026-09-28): budget_left 482s, r1_coverage still

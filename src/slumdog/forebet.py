@@ -486,6 +486,77 @@ def _classify_capture_outcome(exc: Exception) -> str:
     return "RAISED"
 
 
+def _canary_state(selected: list[str], existing: set[str],
+                  captures: "list[RawCapture]",
+                  failures: list[str]) -> dict[str, Any]:
+    """Football's tz=0 JSON is the cheap, already-fetched discriminator
+    between "this board is not published yet" and "the whole site is
+    refusing us right now" — both currently surface identically as an
+    HTTP 422 / ``COVERAGE_GAP`` from any other sport's column route.
+    Whenever a call to :meth:`ForebetCollector.capture_selected` also
+    fetches football (the common case — it is first in ``SPORTS`` and
+    ``sports=None`` requests every sport), football's own result IS that
+    discriminator, for free.
+
+    Owner finding, 2026-09-28 (Priority 1, item iii): a near/far
+    circuit-breaker comparison run while Cloudflare was challenge-blocking
+    the whole site could not tell "not published" from "refused right
+    now" apart — the one distinction the comparison exists to draw. Every
+    receipt now records whether football (the canary) was healthy for
+    THIS SAME run, so a blocked run can be recognised and discarded
+    instead of misread as a publication-timing finding.
+    """
+    if "football" not in selected:
+        return {"sport": "football", "checked": False, "healthy": None,
+                "reason": "football was not requested in this capture"}
+    if "football" in existing:
+        return {"sport": "football", "checked": False, "healthy": None,
+                "reason": ("football was reused from a prior capture on "
+                          "disk this call; not rechecked")}
+    if any(cap.sport == "football" for cap in captures):
+        return {"sport": "football", "checked": True, "healthy": True,
+                "reason": None}
+    reason = next((f for f in failures if f.startswith("football:")), None)
+    return {"sport": "football", "checked": True, "healthy": False,
+            "reason": reason or
+            "football capture failed with no recorded reason"}
+
+
+#: Prepended to a non-football COVERAGE_GAP failure/outcome when the canary
+#: (football) also failed in the same run — see ``_canary_state``. Leads
+#: with the correction so it is the first thing read, not an appendix to
+#: the breaker's own "not-published signal" wording.
+_SITE_WIDE_REFUSAL_PREFIX = (
+    "[SITE-WIDE REFUSAL \u2014 canary (football) also failed this run; "
+    "NOT evidence the board is unpublished] "
+)
+
+
+def _mark_site_wide_refusal(capture_timing: list[dict],
+                            failures: list[str]) -> None:
+    """When the canary is down, relabel every OTHER sport's ``COVERAGE_GAP``
+    entry so nothing downstream repeats the "board not published" reading a
+    site-wide refusal produces identically.
+
+    ``NO_ROWS_FOR_DATE`` is never touched: it is only ever returned on
+    positive evidence (the board rendered cleanly and held no match for the
+    date — see ``relay_columns.capture_board``'s docstring), so a sport
+    that reached that status did NOT get refused this run regardless of
+    what happened to football.
+    """
+    for i, text in enumerate(failures):
+        sport = text.split(":", 1)[0]
+        if sport == "football" or "COVERAGE_GAP" not in text:
+            continue
+        failures[i] = _SITE_WIDE_REFUSAL_PREFIX + text
+    for entry in capture_timing:
+        if entry.get("sport") == "football":
+            continue
+        if str(entry.get("outcome", "")).startswith("COVERAGE_GAP"):
+            entry["outcome"] = "COVERAGE_GAP:site_wide_refusal"
+
+
+
 class ForebetCollector:
     def __init__(self, root: Path | str = ".", timeout: int = 35,
                  workers: int = 4, before_request=None,
@@ -757,6 +828,17 @@ class ForebetCollector:
             except Exception as exc:
                 failures.append(f"football-markets:{type(exc).__name__}:{exc}")
 
+        # Priority 1, item (iii) correction (2026-09-28): decide whether
+        # football (the canary) was itself refused THIS run before any
+        # other sport's COVERAGE_GAP is written down as "not published" —
+        # see _canary_state's docstring. Mutates failures/capture_timing
+        # in place so every consumer of this receipt (the forward-pass
+        # annotation rollup included) sees the correction, not just this
+        # function's own return value.
+        canary = _canary_state(selected, existing, captures, failures)
+        if canary["healthy"] is False:
+            _mark_site_wide_refusal(capture_timing, failures)
+
         report_dir = self.root / "data" / "reports"
         report_dir.mkdir(parents=True, exist_ok=True)
         receipt = {
@@ -773,6 +855,11 @@ class ForebetCollector:
             # it) — only the paced serial path times individual sports.
             # See the comment above the serial loop for why.
             "capture_timing": capture_timing,
+            # Recorded for EVERY run, healthy or not — see _canary_state.
+            # A future analysis over many receipts can filter blocked
+            # runs out instead of re-deriving "was the site down" from
+            # scratch each time.
+            "canary": canary,
         }
         (report_dir / receipt_filename).write_text(
             json.dumps(receipt, indent=2, sort_keys=True)

@@ -1,5 +1,53 @@
 # Slumdog Living Handoff
 
+**2026-09-28 (same session, continued a fourth time) — RETRACTION: "3 vs 24 requests" WAS NOT A VALID CIRCUIT-BREAKER RESULT; ITEM (iii) IS NOT COMPLETE; A CANARY NOW LANDS IN EVERY RUN'S RECEIPT.**
+
+**Retracting the "3 vs 24 requests... real, measured request savings" line from the entry directly below this one.** That run (`36455080098`) was a **site-wide Cloudflare WAF challenge for its entire duration** — the
+same entry already noted `looks_like: "challenge_page"` on the board bytes and a football-JSON parse failure, but then went on to report the near/far request counts as if they were a clean measurement of the
+breaker anyway. They are not. **Item (iii) (circuit-breaker comparison) is correctly labelled here as NOT COMPLETE: one invalid trial exists (site-wide block, correctly identified after the fact), and zero valid
+trials exist yet.** No claim about "requests saved" survives from that run. Restated per the owner's standing rule: never report a "savings" number against the theoretical `no_breaker_worst_case_requests`
+denominator (2 columns × up to 4 attempts × a retry factor = 24) — it was never observed, only computed from constants. The only honest comparison is `far_requests` against a **measured** near-board baseline
+(run a5e5720's `collector_end_to_end.capture_timing[0].requests=10`, or a fresh same-run near-board figure) — `probe_kickoff_timezone.py` now reports exactly that field
+(`far_requests_vs_measured_near_requests`), never the worst-case constant.
+
+**Root cause of the mislabel, and the fix: a canary.** The breaker (and the probe's interpretation of it) had no way to tell "this specific board isn't published yet" (HTTP 422, expected, benign) apart from "the
+whole site just refused this runner" (HTTP 422 from a WAF challenge page, or non-JSON, applied indiscriminately to every request including ones that should trivially succeed). Built a canary using football's
+tz=0 render-clock JSON — already fetched every single run for the render-clock offset measurement, so this costs zero extra requests. It reuses `looks_like_challenge_page()` from `src/slumdog/forebet.py` (the
+same classifier both production capture and the probe already share) rather than a second, independently-drifting keyword list. Landed in three places, because "every run" means production too, not just the
+probe:
+
+1. **`src/slumdog/forebet.py`** — `_canary_state(selected, existing, captures, failures)` checks whether football (part of every production run's sport selection) itself came back healthy this run. When it did
+   not, every OTHER sport's `COVERAGE_GAP` failure/outcome in that same run gets a `"[SITE-WIDE REFUSAL — canary (football) also failed this run; ...]"` prefix — so a 422-everywhere run can never again silently
+   read as "board not published" for sports whose real cause was a site-wide block. The `canary` dict (`{"sport": "football", "checked", "healthy", "reason"}`) is written into the capture receipt **for every run**,
+   healthy or not.
+2. **`scripts/probe_kickoff_timezone.py`** — `canary_from_render_clock()` derives the same shape of canary record from the probe's own `render_clock` stage (again, no new request), emitted as its own
+   `probe:canary` annotation section. `circuit_breaker_comparison(near, far, canary=...)` now takes the canary and sets `trial_valid` / `invalid_reason`: `True` only when the canary was healthy, `False` with a
+   named reason when it was not (e.g. "football tz=0 JSON looked like 'challenge_page' (272 bytes)" — the exact shape of `36455080098`'s failure), `None` when the render-clock stage did not run at all this
+   pass. The raw `near_requests`/`far_requests`/`near_false_abort`/`far_breaker_tripped` numbers are still always computed and reported — the canary gates *interpretation*, not *measurement* — but a run can no
+   longer be read as validating the breaker's publication-gap behavior while `trial_valid` is `False`.
+3. **`scripts/forward_shadow_batch.py`** — `process_date()`'s result now carries `result["canary"] = capture_receipt.get("canary")` straight from the production receipt above, and the per-date `emit_notice`
+   annotation (`forward_date:<date>`) now includes a `"canary"` key alongside `status`/`run_id`/`bundle_verified`/`capture`/`capture_timing`/`error` — so a forward-pass run's annotations, read anonymously exactly
+   like the probe's, now show whether that date's capture happened during a site-wide block without needing to re-derive it from raw HTTP codes after the fact.
+
+**New test coverage** (`tests/test_forebet.py`, `tests/test_probe_kickoff_timezone.py`, `tests/test_forward_shadow_batch.py`): canary-down + 422s-everywhere asserts the outcome is relabelled `COVERAGE_GAP` naming
+the site-wide refusal (never `NO_ROWS_FOR_DATE`), and separately asserts `near_false_abort` being `True` in that state is **not** treated as a breaker defect — `trial_valid` is `False` with a canary-attributed
+reason instead of the breaker being blamed for something it could not have seen coming. Full repo gate after this change: `pytest` — 1639 passed, 0 failed; `pyflakes`/`py_compile` — clean on every touched file.
+
+**Retroactive value of this, beyond the current trial:** the owner flagged that this exact condition — a site-wide WAF challenge producing HTTP 422/non-JSON on *every* request, board or not — plausibly explains
+some of this session's earlier "422 everywhere" observations that were, at the time, attributed to throttling or a scope bug rather than a site-wide block. Those earlier runs predate the canary field and cannot
+be reclassified after the fact (the raw bytes were never saved), but every run from here forward carries `canary` in its receipt, so this ambiguity is diagnosable directly from the receipt instead of re-derived
+by re-reading raw response bytes each time it comes up.
+
+**On reordering (v) before (iv) (owner offered, not mandated):** taking it. (v) is the publication-horizon gate — deciding, before issuing any far-board request at all, whether "D+1" or similar is even plausibly
+published yet, based on when boards for that sport have historically gone live. (iv) is a per-run request budget (`ForebetCollector(before_request=...)`) that caps total requests regardless of cause. The
+reasoning: most of the request cost actually incurred this session (the near/far breaker probes, the repeated 422-everywhere runs) came from requesting boards whose publication status was never in question one
+way or the other — (v) would have skipped those requests before they were ever sent, where (iv) only limits the damage after the fact. (v) is the cheaper fix to land first; (iv) remains valuable as a hard floor
+underneath it, not a substitute for it.
+
+**Still open:** item (iii) is not closed by this entry — this entry only fixes the tooling and retracts the mislabelled result. Closing it requires a fresh push of `scripts/probe_kickoff_timezone.py` (this entry's
+diff qualifies and auto-triggers the workflow per the trigger fix below) whose resulting run shows `canary.healthy == true` for its full duration, `trial_valid == true`, and reports near-board requests + outcome,
+far-board requests + outcome, and the canary state explicitly. That measurement is recorded in a follow-up entry once the run completes, not assumed here.
+
 **2026-09-28 (same session, continued a third time) — RUN 36426785929's LOG IS PERMANENTLY CLOSED (owner instruction, do not re-ask); PROBE WORKFLOW TRIGGER FIX LANDED ON `main` AND MERGED IN; forward_shadow_batch.py NOW EMITS PER-PHASE CHECK-RUN ANNOTATIONS.**
 
 **Stop asking for run 36426785929 / job 108942599581's log — closed by explicit owner instruction.** The owner diagnosed, with verified evidence, exactly why it was never readable: GitHub's raw log/artifact endpoints

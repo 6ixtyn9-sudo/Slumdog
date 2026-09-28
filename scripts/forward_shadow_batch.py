@@ -1373,6 +1373,14 @@ def process_date(
         # counts.
         result["capture_timing_summary"] = summarize_capture_timing(
             capture_receipt.get("capture_timing"))
+        # Recorded for every date (Priority 1, item iii correction,
+        # 2026-09-28): whether football (the canary) was itself refused
+        # this date's capture. A date whose canary is down means none of
+        # this date's other COVERAGE_GAP sports can be read as "not
+        # published" — see forebet.ForebetCollector.capture_selected's
+        # _canary_state, which already applied that correction to the
+        # receipt above before this function ever saw it.
+        result["canary"] = capture_receipt.get("canary")
 
         if captured_count == 0:
             result["status"] = "NO_CAPTURES"
@@ -1684,6 +1692,7 @@ def main(argv: list[str] | None = None) -> int:
             "bundle_verified": result.get("bundle_verified"),
             "capture": result.get("capture"),
             "capture_timing": result.get("capture_timing_summary"),
+            "canary": result.get("canary"),
             "error": result.get("error"),
         })
 
