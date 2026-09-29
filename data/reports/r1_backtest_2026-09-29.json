@@ -1,0 +1,575 @@
+{
+  "corpus_inventory": {
+    "note": "row counts and date ranges above are read directly from each ledger's manifest before any rate is computed, per the owner directive to establish what exists first",
+    "per_sport": {
+      "american_football": {
+        "available": false,
+        "note": "data/reports/history_american_football.jsonl.gz does not exist in this checkout",
+        "sport": "american_football"
+      },
+      "baseball": {
+        "available": true,
+        "date_range": [
+          "2024-01-02",
+          "2026-09-22"
+        ],
+        "manifest": {
+          "history_admitted_rows": 23686,
+          "history_conflict_count_groups": 0,
+          "history_conflict_count_rows": 0,
+          "history_cutoff_date": "2099-12-31",
+          "history_decoded_rows": 24015,
+          "history_exact_duplicate_rows": 47,
+          "history_excluded_counts": {
+            "ANOMALOUS_TWO_WAY_DRAW": 280,
+            "SELF_PAIR": 2
+          },
+          "history_feature_contract": "price-free-incremental-valid-history",
+          "history_input_bytes": {
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_baseball.jsonl.gz": 1179257
+          },
+          "history_input_format": {
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_baseball.jsonl.gz": "jsonl.gz"
+          },
+          "history_input_paths": [
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_baseball.jsonl.gz"
+          ],
+          "history_input_sha256": {
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_baseball.jsonl.gz": "e087bb8a59b58aeeb1d7af4b7e5ee9145296145585278c0a4dce84a31806f693"
+          },
+          "history_max_interim_bytes": 268435456,
+          "history_schema_invalid": 0,
+          "history_schema_valid_candidate_rows": 24015,
+          "history_target_date": "2099-12-31",
+          "history_unique_valid_rows": 23686
+        },
+        "reconstruction_populations": {
+          "HISTORICAL_PAGE": 23686
+        },
+        "settled_row_count": 23686,
+        "sport": "baseball",
+        "sport_days_with_eligible_r1": 894,
+        "sport_days_with_settled_data": 944
+      },
+      "basketball": {
+        "available": true,
+        "date_range": [
+          "2023-02-12",
+          "2026-09-25"
+        ],
+        "manifest": {
+          "history_admitted_rows": 109239,
+          "history_conflict_count_groups": 0,
+          "history_conflict_count_rows": 0,
+          "history_cutoff_date": "2099-12-31",
+          "history_decoded_rows": 109357,
+          "history_exact_duplicate_rows": 1,
+          "history_excluded_counts": {
+            "ANOMALOUS_TWO_WAY_DRAW": 112,
+            "SELF_PAIR": 5
+          },
+          "history_feature_contract": "price-free-incremental-valid-history",
+          "history_input_bytes": {
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_basketball.jsonl.gz": 7885163
+          },
+          "history_input_format": {
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_basketball.jsonl.gz": "jsonl.gz"
+          },
+          "history_input_paths": [
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_basketball.jsonl.gz"
+          ],
+          "history_input_sha256": {
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_basketball.jsonl.gz": "c51b1d7c414dd3ffbb26cf20dfe6f733499eea60485e928e22a125f1862f063d"
+          },
+          "history_max_interim_bytes": 268435456,
+          "history_schema_invalid": 0,
+          "history_schema_valid_candidate_rows": 109357,
+          "history_target_date": "2099-12-31",
+          "history_unique_valid_rows": 109239
+        },
+        "reconstruction_populations": {
+          "HISTORICAL_PAGE": 109239
+        },
+        "settled_row_count": 109239,
+        "sport": "basketball",
+        "sport_days_with_eligible_r1": 1100,
+        "sport_days_with_settled_data": 1214
+      },
+      "cricket": {
+        "available": false,
+        "note": "data/reports/history_cricket.jsonl.gz does not exist in this checkout",
+        "sport": "cricket"
+      },
+      "esports": {
+        "available": false,
+        "note": "data/reports/history_esports.jsonl.gz does not exist in this checkout",
+        "sport": "esports"
+      },
+      "football": {
+        "available": true,
+        "date_range": [
+          "2024-01-01",
+          "2026-09-27"
+        ],
+        "manifest": {
+          "history_admitted_rows": 341849,
+          "history_conflict_count_groups": 0,
+          "history_conflict_count_rows": 0,
+          "history_cutoff_date": "2099-12-31",
+          "history_decoded_rows": 345979,
+          "history_exact_duplicate_rows": 2,
+          "history_excluded_counts": {
+            "VOID_DISPOSITION:VOID": 4128
+          },
+          "history_feature_contract": "price-free-incremental-valid-history",
+          "history_input_bytes": {
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_football.jsonl.gz": 37150108
+          },
+          "history_input_format": {
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_football.jsonl.gz": "jsonl.gz"
+          },
+          "history_input_paths": [
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_football.jsonl.gz"
+          ],
+          "history_input_sha256": {
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_football.jsonl.gz": "73d03dc094e3ee2e8739aa60be18f1f36508c2c44f706de46eedbb943e935e26"
+          },
+          "history_max_interim_bytes": 268435456,
+          "history_schema_invalid": 0,
+          "history_schema_valid_candidate_rows": 345979,
+          "history_target_date": "2099-12-31",
+          "history_unique_valid_rows": 341849
+        },
+        "reconstruction_populations": {
+          "HISTORICAL_PAGE": 341849
+        },
+        "settled_row_count": 341849,
+        "sport": "football",
+        "sport_days_with_eligible_r1": 972,
+        "sport_days_with_settled_data": 1000
+      },
+      "handball": {
+        "available": false,
+        "note": "data/reports/history_handball.jsonl.gz does not exist in this checkout",
+        "sport": "handball"
+      },
+      "hockey": {
+        "available": true,
+        "date_range": [
+          "2023-08-02",
+          "2026-09-15"
+        ],
+        "manifest": {
+          "history_admitted_rows": 60973,
+          "history_conflict_count_groups": 1,
+          "history_conflict_count_rows": 2,
+          "history_cutoff_date": "2099-12-31",
+          "history_decoded_rows": 61097,
+          "history_exact_duplicate_rows": 81,
+          "history_excluded_counts": {
+            "ANOMALOUS_TWO_WAY_DRAW": 41
+          },
+          "history_feature_contract": "price-free-incremental-valid-history",
+          "history_input_bytes": {
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_hockey.jsonl.gz": 3434749
+          },
+          "history_input_format": {
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_hockey.jsonl.gz": "jsonl.gz"
+          },
+          "history_input_paths": [
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_hockey.jsonl.gz"
+          ],
+          "history_input_sha256": {
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_hockey.jsonl.gz": "932648f0c5a7d95305f06f018941a3392dfbea03eb2e16a1b649deafb9d995f7"
+          },
+          "history_max_interim_bytes": 268435456,
+          "history_schema_invalid": 0,
+          "history_schema_valid_candidate_rows": 61097,
+          "history_target_date": "2099-12-31",
+          "history_unique_valid_rows": 60973
+        },
+        "reconstruction_populations": {
+          "HISTORICAL_PAGE": 60973
+        },
+        "settled_row_count": 60973,
+        "sport": "hockey",
+        "sport_days_with_eligible_r1": 968,
+        "sport_days_with_settled_data": 1037
+      },
+      "mma": {
+        "available": false,
+        "note": "data/reports/history_mma.jsonl.gz does not exist in this checkout",
+        "sport": "mma"
+      },
+      "rugby": {
+        "available": false,
+        "note": "data/reports/history_rugby.jsonl.gz does not exist in this checkout",
+        "sport": "rugby"
+      },
+      "tennis": {
+        "available": true,
+        "date_range": [
+          "2024-05-16",
+          "2026-09-13"
+        ],
+        "manifest": {
+          "history_admitted_rows": 39946,
+          "history_conflict_count_groups": 0,
+          "history_conflict_count_rows": 0,
+          "history_cutoff_date": "2099-12-31",
+          "history_decoded_rows": 39954,
+          "history_exact_duplicate_rows": 1,
+          "history_excluded_counts": {
+            "SELF_PAIR": 7
+          },
+          "history_feature_contract": "price-free-incremental-valid-history",
+          "history_input_bytes": {
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_tennis.jsonl.gz": 2119083
+          },
+          "history_input_format": {
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_tennis.jsonl.gz": "jsonl.gz"
+          },
+          "history_input_paths": [
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_tennis.jsonl.gz"
+          ],
+          "history_input_sha256": {
+            "/home/runner/work/Slumdog/Slumdog/data/reports/history_tennis.jsonl.gz": "ce457d4b473411e3140d573795fcd4be93ab91b8421ecc2be53a679a874cd382"
+          },
+          "history_max_interim_bytes": 268435456,
+          "history_schema_invalid": 0,
+          "history_schema_valid_candidate_rows": 39954,
+          "history_target_date": "2099-12-31",
+          "history_unique_valid_rows": 39946
+        },
+        "reconstruction_populations": {
+          "HISTORICAL_PAGE": 39946
+        },
+        "settled_row_count": 39946,
+        "sport": "tennis",
+        "sport_days_with_eligible_r1": 651,
+        "sport_days_with_settled_data": 831
+      },
+      "volleyball": {
+        "available": false,
+        "note": "data/reports/history_volleyball.jsonl.gz does not exist in this checkout",
+        "sport": "volleyball"
+      }
+    },
+    "sports_checked": 12,
+    "sports_with_a_ledger_in_this_checkout": 5,
+    "sports_with_at_least_one_settled_row": 5
+  },
+  "corpus_wide_reconstruction_counts": {
+    "HISTORICAL_PAGE": 575693
+  },
+  "generated_at_target_date": "2026-09-29",
+  "headline": "1 reconstruction population(s) present: HISTORICAL_PAGE. Every population found in this corpus today is HISTORICAL_PAGE (post-hoc); the provenance check above found every matched pair identical to its pre-event capture, so these rates are treated as a real measurement, not just an upper bound -- see VERDICT FIRST for n.",
+  "known_limitations": [
+    "Every row in every history_<sport>.jsonl.gz ledger this repo has ever written carries reconstruction=HISTORICAL_PAGE: its probabilities and forebet_pick were read off Forebet's historical results page after the match finished, not captured from a live board before kickoff. Whether that biases a hit rate depends on whether Forebet's historical page recomputes its displayed prediction or shows the one it published pre-kickoff -- see the VERDICT FIRST section above/at the top of this report, which tests that directly rather than assuming it. No PRE_EVENT_CAPTURE population exists in this corpus today; if one appears in a future run of this tool, it will be reported separately, never pooled with HISTORICAL_PAGE rows.",
+    "history_loader.load_valid_history excludes VOID/NO_CONTEST rows before this module sees them, so a match that later voided is never in a day's candidate pool here even though the live pipeline (which cannot know VOID in advance) would have ranked it. This under-pools relative to the live system by each sport's VOID rate."
+  ],
+  "method": "offline replay of the frozen R1/R2 rule (underdog.identify_forebet_underdog -> dataset.build_pre_event_features -> baseline_analyzer.is_r2_eligible [R2_CONSERVATIVE_FIXED_RULE] -> baseline_analyzer.r1_sort_key [R1_ALWAYS_RANK_COMPARATOR]) over every row in data/reports/history_<sport>.jsonl.gz; zero network calls; grading via shadow_settle.grade_underdog_win, identical to the live R1 scorecard's contract",
+  "populations": {
+    "HISTORICAL_PAGE": {
+      "baselines_same_rows": {
+        "always_favourite_same_rows": {
+          "failures": 2216,
+          "hit_rate": 0.5167,
+          "n": 4585,
+          "note": "a settled draw fails BOTH bets (outright win only), so successes+failures need not mirror our_r1_pick's exactly even on these identical 4585 matches",
+          "significant_n": true,
+          "successes": 2369,
+          "wilson_95_hi": 0.5311,
+          "wilson_95_lo": 0.5022
+        },
+        "always_underdog_same_rows": {
+          "failures": 2610,
+          "hit_rate": 0.4308,
+          "n": 4585,
+          "note": "identical to our_r1_pick by construction on these SAME rows -- see cohort_wide_underdog_rate for a baseline that differs",
+          "significant_n": true,
+          "successes": 1975,
+          "wilson_95_hi": 0.4451,
+          "wilson_95_lo": 0.4165
+        },
+        "forebet_pick_same_rows": {
+          "failures": 2010,
+          "hit_rate": 0.5275,
+          "n": 4254,
+          "rows_missing_forebet_pick": 331,
+          "significant_n": true,
+          "successes": 2244,
+          "wilson_95_hi": 0.5425,
+          "wilson_95_lo": 0.5125
+        },
+        "our_r1_pick": {
+          "failures": 2610,
+          "hit_rate": 0.4308,
+          "n": 4585,
+          "note": "this IS the headline rate above, repeated for side-by-side comparison",
+          "settled_draws": 241,
+          "significant_n": true,
+          "successes": 1975,
+          "wilson_95_hi": 0.4451,
+          "wilson_95_lo": 0.4165
+        }
+      },
+      "by_sport": {
+        "baseball": {
+          "failures": 475,
+          "hit_rate": 0.4687,
+          "n": 894,
+          "r1_rows_recorded": 894,
+          "significant_n": true,
+          "successes": 419,
+          "wilson_95_hi": 0.5015,
+          "wilson_95_lo": 0.4362
+        },
+        "basketball": {
+          "failures": 581,
+          "hit_rate": 0.4718,
+          "n": 1100,
+          "r1_rows_recorded": 1100,
+          "significant_n": true,
+          "successes": 519,
+          "wilson_95_hi": 0.5014,
+          "wilson_95_lo": 0.4425
+        },
+        "football": {
+          "failures": 649,
+          "hit_rate": 0.3323,
+          "n": 972,
+          "r1_rows_recorded": 972,
+          "significant_n": true,
+          "successes": 323,
+          "wilson_95_hi": 0.3625,
+          "wilson_95_lo": 0.3034
+        },
+        "hockey": {
+          "failures": 572,
+          "hit_rate": 0.4091,
+          "n": 968,
+          "r1_rows_recorded": 968,
+          "significant_n": true,
+          "successes": 396,
+          "wilson_95_hi": 0.4404,
+          "wilson_95_lo": 0.3785
+        },
+        "tennis": {
+          "failures": 333,
+          "hit_rate": 0.4885,
+          "n": 651,
+          "r1_rows_recorded": 651,
+          "significant_n": true,
+          "successes": 318,
+          "wilson_95_hi": 0.5268,
+          "wilson_95_lo": 0.4503
+        }
+      },
+      "by_underdog_probability_band": {
+        "0.20-0.30": {
+          "failures": 257,
+          "hit_rate": 0.3477,
+          "n": 394,
+          "r1_rows_recorded": 394,
+          "significant_n": true,
+          "successes": 137,
+          "wilson_95_hi": 0.396,
+          "wilson_95_lo": 0.3024
+        },
+        "0.30-0.40": {
+          "failures": 364,
+          "hit_rate": 0.3145,
+          "n": 531,
+          "r1_rows_recorded": 531,
+          "significant_n": true,
+          "successes": 167,
+          "wilson_95_hi": 0.3552,
+          "wilson_95_lo": 0.2765
+        },
+        "0.40+": {
+          "failures": 1973,
+          "hit_rate": 0.4575,
+          "n": 3637,
+          "r1_rows_recorded": 3637,
+          "significant_n": true,
+          "successes": 1664,
+          "wilson_95_hi": 0.4737,
+          "wilson_95_lo": 0.4414
+        },
+        "<0.20": {
+          "failures": 16,
+          "hit_rate": 0.3043,
+          "n": 23,
+          "note": "n too small to claim significance (n=23, floor=30); Wilson interval above is the honest range, not a confident estimate",
+          "r1_rows_recorded": 23,
+          "significant_n": false,
+          "successes": 7,
+          "wilson_95_hi": 0.5087,
+          "wilson_95_lo": 0.156
+        },
+        "unknown": {
+          "failures": 0,
+          "hit_rate": null,
+          "n": 0,
+          "note": "n=0 \u2014 no settled rows; nothing to report",
+          "r1_rows_recorded": 0,
+          "significant_n": false,
+          "successes": 0,
+          "wilson_95_hi": null,
+          "wilson_95_lo": null
+        }
+      },
+      "overall": {
+        "failures": 2610,
+        "hit_rate": 0.4308,
+        "n": 4585,
+        "settled_draws": 241,
+        "significant_n": true,
+        "successes": 1975,
+        "wilson_95_hi": 0.4451,
+        "wilson_95_lo": 0.4165
+      }
+    }
+  },
+  "provenance_verdict": {
+    "EVENT_DAY": {
+      "differing_count": 0,
+      "headline": "0 of 0 pre-event EVENT_DAY pick(s) matched a row in the historical ledger by event_id -- either no ledger is present in this checkout, or none of these matches are in it yet. Cannot say anything about contamination for this track.",
+      "matched_to_historical_ledger": 0,
+      "max_absolute_probability_delta_seen": null,
+      "pre_event_picks_available": 0,
+      "sample_pairs": [],
+      "statistical_power_note": "n=0: enough to detect gross, systematic recomputation (every pair moving the same way) but NOT enough to bound a small, occasional discrepancy (bound threshold used here: 30 pairs).",
+      "underdog_identity_flipped_count": 0,
+      "unmatched_no_ledger_row": 0,
+      "verdict": "INSUFFICIENT_DATA"
+    },
+    "STANDARD": {
+      "differing_count": 0,
+      "headline": "All 32 matched pair(s) agree between the pre-event capture and the historical-page ledger (no probability differed by more than 0.005, no underdog side flipped).",
+      "matched_to_historical_ledger": 32,
+      "max_absolute_probability_delta_seen": 0.0,
+      "pre_event_picks_available": 62,
+      "sample_pairs": [
+        {
+          "differs": false,
+          "event_id": "football:2476049",
+          "historical_page_favorite_probability": 0.26,
+          "historical_page_underdog_probability": 0.23,
+          "max_absolute_probability_delta": 0.0,
+          "pre_event_favorite_probability": 0.26,
+          "pre_event_underdog_probability": 0.23,
+          "sport": "football",
+          "underdog_identity_flipped": false
+        },
+        {
+          "differs": false,
+          "event_id": "football:2518617",
+          "historical_page_favorite_probability": 0.27,
+          "historical_page_underdog_probability": 0.26,
+          "max_absolute_probability_delta": 0.0,
+          "pre_event_favorite_probability": 0.27,
+          "pre_event_underdog_probability": 0.26,
+          "sport": "football",
+          "underdog_identity_flipped": false
+        },
+        {
+          "differs": false,
+          "event_id": "football:2518253",
+          "historical_page_favorite_probability": 0.36,
+          "historical_page_underdog_probability": 0.33,
+          "max_absolute_probability_delta": 0.0,
+          "pre_event_favorite_probability": 0.36,
+          "pre_event_underdog_probability": 0.33,
+          "sport": "football",
+          "underdog_identity_flipped": false
+        },
+        {
+          "differs": false,
+          "event_id": "football:2529366",
+          "historical_page_favorite_probability": 0.38,
+          "historical_page_underdog_probability": 0.34,
+          "max_absolute_probability_delta": 0.0,
+          "pre_event_favorite_probability": 0.38,
+          "pre_event_underdog_probability": 0.34,
+          "sport": "football",
+          "underdog_identity_flipped": false
+        },
+        {
+          "differs": false,
+          "event_id": "football:2513272",
+          "historical_page_favorite_probability": 0.39,
+          "historical_page_underdog_probability": 0.25,
+          "max_absolute_probability_delta": 0.0,
+          "pre_event_favorite_probability": 0.39,
+          "pre_event_underdog_probability": 0.25,
+          "sport": "football",
+          "underdog_identity_flipped": false
+        },
+        {
+          "differs": false,
+          "event_id": "basketball:285704",
+          "historical_page_favorite_probability": 0.53,
+          "historical_page_underdog_probability": 0.47,
+          "max_absolute_probability_delta": 0.0,
+          "pre_event_favorite_probability": 0.53,
+          "pre_event_underdog_probability": 0.47,
+          "sport": "basketball",
+          "underdog_identity_flipped": false
+        },
+        {
+          "differs": false,
+          "event_id": "football:2547864",
+          "historical_page_favorite_probability": 0.41,
+          "historical_page_underdog_probability": 0.35,
+          "max_absolute_probability_delta": 0.0,
+          "pre_event_favorite_probability": 0.41,
+          "pre_event_underdog_probability": 0.35,
+          "sport": "football",
+          "underdog_identity_flipped": false
+        },
+        {
+          "differs": false,
+          "event_id": "baseball:139180",
+          "historical_page_favorite_probability": 0.52,
+          "historical_page_underdog_probability": 0.48,
+          "max_absolute_probability_delta": 0.0,
+          "pre_event_favorite_probability": 0.52,
+          "pre_event_underdog_probability": 0.48,
+          "sport": "baseball",
+          "underdog_identity_flipped": false
+        },
+        {
+          "differs": false,
+          "event_id": "basketball:284477",
+          "historical_page_favorite_probability": 0.53,
+          "historical_page_underdog_probability": 0.47,
+          "max_absolute_probability_delta": 0.0,
+          "pre_event_favorite_probability": 0.53,
+          "pre_event_underdog_probability": 0.47,
+          "sport": "basketball",
+          "underdog_identity_flipped": false
+        },
+        {
+          "differs": false,
+          "event_id": "football:2420936",
+          "historical_page_favorite_probability": 0.33,
+          "historical_page_underdog_probability": 0.31,
+          "max_absolute_probability_delta": 0.0,
+          "pre_event_favorite_probability": 0.33,
+          "pre_event_underdog_probability": 0.31,
+          "sport": "football",
+          "underdog_identity_flipped": false
+        }
+      ],
+      "statistical_power_note": "n=32: enough to bound even a small systematic bias (bound threshold used here: 30 pairs).",
+      "underdog_identity_flipped_count": 0,
+      "unmatched_no_ledger_row": 30,
+      "verdict": "IDENTICAL"
+    }
+  },
+  "reconstruction_populations_present": [
+    "HISTORICAL_PAGE"
+  ]
+}
