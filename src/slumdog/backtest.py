@@ -913,15 +913,63 @@ def _low_draw_tail_analysis(events: list[SettledEvent]) -> dict[str, Any]:
                     len(rows) / len(dates) if dates else None),
                 "indicative_only_n_lt_500": len(rows) < 500,
             }
+        bootstrap = _cluster_bootstrap_surplus(
+            records, labels, seed=BOOTSTRAP_SEED + seed_offset,
+            scheme_names=("calendar_day_PRIMARY", "calendar_month"))
         return {
+            "population": (
+                "all ledger-valid settled rows in draw-capable sports in this "
+                "period; bucket rows require draw_probability <0.20"
+            ),
+            "parent_lt_0_20_n": sum(bucket["n"] for bucket in buckets.values()),
             "buckets": buckets,
-            "cluster_bootstrap": _cluster_bootstrap_surplus(
-                records, labels, seed=BOOTSTRAP_SEED + seed_offset,
-                scheme_names=("calendar_day_PRIMARY", "calendar_month")),
+            "cluster_bootstrap": bootstrap,
         }
 
+    def classify_shape(period: dict[str, Any]) -> str:
+        buckets = period["buckets"]
+        month = period["cluster_bootstrap"]["schemes"].get(
+            "calendar_month", {}).get("buckets", {})
+        tail_ratio = buckets["<0.05"].get(
+            "relative_surplus_observed_divided_by_predicted")
+        higher_ratios = [
+            buckets[label].get("relative_surplus_observed_divided_by_predicted")
+            for label in labels[1:]
+        ]
+        tail_month_lo = month.get("<0.05", {}).get("bootstrap_95_lo")
+        higher_null = sum(
+            1 for label in labels[1:]
+            if month.get(label, {}).get("bootstrap_95_lo") is not None
+            and month[label]["bootstrap_95_lo"] <= 0
+            and month[label].get("bootstrap_95_hi") is not None
+            and month[label]["bootstrap_95_hi"] >= 0
+        )
+        extreme = (
+            tail_month_lo is not None and tail_month_lo > 0
+            and tail_ratio is not None
+            and all(ratio is not None and tail_ratio >= 2 * ratio
+                    for ratio in higher_ratios)
+            and higher_null >= 2
+        )
+        positive_month = [
+            label for label in labels
+            if month.get(label, {}).get("bootstrap_95_lo") is not None
+            and month[label]["bootstrap_95_lo"] > 0
+        ]
+        surpluses = [buckets[label].get("absolute_surplus") for label in labels]
+        broad = (
+            len(positive_month) >= 3
+            and all(value is not None for value in surpluses)
+            and max(surpluses) - min(surpluses) <= 0.005
+        )
+        if extreme:
+            return "extreme-tail power-play shape in this period; holdout repetition required"
+        if broad:
+            return "mild broad miscalibration shape in this period; holdout repetition required"
+        return "mixed or unresolved; do not call it a power play"
+
     def periods(group: list[SettledEvent], seed_offset: int) -> dict[str, Any]:
-        return {
+        output = {
             "all": summarize(group, seed_offset),
             "development_through_cutoff": summarize(
                 [event for event in group if event.event_date <= HOLDOUT_CUTOFF],
@@ -930,6 +978,9 @@ def _low_draw_tail_analysis(events: list[SettledEvent]) -> dict[str, Any]:
                 [event for event in group if event.event_date > HOLDOUT_CUTOFF],
                 seed_offset + 2),
         }
+        for period in output.values():
+            period["frozen_shape_verdict"] = classify_shape(period)
+        return output
 
     by_sport: dict[str, list[SettledEvent]] = defaultdict(list)
     for event in draw_events:
@@ -1174,7 +1225,7 @@ def _negative_sport_gate_variant(
     development = [row for row in r1_rows if row["event_date"] <= HOLDOUT_CUTOFF]
     holdout = [row for row in r1_rows if row["event_date"] > HOLDOUT_CUTOFF]
     return {
-        "status": "ANALYSIS_ONLY_PARALLEL_VARIANT_NOT_A_LIVE_GATE",
+        "status": "RETIRED_FAILED_DEVELOPMENT_OUTCOME_SPACE_TEST",
         "selection_rule": (
             "Exclude a sport only when its signal-wide development-period "
             "underdog-surplus calendar-day bootstrap upper 95% bound is below zero."

@@ -369,7 +369,7 @@ class TestBaselinesAndBands:
         assert signal["cutoff"] == "2026-06-30"
         assert "shared across sports" in signal["block_reason"]
         variant = analysis["negative_sport_gate_variant"]
-        assert variant["status"] == "ANALYSIS_ONLY_PARALLEL_VARIANT_NOT_A_LIVE_GATE"
+        assert variant["status"] == "RETIRED_FAILED_DEVELOPMENT_OUTCOME_SPACE_TEST"
         assert variant["excluded_sports_selected_on_development_only"] == []
         development_variant = variant["development_through_cutoff"]
         assert development_variant[
@@ -414,8 +414,12 @@ class TestBaselinesAndBands:
                 "low_draw_tail_analysis"]
         assert analysis["bucket_contract"] == [
             "<0.05", "0.05-0.10", "0.10-0.15", "0.15-0.20"]
-        bucket = analysis["pooled"]["development_through_cutoff"][
-            "buckets"]["<0.05"]
+        development = analysis["pooled"]["development_through_cutoff"]
+        assert "all ledger-valid settled rows" in development["population"]
+        assert development["parent_lt_0_20_n"] == 4
+        assert development["frozen_shape_verdict"] == (
+            "mixed or unresolved; do not call it a power play")
+        bucket = development["buckets"]["<0.05"]
         assert bucket["n"] == 1
         assert bucket["mean_predicted_probability"] == pytest.approx(0.04)
         assert bucket["observed_hit_rate"] == pytest.approx(1.0)

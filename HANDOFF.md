@@ -1,5 +1,39 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — tail scope clarified; frozen verdict mixed; gate retired.**
+
+The apparent `80668` versus `5836` mismatch was a period-label presentation
+failure, not a different analytical population: the robust parent `n=80668` is
+all dates, while the supplied four sub-buckets (`1774+412+1176+2474=5836`) were
+the **holdout-period** annotation. Both derive from all ledger-valid settled
+rows in draw-capable sports, not R1 or eligible-only rows. Output now names the
+population and period, reports `parent_lt_0_20_n`, and adds an all-dates
+annotation whose four buckets must sum to the same `80668` parent.
+
+Applying the frozen rule to the supplied holdout decomposition gives exactly:
+**`mixed or unresolved; do not call it a power play`**. All four month lower
+bounds exceed zero, but absolute surpluses span `+0.0103..+0.0412` (range
+`0.0309`, far above `0.005`) and no higher bucket includes zero. Relative ratios
+`2.87, 1.55, 1.08, 1.12` show a tail gradient. Dropping the underpowered
+`0.05-0.10` cell (`n=412`) would satisfy the tail ratio comparison, but still
+fails the predeclared null-higher-buckets condition; this is observation, not
+rescue. Reports now calculate and print the frozen verdict per period.
+
+The negative-sport gate is retired, not open. Correctly separated development
+intervals include zero for two-way `[-0.0152,+0.0328]` and draw-capable
+`[-0.0535,+0.0483]`; draw-capable merit moved from frozen `+0.0290` to gated
+`-0.0040`. Holdout two-way `n=184` cannot rescue a gate that failed in the
+period used to select it. Its forensic JSON receipt remains, labeled
+`RETIRED_FAILED_DEVELOPMENT_OUTCOME_SPACE_TEST`; its annotation was removed.
+
+Facet work has one prerequisite before testing: historical `SettledEvent`
+contains a plain `facets` dictionary but no persisted `facet_timing` map, while
+`TimingClass` lives on `EventSnapshot`. Therefore the existing ledger cannot yet
+enforce PRE_EVENT timing row by row merely from intent or parser knowledge. Do
+not run a facet outcome test until a fail-closed timing provenance bridge is
+specified and validated; otherwise it violates the owner's non-negotiable
+TimingClass condition.
+
 **2026-09-29 — run 36569213450 closes draw uncertainty; gate mix artifact and pipefail correction.**
 
 The directly read `forward-batch` log at commit `91560f6` establishes the
@@ -38,11 +72,11 @@ lower bounds above zero and <=0.5-point range in absolute surplus; holdout must
 repeat direction. Otherwise the shape is mixed/unresolved, not a power play.
 
 The same run still ended red. `2>/dev/null` suppressed `find` diagnostics but
-not exit 1, which `set -o pipefail` propagated. Correct replacement is staged
-at `docs/owner_paste/forward_shadow.yml`: **REPLACE
-`.github/workflows/forward_shadow.yml`**. All three optional-root pipelines use
-`{ find ... 2>/dev/null || true; } | xargs ...`; contract tests pin that exit
-neutralization, not merely stderr suppression. Final local gates: focused tests
+not exit 1, which `set -o pipefail` propagated. The owner applied the corrected
+`{ find ... 2>/dev/null || true; } | xargs ...` form to all three optional-root
+pipelines in commit `cf376e4`; the live workflow is byte-identical to
+`docs/owner_paste/forward_shadow.yml`. Contract tests pin exit neutralization,
+not merely stderr suppression. Final local gates: focused tests
 **154 passed**; full `python -m pytest` **1773 passed**; tracked-file
 `py_compile`, changed-file `pyflakes`, staged YAML parsing, and
 `git diff --check` clean.

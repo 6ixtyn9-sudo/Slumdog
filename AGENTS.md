@@ -443,14 +443,18 @@ Rules:
   draw-capable sport is draw miscalibration until its same-row
   underdog-minus-favourite differential survives cluster-aware temporal
   evaluation. Never headline the underdog leg by itself.
-- The negative-sport gate is the fourth worked warning. Excluding basketball,
-  hockey and volleyball (two-way) plus handball (draw-capable) changed the
-  outcome-space mix; its pooled holdout raw surplus rose to +7.83 points partly
-  because the remainder became more draw-capable and therefore more exposed to
-  draw over-prediction. Never compare pooled raw surplus across a gate that
-  changes the two-way/draw-capable mixture. Evaluate two-way rows on underdog
-  surplus and draw-capable rows on the underdog-minus-favourite differential,
-  separately, on the same period.
+- The negative-sport gate supplies the fourth and fifth worked warnings.
+  First, excluding basketball, hockey and volleyball (two-way) plus handball
+  (draw-capable) changed the outcome-space mix; its pooled holdout raw surplus
+  rose to +7.83 points partly because the remainder became more draw-capable and
+  therefore more exposed to draw over-prediction. Second, after correcting that
+  mix, the gate failed on the development period that selected it: two-way
+  interval `[-0.0152,+0.0328]`; draw-capable differential
+  `[-0.0535,+0.0483]`, with point estimate moving from `+0.0290` frozen to
+  `-0.0040` gated. The `n=184` holdout two-way result cannot rescue a gate that
+  failed development. The gate is retired. Never compare pooled raw surplus
+  across a changed outcome-space mixture; two-way merit is underdog surplus and
+  draw-capable merit is the same-row underdog-minus-favourite differential.
 
 ## Documentation Governance
 

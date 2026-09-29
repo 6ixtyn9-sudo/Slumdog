@@ -101,22 +101,10 @@ class TestEveryDeclaredArtifactIsPersisted:
             "finished evidence again")
 
 
-class TestPendingPipefailCorrection:
-    def test_staged_change_only_wraps_the_three_optional_find_pipelines(self,
-                                                                        live_text):
-        staged = STAGED.read_text()
-        expected = live_text
-        live_lines = [line for line in live_text.splitlines()
-                      if line.strip().startswith("find ")
-                      and "2>/dev/null | xargs -r git add -f" in line]
-        assert len(live_lines) == 3
-        for line in live_lines:
-            replacement = (line[:len(line) - len(line.lstrip())] + "{ "
-                           + line.strip().replace(
-                               "2>/dev/null | xargs",
-                               "2>/dev/null || true; } | xargs"))
-            expected = expected.replace(line, replacement, 1)
-        assert staged == expected
+class TestAppliedPipefailCorrection:
+    def test_owner_applied_staged_replacement_byte_for_byte(self, live_text):
+        # Owner-authored commit cf376e4 applied the grouped-find repair.
+        assert STAGED.read_text() == live_text
 
     def test_all_three_optional_finds_neutralize_exit_before_pipefail(self):
         persist = STAGED.read_text().split(PERSIST_STEP_NAME, 1)[1]

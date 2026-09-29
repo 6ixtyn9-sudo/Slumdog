@@ -1,4 +1,28 @@
 
+### Update 2026-09-29: tail scope clarified, mixed verdict, gate retired
+
+The four emitted sub-buckets summing to `5836` were holdout-period all-settled
+rows; the robust `80668` parent was all dates. This was ambiguous annotation
+scope, not eligible/R1 filtering. Every tail annotation now states “all
+ledger-valid settled rows in draw-capable sports,” names the period, gives its
+`parent_lt_0_20_n`, and an all-dates annotation must reconcile to `80668`.
+
+On the supplied holdout values the frozen verdict is **mixed or unresolved; do
+not call it a power play**: all month lower bounds are positive, but absolute
+surplus range is `0.0309` rather than `<=0.005`, and no higher bucket crosses
+zero. The relative gradient (`2.87, 1.55, 1.08, 1.12`) is substantive but does
+not satisfy the full shape contract.
+
+The gate is retired after its correctly separated development tests both
+included zero: two-way `[-0.0152,+0.0328]`; draw-capable
+`[-0.0535,+0.0483]`, with the latter point moving `+0.0290 -> -0.0040`.
+Holdout two-way `n=184` is not a rescue. The forensic receipt remains labeled
+retired, but no gate annotation or product consideration remains.
+
+Facet evaluation is not started: historical `SettledEvent.facets` does not
+persist `EventSnapshot.facet_timing`. A fail-closed TimingClass provenance bridge
+is required before any outcome test can meet the pre-event-only constraint.
+
 ### Update 2026-09-29: low-draw lead robust; tail decomposition and gate-space correction
 
 Run `36569213450` directly measured `<0.20` draw surplus `+0.0099782`
@@ -21,8 +45,8 @@ Low draws are now decomposed into four fixed 5-point bands, pooled/per-sport and
 development/holdout, with absolute/relative surplus, firing frequency and
 calendar-day/month intervals. Shape criteria were frozen before execution and
 are recorded in the report. The workflow remained red because stderr redirection
-did not neutralize `find` exit 1 under `pipefail`; corrected grouped pipelines
-are staged under `docs/owner_paste/forward_shadow.yml` for owner replacement.
+did not neutralize `find` exit 1 under `pipefail`; the owner applied corrected
+grouped pipelines in commit `cf376e4`, byte-identical to the staged copy.
 
 ### Update 2026-09-29: football edge retracted; low-draw sensitivity is last open upside
 
