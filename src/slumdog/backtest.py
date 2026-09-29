@@ -188,6 +188,7 @@ def _reconstruct_sport(sport: str, root: Path) -> dict[str, Any]:
                 "underdog_index": identity.underdog_index,
                 "favorite_index": identity.favorite_index,
                 "underdog_probability": identity.underdog_probability,
+                "favorite_probability": identity.favorite_probability,
                 "settled_context": {"forebet_pick": ev.forebet_pick},
                 "reconstruction": ev.reconstruction,
                 "rank_within_sport_day": rank_idx,
@@ -367,6 +368,76 @@ def _contamination_check(
     return result
 
 
+def _calibration_block(rows: list[dict[str, Any]], *, side: str) -> dict[str, Any]:
+    """Observed outright-win rate against Forebet's mean assigned probability.
+
+    The comparison is always on exactly the rows with both a decided grade and
+    the named side's probability. Draws are failures for either side, matching
+    the product contract and the raw-rate baseline.
+    """
+    probability_key = f"{side}_probability"
+    eligible: list[tuple[dict[str, Any], float, str]] = []
+    for row in rows:
+        probability = row.get(probability_key)
+        if not isinstance(probability, (int, float)) or isinstance(probability, bool):
+            continue
+        grade = (row.get("grade") if side == "underdog"
+                 else _grade_pick(row, row.get("favorite_index")))
+        if grade not in ("SUCCESS", "FAILURE"):
+            continue
+        eligible.append((row, float(probability), grade))
+
+    successes = sum(1 for _row, _p, grade in eligible if grade == "SUCCESS")
+    rate = _rate_block(successes, len(eligible))
+    predicted_mean = (
+        sum(probability for _row, probability, _grade in eligible) / len(eligible)
+        if eligible else None
+    )
+    observed = rate.get("hit_rate")
+    return {
+        **rate,
+        "mean_predicted_probability": predicted_mean,
+        "observed_minus_predicted": (
+            observed - predicted_mean
+            if observed is not None and predicted_mean is not None else None),
+        "rows_missing_probability_or_decision": len(rows) - len(eligible),
+    }
+
+
+def _calibration(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Calibration is the merit test; favourite-side calibration is control."""
+    by_sport_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_band_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_sport_rows[row["sport"]].append(row)
+        by_band_rows[_probability_band(row.get("underdog_probability"))].append(row)
+
+    def pair(group: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "r1_underdog": _calibration_block(group, side="underdog"),
+            "favourite_control": _calibration_block(group, side="favorite"),
+        }
+
+    band_labels = [label for label, _, _ in PROBABILITY_BANDS] + [UNKNOWN_PROBABILITY_BAND]
+    return {
+        "interpretation": (
+            "PRIMARY MERIT METRIC: observed outright-win rate minus Forebet's "
+            "mean assigned probability on the same R1 rows. Raw underdog-vs-"
+            "favourite hit rates are retained below as descriptive baselines, "
+            "not the measure of whether an underdog selector has edge. The "
+            "favourite side is a calibration control: if it moves the same way, "
+            "the effect may be Forebet-wide calibration bias rather than R1 selection."
+        ),
+        "overall": pair(rows),
+        "by_underdog_probability_band": {
+            label: pair(by_band_rows.get(label, [])) for label in band_labels
+        },
+        "by_sport": {
+            sport: pair(group) for sport, group in sorted(by_sport_rows.items())
+        },
+    }
+
+
 def _score_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Mirror analyze._track_scorecard's overall/by-sport/by-band/baselines
     shape exactly, so the backtest report reads like the live scorecard."""
@@ -433,10 +504,17 @@ def _score_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
     return {
+        "calibration": _calibration(rows),
         "overall": overall,
         "by_sport": by_sport,
         "by_underdog_probability_band": by_band,
         "baselines_same_rows": baselines,
+        "raw_hit_rate_note": (
+            "DESCRIPTIVE ONLY, NOT THE MERIT TEST: underdogs have lower assigned "
+            "win probabilities by definition, so comparing their raw hit rate "
+            "to favourites does not test whether R1 found miscalibration. Use "
+            "the calibration section above."
+        ),
     }
 
 
@@ -605,6 +683,17 @@ def r1_backtest(root: Path | str = ".", target_date: str | None = None) -> Path:
     return json_path
 
 
+def _render_calibration_line(label: str, block: dict[str, Any]) -> str:
+    if not block.get("n"):
+        return f"| {label} | n=0 | - | - | - | - |"
+    return (
+        f"| {label} | {block['mean_predicted_probability']:.2%} | "
+        f"{block['successes']}/{block['n']} ({block['hit_rate']:.2%}) | "
+        f"{block['wilson_95_lo']:.2%}-{block['wilson_95_hi']:.2%} | "
+        f"{block['observed_minus_predicted']:+.2%} | {block['n']} |"
+    )
+
+
 def _render_rate_line(label: str, block: dict[str, Any]) -> str:
     n = block["n"]
     if n == 0:
@@ -693,6 +782,51 @@ def _render_r1_backtest_markdown(analysis: dict[str, Any]) -> str:
         lines += [
             "",
             f"## Population: {population}",
+            "",
+        ]
+        calibration = scorecard["calibration"]
+        lines += [
+            "### PRIMARY MERIT METRIC: calibration against Forebet probability",
+            "",
+            calibration["interpretation"],
+            "",
+            "| Slice | Mean predicted | Observed | Observed 95% CI | Observed - predicted | n |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |",
+            _render_calibration_line(
+                "R1 underdog — overall", calibration["overall"]["r1_underdog"]),
+            _render_calibration_line(
+                "Favourite control — same rows",
+                calibration["overall"]["favourite_control"]),
+            "",
+            "#### By R1 underdog-probability band",
+            "",
+            "| Slice | Mean predicted | Observed | Observed 95% CI | Observed - predicted | n |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |",
+        ]
+        for label, _lo, _hi in PROBABILITY_BANDS:
+            pair = calibration["by_underdog_probability_band"][label]
+            lines.append(_render_calibration_line(
+                f"{label} — R1 underdog", pair["r1_underdog"]))
+            lines.append(_render_calibration_line(
+                f"{label} — favourite control", pair["favourite_control"]))
+        lines += [
+            "",
+            "#### By sport",
+            "",
+            "| Slice | Mean predicted | Observed | Observed 95% CI | Observed - predicted | n |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |",
+        ]
+        for sport, pair in calibration["by_sport"].items():
+            lines.append(_render_calibration_line(
+                f"{sport} — R1 underdog", pair["r1_underdog"]))
+            lines.append(_render_calibration_line(
+                f"{sport} — favourite control", pair["favourite_control"]))
+
+        lines += [
+            "",
+            "### Raw hit rates (descriptive baselines, not the measure of merit)",
+            "",
+            scorecard["raw_hit_rate_note"],
             "",
         ]
         overall = scorecard["overall"]

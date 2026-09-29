@@ -192,21 +192,73 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                         "max_absolute_probability_delta_seen"),
                 }
 
+        emit_notice("r1_backtest_verdict", {
+            "provenance_verdict": compact_verdict,
+        })
+
+        def compact_calibration(block: dict | None) -> dict:
+            block = block or {}
+            return {
+                "mean_predicted_probability": block.get(
+                    "mean_predicted_probability"),
+                "observed_hit_rate": block.get("hit_rate"),
+                "observed_wins": block.get("successes"),
+                "n": block.get("n"),
+                "wilson_95_lo": block.get("wilson_95_lo"),
+                "wilson_95_hi": block.get("wilson_95_hi"),
+                "observed_minus_predicted": block.get(
+                    "observed_minus_predicted"),
+            }
+
+        calibration_notices = {}
+        sport_calibration_notices: list[tuple[str, dict]] = []
         headline_rates = {}
         for population, scored in (analysis.get("populations") or {}).items():
+            calibration = scored.get("calibration") or {}
+            overall = calibration.get("overall") or {}
+            bands = calibration.get("by_underdog_probability_band") or {}
+            calibration_notices[population] = {
+                "interpretation": calibration.get("interpretation"),
+                "overall": {
+                    side: compact_calibration(block)
+                    for side, block in overall.items()
+                },
+                "by_underdog_probability_band": {
+                    label: {side: compact_calibration(block)
+                            for side, block in pair.items()}
+                    for label, pair in bands.items()
+                    if label != "unknown" or any(
+                        (block or {}).get("n") for block in pair.values())
+                },
+            }
+            sports = sorted((calibration.get("by_sport") or {}).items())
+            for chunk_index in range(0, len(sports), 4):
+                chunk = sports[chunk_index:chunk_index + 4]
+                sport_calibration_notices.append((
+                    f"r1_backtest_calibration_sports_{chunk_index // 4 + 1}",
+                    {population: {
+                        sport: {side: compact_calibration(block)
+                                for side, block in pair.items()}
+                        for sport, pair in chunk
+                    }},
+                ))
+
             baselines = scored.get("baselines_same_rows") or {}
             headline_rates[population] = {
+                "note": scored.get("raw_hit_rate_note"),
                 "our_r1_pick": baselines.get("our_r1_pick"),
                 "always_favourite_same_rows": baselines.get(
                     "always_favourite_same_rows"),
                 "forebet_pick_same_rows": baselines.get(
                     "forebet_pick_same_rows"),
             }
-        verdict_notice = {
-            "provenance_verdict": compact_verdict,
-            "headline_rates": headline_rates,
-        }
-        emit_notice("r1_backtest_verdict", verdict_notice)
+        emit_notice("r1_backtest_calibration", calibration_notices)
+        for title, payload in sport_calibration_notices:
+            emit_notice(title, payload)
+        emit_notice("r1_backtest_raw_rates", {
+            "descriptive_not_merit_metric": True,
+            "populations": headline_rates,
+        })
 
         inventory = analysis.get("corpus_inventory") or {}
         per_sport = {}
@@ -233,6 +285,7 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
             "json_path": str(report_path.relative_to(repo_root)),
             "markdown_path": str(report_path.with_suffix(".md").relative_to(repo_root)),
             "verdict": compact_verdict,
+            "calibration": calibration_notices,
             "headline_rates": headline_rates,
             "inventory": inventory_notice,
         }

@@ -1,4 +1,28 @@
 
+### Update 2026-09-29: STANDARD provenance is IDENTICAL; calibration replaces raw hit rate as the merit test
+
+Run `36539053490`, job `109309839581`, was read by anonymous check-run
+annotations this session. STANDARD: `verdict="IDENTICAL"`,
+`matched_pair_count=43`, `differing_count=0`,
+`max_absolute_probability_delta_seen=0.0`, identity flips `0`. EVENT_DAY remains
+`INSUFFICIENT_DATA`, matched pairs `0`. The STANDARD historical-page corpus is
+therefore admitted for offline evaluation. Inventory: 22 seeded history files,
+11 sports, **678,794** exact summed settled rows. The same report measured R1
+`3040/6987` (`hit_rate=0.4351`, Wilson 95% `0.4235..0.4468`), same-row favourite
+`3626/6987` (`0.5190`, `0.5072..0.5307`), and Forebet pick `3496/6636`
+(`0.5268`, `0.5148..0.5388`).
+
+Those raw rates remain descriptive but are not the underdog selector's merit
+metric. The backtest now reports calibration on the same rows: mean Forebet
+assigned probability versus observed outright-win rate, Wilson interval, n, and
+observed-minus-predicted, overall/by predeclared probability band/by sport. The
+same calculation on the favourite side is the control for Forebet-wide
+calibration bias. Calibration is rendered above raw rates and emitted in its
+own bounded annotations; raw rates explicitly say they are not the merit test.
+No live rule changed. Candidate band/sport/facet variants wait for this table
+and must later use a temporal holdout rather than fitting and judging on all
+678,794 rows.
+
 ### Update 2026-09-29: offline provenance verdict now runs on every Forward Shadow dispatch
 
 Run `36538082614` proved the whole-run gate live: owner-read log timestamps show

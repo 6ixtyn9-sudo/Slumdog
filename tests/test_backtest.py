@@ -9,6 +9,8 @@ import gzip
 import json
 from dataclasses import asdict
 
+import pytest
+
 from slumdog.backtest import r1_backtest, KNOWN_LIMITATIONS
 from slumdog.contracts import SettledEvent
 
@@ -208,6 +210,44 @@ class TestReconstructionAndGrading:
 
 
 class TestBaselinesAndBands:
+    def test_calibration_compares_observed_to_assigned_probability_same_rows(
+            self, tmp_path):
+        events = _build_eligible_scenario(winner_index=2)
+        _write_ledger(tmp_path, "football", events)
+        path = r1_backtest(tmp_path, target_date="2026-01-01")
+        analysis = json.loads(path.read_text())
+        scorecard = analysis["populations"]["HISTORICAL_PAGE"]
+        calibration = scorecard["calibration"]
+        dog = calibration["overall"]["r1_underdog"]
+        assert dog["n"] == 1
+        assert dog["successes"] == 1
+        assert dog["mean_predicted_probability"] == pytest.approx(0.4)
+        assert dog["hit_rate"] == pytest.approx(1.0)
+        assert dog["observed_minus_predicted"] == pytest.approx(0.6)
+        favourite = calibration["overall"]["favourite_control"]
+        assert favourite["n"] == 1
+        assert favourite["mean_predicted_probability"] == pytest.approx(0.6)
+        assert favourite["hit_rate"] == pytest.approx(0.0)
+        assert favourite["observed_minus_predicted"] == pytest.approx(-0.6)
+        assert calibration["by_underdog_probability_band"]["0.40+"][
+            "r1_underdog"] == dog
+        assert calibration["by_sport"]["football"]["r1_underdog"] == dog
+        assert "PRIMARY MERIT METRIC" in calibration["interpretation"]
+        assert "NOT THE MERIT TEST" in scorecard["raw_hit_rate_note"]
+
+    def test_calibration_section_precedes_raw_hit_rates_in_markdown(self, tmp_path):
+        events = _build_eligible_scenario(winner_index=2)
+        _write_ledger(tmp_path, "football", events)
+        path = r1_backtest(tmp_path, target_date="2026-01-01")
+        text = path.with_suffix(".md").read_text()
+        calibration_pos = text.find("PRIMARY MERIT METRIC")
+        raw_pos = text.find("Raw hit rates (descriptive baselines")
+        assert calibration_pos != -1
+        assert raw_pos != -1
+        assert calibration_pos < raw_pos
+        assert "Observed - predicted" in text
+        assert "Favourite control" in text
+
     def test_baselines_computed_on_the_same_rows(self, tmp_path):
         events = _build_eligible_scenario(winner_index=2)
         _write_ledger(tmp_path, "football", events)

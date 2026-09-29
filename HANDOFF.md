@@ -1,5 +1,45 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — provenance unlock read from run `36539053490`; calibration is now the primary merit metric.**
+
+Anonymous check-run annotations for job `109309839581` were read directly this
+session. `forward_shadow:r1_backtest_verdict` proves STANDARD
+`verdict="IDENTICAL"`, `matched_pair_count=43`, `differing_count=0`,
+`max_absolute_probability_delta_seen=0.0`, and
+`underdog_identity_flipped_count=0` (`pre_event_picks_available=62`). EVENT_DAY
+remains `INSUFFICIENT_DATA`, `matched_pair_count=0`. This clears the historical
+corpus provenance hold for STANDARD; it does not manufacture EVENT_DAY evidence.
+
+The paired inventory annotation reports `seeded_history_files_on_disk=22`, 11/11
+sports with ledgers and settled rows, totalling **678,794** ledger-valid settled
+rows (sum of the exact per-sport annotation fields). Largest exact fields:
+football `settled_row_count=341849`, `date_range=["2024-01-01","2026-09-27"]`;
+basketball `109239`, `["2023-02-12","2026-09-25"]`; hockey `60973`,
+`["2023-08-02","2026-09-15"]`; volleyball `40038`; tennis `39946`; handball
+`38845`; baseball `23686`; rugby `9187`; american_football `7604`; cricket
+`6774`; mma `653`.
+
+The same annotation reports HISTORICAL_PAGE raw rates on the same rows:
+`our_r1_pick successes=3040, n=6987, hit_rate=0.4351,
+wilson_95_lo=0.4235, wilson_95_hi=0.4468, settled_draws=321`;
+`always_favourite_same_rows successes=3626, n=6987, hit_rate=0.5190,
+wilson_95_lo=0.5072, wilson_95_hi=0.5307`; Forebet's own pick
+`successes=3496, n=6636, hit_rate=0.5268, wilson_95_lo=0.5148,
+wilson_95_hi=0.5388`, with 351 missing picks. These values are measured, but raw
+underdog-vs-favourite hit rate is now explicitly labelled descriptive rather
+than the merit test: underdogs have lower assigned probabilities by definition.
+
+`src/slumdog/backtest.py` now computes the price-free calibration question on
+exactly the decided R1 rows: mean assigned probability, observed hit rate,
+Wilson interval, n, and `observed_minus_predicted`. It reports overall, the four
+predeclared underdog-probability bands, and every sport. The favourite side on
+the same rows is computed as a control. The Markdown puts calibration above raw
+rates; Forward Shadow emits compact overall/band calibration, bounded per-sport
+calibration notices, then a separately labelled raw-rate notice. No selection
+rule, threshold, or live ranking changed. Variant testing remains blocked until
+the live calibration table is read; later variants must use a time holdout and
+leave the frozen live rule untouched.
+
 **2026-09-29 — whole-run abort proven live; seeded ledgers now drive the offline provenance verdict on every dispatch.**
 
 Run `36538082614`, job `109306705966`, proved the preflight gate. The owner-read

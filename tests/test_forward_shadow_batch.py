@@ -1484,6 +1484,26 @@ class TestOfflineBacktestInForwardDriver:
             },
             "populations": {
                 "HISTORICAL_PAGE": {
+                    "calibration": {
+                        "interpretation": "PRIMARY MERIT METRIC",
+                        "overall": {
+                            "r1_underdog": {
+                                "mean_predicted_probability": 0.35,
+                                "hit_rate": 0.4, "successes": 400, "n": 1000,
+                                "wilson_95_lo": 0.37, "wilson_95_hi": 0.43,
+                                "observed_minus_predicted": 0.05,
+                            },
+                            "favourite_control": {
+                                "mean_predicted_probability": 0.6,
+                                "hit_rate": 0.59, "successes": 590, "n": 1000,
+                                "wilson_95_lo": 0.56, "wilson_95_hi": 0.62,
+                                "observed_minus_predicted": -0.01,
+                            },
+                        },
+                        "by_underdog_probability_band": {},
+                        "by_sport": {},
+                    },
+                    "raw_hit_rate_note": "descriptive, not merit",
                     "baselines_same_rows": {
                         "our_r1_pick": {"successes": 400, "n": 1000,
                                         "hit_rate": 0.4},
@@ -1523,7 +1543,8 @@ class TestOfflineBacktestInForwardDriver:
         result = fsb.run_offline_r1_backtest(tmp_path)
         assert result["status"] == "COMPLETED"
         assert [title for title, _ in notices] == [
-            "r1_backtest_verdict", "r1_backtest_inventory"]
+            "r1_backtest_verdict", "r1_backtest_calibration",
+            "r1_backtest_raw_rates", "r1_backtest_inventory"]
         verdict = notices[0][1]
         assert verdict["provenance_verdict"]["STANDARD"] == {
             "verdict": "IDENTICAL", "matched_pair_count": 62,
@@ -1531,9 +1552,18 @@ class TestOfflineBacktestInForwardDriver:
             "underdog_identity_flipped_count": 0,
             "max_absolute_probability_delta_seen": 0.0,
         }
-        assert verdict["headline_rates"]["HISTORICAL_PAGE"]["our_r1_pick"] == {
+        calibration = notices[1][1]["HISTORICAL_PAGE"]["overall"]
+        assert calibration["r1_underdog"] == {
+            "mean_predicted_probability": 0.35,
+            "observed_hit_rate": 0.4, "observed_wins": 400, "n": 1000,
+            "wilson_95_lo": 0.37, "wilson_95_hi": 0.43,
+            "observed_minus_predicted": 0.05,
+        }
+        raw = notices[2][1]
+        assert raw["descriptive_not_merit_metric"] is True
+        assert raw["populations"]["HISTORICAL_PAGE"]["our_r1_pick"] == {
             "successes": 400, "n": 1000, "hit_rate": 0.4}
-        inventory = notices[1][1]
+        inventory = notices[3][1]
         assert inventory["seeded_history_files_on_disk"] == 2
         assert inventory["per_sport"] == {
             "football": {"settled_row_count": 1234,
