@@ -432,6 +432,17 @@ Rules:
   not as a gate. Together with handball's sign reversal, this demonstrates why
   inspected sport leads need clustered temporal validation and multiplicity
   discipline before product use.
+- Football is the third worked warning. Run `36550899550` gave an apparently
+  decisive held-out underdog surplus of **+3.751 points**
+  **[+2.979,+4.507]**, but the same-row favourite control was **+3.368**
+  **[+2.505,+4.204]** and the underdog-minus-favourite differential was only
+  **+0.383** **[-1.091,+1.787]**. Development differential was likewise null:
+  **-0.386** **[-0.869,+0.100]**. Both win sides rose because draws were
+  over-predicted; football has no demonstrated underdog edge.
+- Pattern rule: on this corpus, assume every positive underdog surplus in a
+  draw-capable sport is draw miscalibration until its same-row
+  underdog-minus-favourite differential survives cluster-aware temporal
+  evaluation. Never headline the underdog leg by itself.
 
 ## Documentation Governance
 

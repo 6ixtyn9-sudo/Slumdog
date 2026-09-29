@@ -101,28 +101,13 @@ class TestEveryDeclaredArtifactIsPersisted:
             "finished evidence again")
 
 
-class TestPendingMissingDirectoryFix:
-    def test_staged_replacement_changes_only_the_first_find_tolerance(self, live_text):
-        staged = STAGED.read_text()
-        expected = live_text.replace(
-            "find data/reports/shadow -type f \\( -name",
-            "find data/reports/shadow -type f \\( -name",
-            1,
-        )
-        first_line = next(
-            line for line in expected.splitlines()
-            if line.strip().startswith("find data/reports/shadow -type f"))
-        assert first_line.endswith("| xargs -r git add -f")
-        expected = expected.replace(
-            first_line,
-            first_line.replace(" | xargs -r git add -f",
-                               " 2>/dev/null | xargs -r git add -f"),
-            1,
-        )
-        assert staged == expected
+class TestAppliedMissingDirectoryFix:
+    def test_owner_applied_staged_replacement_byte_for_byte(self, live_text):
+        # Owner-authored commit fd2bf13 applied the staged one-line repair.
+        assert STAGED.read_text() == live_text
 
     def test_all_three_find_pipelines_are_failure_tolerant(self):
-        persist = STAGED.read_text().split(PERSIST_STEP_NAME, 1)[1]
+        persist = LIVE.read_text().split(PERSIST_STEP_NAME, 1)[1]
         persist = persist.split("      - name: Upload full evidence", 1)[0]
         find_lines = [line.strip() for line in persist.splitlines()
                       if line.strip().startswith("find ")]

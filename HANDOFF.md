@@ -1,5 +1,43 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — football headline retracted; draw sensitivity promoted.**
+
+Direct run `36550899550` fields, preserved verbatim:
+
+- football development `n=106520`: underdog `+0.03244`
+  `[+0.02970,+0.03532]`; favourite `+0.03630`
+  `[+0.03358,+0.03923]`; differential `-0.00386`
+  `[-0.00869,+0.00100]`;
+- football holdout `n=11042`: underdog `+0.03751`
+  `[+0.02979,+0.04507]`; favourite `+0.03368`
+  `[+0.02505,+0.04204]`; differential `+0.00383`
+  `[-0.01091,+0.01787]`.
+
+**Football has no demonstrated underdog edge.** Its apparently bulletproof
+held-out underdog surplus was the draw-over-prediction artifact the favourite
+control was designed to catch: both differentials include zero and their signs
+flip. This is now the third permanent worked warning in `AGENTS.md`, after
+handball's temporal reversal and tennis's disappearance under clustering. The
+standing corpus rule is to assume positive underdog surplus in any draw-capable
+sport is draw miscalibration until the same-row clustered differential survives.
+All inspected draw-capable holdout differentials straddled zero, including
+tennis `+2.13 [-1.76,+6.22]` and American football `+0.21 [-9.0,+10.2]` points.
+
+The only positive lead left is two-way baseball: development `n=10687`, `+2.32`
+points `[+1.42,+3.27]`; holdout `n=1349`, `+1.97`
+`[-0.94,+4.92]`. Same direction, but holdout is not significant: a lead, not a
+finding, and not permission for a baseball-only product. The negative
+development map remains basketball `-1.0`, hockey `-1.11`, volleyball `-3.22`,
+and handball `-1.96` points with cluster intervals excluding zero.
+
+The gated-variant numeric result from this run was not supplied/read, so it
+remains **UNVERIFIED** rather than inferred. It now has its own compact
+`r1_backtest_negative_sport_gate_variant` annotation showing frozen versus
+excluded-sport R1 development/holdout results on the same rows. The still-open
+high-upside question, `<0.20` draw surplus under week/month blocks, is now the
+first backtest annotation and carries explicit week/month survival booleans and
+the predeclared interpretation rule.
+
 **2026-09-29 — run 36550899550 control correction and persist-step diagnosis.**
 
 Direct job-log fields supplied by the owner: football signal-wide eligible-row
@@ -28,10 +66,10 @@ still requires the favourite differential.
 
 The run's red conclusion was the workflow persist step, not the driver: with
 `set -euo pipefail`, its first missing `data/reports/shadow` `find` exited 1.
-A one-line owner replacement is staged at `docs/owner_paste/forward_shadow.yml`;
-**REPLACE `.github/workflows/forward_shadow.yml`**. A contract test pins that
-this is the only change and all three persist-step `find` pipelines suppress a
-missing-root error. The agent did not edit the live workflow. Final local gates:
+The one-line replacement staged at `docs/owner_paste/forward_shadow.yml` was
+applied by the owner in commit `fd2bf13`; the live workflow is byte-identical to
+the staged file. Contract tests now pin that all three persist-step `find`
+pipelines suppress a missing-root error. Final local gates for that delivery:
 focused tests **153 passed**; full `python -m pytest` **1772 passed**; tracked-file
 `py_compile`, changed-file `pyflakes`, staged/live YAML parsing, and
 `git diff --check` clean. One initial YAML check used system Python and failed

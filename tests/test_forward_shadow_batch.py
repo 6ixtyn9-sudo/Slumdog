@@ -1576,15 +1576,15 @@ class TestOfflineBacktestInForwardDriver:
         result = fsb.run_offline_r1_backtest(tmp_path)
         assert result["status"] == "COMPLETED"
         assert [title for title, _ in notices] == [
-            "r1_backtest_verdict", "r1_backtest_draw_cluster_sensitivity"]
-        verdict = notices[0][1]
+            "r1_backtest_draw_cluster_sensitivity", "r1_backtest_verdict"]
+        verdict = notices[1][1]
         assert verdict["provenance_verdict"]["STANDARD"] == {
             "verdict": "IDENTICAL", "matched_pair_count": 62,
             "pre_event_picks_available": 62, "differing_count": 0,
             "underdog_identity_flipped_count": 0,
             "max_absolute_probability_delta_seen": 0.0,
         }
-        draw = notices[1][1]
+        draw = notices[0][1]
         assert draw["point_estimates"]["0.30-0.35"] == {
             "n": 500, "mean_predicted_probability": None,
             "observed_hit_rate": None, "observed_minus_predicted": None}

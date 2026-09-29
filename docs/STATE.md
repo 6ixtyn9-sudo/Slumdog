@@ -1,5 +1,28 @@
 
-### Update 2026-09-29: signal-wide controls, negative-map variant, persist fix staged
+### Update 2026-09-29: football edge retracted; low-draw sensitivity is last open upside
+
+Run `36550899550` resolves the football control. Development (`n=106520`):
+underdog `+0.03244 [+0.02970,+0.03532]`, favourite
+`+0.03630 [+0.03358,+0.03923]`, differential
+`-0.00386 [-0.00869,+0.00100]`. Holdout (`n=11042`): underdog
+`+0.03751 [+0.02979,+0.04507]`, favourite
+`+0.03368 [+0.02505,+0.04204]`, differential
+`+0.00383 [-0.01091,+0.01787]`. **No football underdog edge is demonstrated.**
+Both win sides benefit from draw over-prediction; the differential straddles
+zero in both periods and flips sign. Draw-capable positive underdog surplus must
+now be presumed a draw artifact until the same-row clustered differential says
+otherwise.
+
+Baseball is the sole clean positive lead because it is two-way: development
+`n=10687`, `+2.32 [+1.42,+3.27]` points; holdout `n=1349`, `+1.97
+[-0.94,+4.92]`. Same sign, non-significant holdout: lead only, no baseball-only
+product. The negative development map remains basketball, hockey, volleyball,
+and handball. Gated-variant values were not present in the supplied evidence and
+remain unverified. A dedicated annotation now reports frozen-versus-gated R1 in
+development/holdout. The unresolved `<0.20` draw week/month result is promoted
+to the first backtest annotation with explicit survival flags.
+
+### Update 2026-09-29: signal-wide controls, negative-map variant, persist fix applied
 
 Run `36550899550` measured football eligible-underdog surplus at development
 `+3.24` points `[+2.97,+3.53]` (`n=106520`) and holdout `+3.75`
@@ -17,10 +40,11 @@ excluded sports from development negative intervals only and compares the gated
 and frozen R1 rule on development/holdout rows; it does not mutate production.
 
 The run's red status came from the persist step's first `find` failing when
-`data/reports/shadow` was absent after a valid canary abort. The one-line
-failure-tolerance replacement is staged at `docs/owner_paste/forward_shadow.yml`:
-**REPLACE `.github/workflows/forward_shadow.yml`**. The live workflow remains
-owner-authored and untouched.
+`data/reports/shadow` was absent after a valid canary abort. The owner applied
+the staged one-line failure-tolerance replacement in commit `fd2bf13`; the live
+`.github/workflows/forward_shadow.yml` is now byte-identical to
+`docs/owner_paste/forward_shadow.yml` and all three `find` pipelines tolerate a
+missing evidence root.
 
 ### Update 2026-09-29: cluster-aware draw sensitivity and eligible-signal analysis
 

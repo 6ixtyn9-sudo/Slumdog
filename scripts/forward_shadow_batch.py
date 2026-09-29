@@ -192,9 +192,9 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                         "max_absolute_probability_delta_seen"),
                 }
 
-        emit_notice("r1_backtest_verdict", {
-            "provenance_verdict": compact_verdict,
-        })
+        # Emit the unresolved draw result before lower-value sections. GitHub
+        # has previously hidden notices beyond its display cap; this question
+        # must remain visible even when the later canary aborts the network run.
 
         def compact_calibration(block: dict | None) -> dict:
             block = block or {}
@@ -365,7 +365,26 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                 "low_draw_surplus_survives_primary_cluster_interval": (
                     primary_low.get("bootstrap_95_lo") is not None
                     and primary_low["bootstrap_95_lo"] > 0),
+                "low_draw_surplus_survives_week_blocks": (
+                    (sensitivity.get("iso_week", {}).get("<0.20") or {}).get(
+                        "bootstrap_95_lo") is not None
+                    and (sensitivity["iso_week"]["<0.20"]["bootstrap_95_lo"] > 0)
+                ),
+                "low_draw_surplus_survives_month_blocks": (
+                    (sensitivity.get("calendar_month", {}).get("<0.20") or {}).get(
+                        "bootstrap_95_lo") is not None
+                    and (sensitivity["calendar_month"]["<0.20"][
+                        "bootstrap_95_lo"] > 0)
+                ),
+                "decision_rule": (
+                    "Month lower bound >0: robust/bankable calibration lead. "
+                    "Week lower bound <=0: the lead is gone."
+                ),
             })
+
+        emit_notice("r1_backtest_verdict", {
+            "provenance_verdict": compact_verdict,
+        })
 
         signal = analysis.get("eligible_underdog_signal") or {}
         if signal:
@@ -404,13 +423,32 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                 bucket = (((period.get("calendar_day_cluster_bootstrap") or {})
                            .get("schemes") or {}).get("calendar_day_PRIMARY", {})
                           .get("buckets", {}).get("all", {}))
+                frozen = period.get("frozen_r1_all_sports") or {}
+                variant = period.get("variant_r1_after_gate") or {}
                 return {
-                    "frozen_r1_all_sports": period.get("frozen_r1_all_sports"),
-                    "variant_r1_after_gate": period.get("variant_r1_after_gate"),
-                    "variant_cluster_bootstrap_95_lo": bucket.get("bootstrap_95_lo"),
-                    "variant_cluster_bootstrap_95_hi": bucket.get("bootstrap_95_hi"),
+                    "frozen_r1": {
+                        "n": frozen.get("n"),
+                        "surplus": frozen.get("observed_minus_predicted"),
+                    },
+                    "variant_r1": {
+                        "n": variant.get("n"),
+                        "surplus": variant.get("observed_minus_predicted"),
+                        "cluster_bootstrap_95_lo": bucket.get("bootstrap_95_lo"),
+                        "cluster_bootstrap_95_hi": bucket.get("bootstrap_95_hi"),
+                    },
                     "rows_removed": period.get("rows_removed"),
                 }
+
+            emit_notice("r1_backtest_negative_sport_gate_variant", {
+                "status": gate_variant.get("status"),
+                "excluded_sports_selected_on_development_only": gate_variant.get(
+                    "excluded_sports_selected_on_development_only"),
+                "development": compact_gate_period(
+                    gate_variant.get("development_through_cutoff") or {}),
+                "holdout": compact_gate_period(
+                    gate_variant.get("holdout_after_cutoff") or {}),
+                "warning": gate_variant.get("warning"),
+            })
 
             emit_notice("r1_backtest_eligible_signal_overall", {
                 "scope": signal.get("scope"), "cutoff": signal.get("cutoff"),
@@ -423,15 +461,6 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                         "development_through_cutoff") or {}),
                 "holdout": compact_signal_period(
                     (signal.get("overall") or {}).get("holdout_after_cutoff") or {}),
-                "negative_sport_gate_variant": {
-                    "status": gate_variant.get("status"),
-                    "excluded_sports_selected_on_development_only": gate_variant.get(
-                        "excluded_sports_selected_on_development_only"),
-                    "development": compact_gate_period(
-                        gate_variant.get("development_through_cutoff") or {}),
-                    "holdout": compact_gate_period(
-                        gate_variant.get("holdout_after_cutoff") or {}),
-                },
             })
             signal_sports = sorted((signal.get("per_sport") or {}).items())
             for chunk_index in range(0, len(signal_sports), 4):
