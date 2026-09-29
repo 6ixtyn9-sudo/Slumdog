@@ -1,5 +1,20 @@
 
-### Update 2026-09-29: filtered low-draw shape survives; sport composition unresolved
+### Update 2026-09-29: low-draw finding is handball-only; quarterly persistence pending
+
+Handball supplies 99.0% of retained development `<0.05` rows (`14473/14614`)
+and 97.1% of holdout (`639/658`). Development is `2.19x`, month
+`[+0.0233,+0.0308]`; holdout is `1.76x`, month `[-0.0199,+0.0351]`. The finding
+is narrowly “Forebet under-forecasts low-probability handball draws”; holdout is
+not confirmed and this is not a general draw-model property. Handball's prior
+underdog development/holdout reversal raises the required evidence bar.
+
+A fixed 11-quarter walk-forward (2024-Q1..2026-Q3) now reports each fold and a
+predeclared persistence verdict: >=75% positive, >=50% month-significant
+positive, final two positive. League concentration and the full handball draw
+calibration curve are supporting checks. Results remain unverified until a run
+is read; frozen R1 and selector behavior are unchanged.
+
+### Superseded 2026-09-29: filtered pooled shape before composition
 
 Genuine-forecast development `<0.05`: `n=14614`, predicted `0.023097`, observed
 `0.050943`, surplus `+0.027846`, relative `2.206x`, month

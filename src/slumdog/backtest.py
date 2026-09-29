@@ -1139,6 +1139,172 @@ def _low_draw_tail_analysis(events: list[SettledEvent]) -> dict[str, Any]:
     }
 
 
+def _handball_draw_diagnostics(events: list[SettledEvent]) -> dict[str, Any]:
+    """Walk-forward and concentration audit for the handball-only tail lead."""
+    rows = [event for event in events if event.sport == "handball"]
+
+    def tail_summary(group: list[SettledEvent], seed_offset: int) -> dict[str, Any]:
+        usable = [
+            event for event in group
+            if isinstance(event.draw_probability, (int, float))
+            and not isinstance(event.draw_probability, bool)
+            and GENUINE_DRAW_FORECAST_FLOOR <= float(event.draw_probability) < 0.05
+        ]
+        predicted = (sum(float(event.draw_probability) for event in usable) / len(usable)
+                     if usable else None)
+        observed = (sum(1 for event in usable if event.winner_index == 0) / len(usable)
+                    if usable else None)
+        records = [
+            (event.sport, event.event_date, "tail", float(event.draw_probability),
+             1.0 if event.winner_index == 0 else 0.0)
+            for event in usable
+        ]
+        bootstrap = _cluster_bootstrap_surplus(
+            records, ["tail"], seed=BOOTSTRAP_SEED + seed_offset,
+            scheme_names=("calendar_month",))
+        interval = (bootstrap.get("schemes", {}).get("calendar_month", {})
+                    .get("buckets", {}).get("tail", {}))
+        dates = {event.event_date for event in usable}
+        surplus = (observed - predicted
+                   if observed is not None and predicted is not None else None)
+        return {
+            "n": len(usable),
+            "mean_predicted_probability": predicted,
+            "observed_hit_rate": observed,
+            "absolute_surplus": surplus,
+            "relative_observed_divided_by_predicted": (
+                observed / predicted
+                if observed is not None and predicted not in (None, 0) else None),
+            "calendar_month_95_lo": interval.get("bootstrap_95_lo"),
+            "calendar_month_95_hi": interval.get("bootstrap_95_hi"),
+            "sign": ("POSITIVE" if surplus is not None and surplus > 0 else
+                     "NEGATIVE" if surplus is not None and surplus < 0 else "ZERO_OR_EMPTY"),
+            "active_days": len(dates),
+            "candidate_rows_per_active_day": (
+                len(usable) / len(dates) if dates else None),
+            "indicative_only_n_lt_500": len(usable) < 500,
+        }
+
+    # Fixed before execution: every calendar quarter from 2024-Q1 through
+    # 2026-Q3, including empty folds rather than silently selecting active ones.
+    folds = []
+    fold_index = 0
+    for year in (2024, 2025, 2026):
+        for quarter in (1, 2, 3, 4):
+            if year == 2026 and quarter == 4:
+                continue
+            start_month = (quarter - 1) * 3 + 1
+            start = dt.date(year, start_month, 1)
+            if quarter == 4:
+                end = dt.date(year + 1, 1, 1)
+            else:
+                end = dt.date(year, start_month + 3, 1)
+            group = [event for event in rows
+                     if start.isoformat() <= event.event_date < end.isoformat()]
+            fold = tail_summary(group, 4000 + fold_index)
+            fold.update({
+                "fold": f"{year}-Q{quarter}",
+                "start_inclusive": start.isoformat(),
+                "end_exclusive": end.isoformat(),
+            })
+            folds.append(fold)
+            fold_index += 1
+
+    nonempty = [fold for fold in folds if fold["n"] > 0]
+    positive = sum(fold["sign"] == "POSITIVE" for fold in nonempty)
+    significant_positive = sum(
+        fold.get("calendar_month_95_lo") is not None
+        and fold["calendar_month_95_lo"] > 0
+        for fold in nonempty)
+    final_two = nonempty[-2:]
+    persistence = (
+        len(nonempty) > 0
+        and positive / len(nonempty) >= 0.75
+        and significant_positive / len(nonempty) >= 0.50
+        and len(final_two) == 2
+        and all(fold["sign"] == "POSITIVE" for fold in final_two)
+    )
+
+    by_league: dict[str, list[SettledEvent]] = defaultdict(list)
+    for event in rows:
+        by_league[event.league or "UNKNOWN_LEAGUE"].append(event)
+    league_rows = []
+    all_tail_n = tail_summary(rows, 4200)["n"]
+    for index, (league, group) in enumerate(sorted(by_league.items())):
+        summary = tail_summary(group, 4300 + index)
+        if summary["n"] == 0:
+            continue
+        league_rows.append({
+            "league": league,
+            "share_of_handball_tail": summary["n"] / all_tail_n if all_tail_n else None,
+            **summary,
+        })
+    league_rows.sort(key=lambda item: (-item["n"], item["league"]))
+
+    curve_bands = (
+        ("<0.05", 0.005, 0.05), ("0.05-0.10", 0.05, 0.10),
+        ("0.10-0.15", 0.10, 0.15), ("0.15-0.20", 0.15, 0.20),
+        ("0.20-0.25", 0.20, 0.25), ("0.25-0.30", 0.25, 0.30),
+        ("0.30-0.35", 0.30, 0.35), ("0.35+", 0.35, 1.0000001),
+    )
+    curve = {}
+    for index, (label, lo, hi) in enumerate(curve_bands):
+        group = [event for event in rows
+                 if isinstance(event.draw_probability, (int, float))
+                 and not isinstance(event.draw_probability, bool)
+                 and lo <= float(event.draw_probability) < hi]
+        # Reuse the same estimator by temporarily selecting this band's rows;
+        # unlike tail_summary, calculate directly because p may exceed 0.05.
+        predicted = (sum(float(event.draw_probability) for event in group) / len(group)
+                     if group else None)
+        observed = (sum(event.winner_index == 0 for event in group) / len(group)
+                    if group else None)
+        records = [(event.sport, event.event_date, label,
+                    float(event.draw_probability),
+                    1.0 if event.winner_index == 0 else 0.0) for event in group]
+        boot = _cluster_bootstrap_surplus(
+            records, [label], seed=BOOTSTRAP_SEED + 4500 + index,
+            scheme_names=("calendar_month",))
+        interval = (boot.get("schemes", {}).get("calendar_month", {})
+                    .get("buckets", {}).get(label, {}))
+        curve[label] = {
+            "n": len(group), "mean_predicted_probability": predicted,
+            "observed_hit_rate": observed,
+            "absolute_surplus": (observed - predicted
+                                 if observed is not None and predicted is not None else None),
+            "relative_observed_divided_by_predicted": (
+                observed / predicted
+                if observed is not None and predicted not in (None, 0) else None),
+            "calendar_month_95_lo": interval.get("bootstrap_95_lo"),
+            "calendar_month_95_hi": interval.get("bootstrap_95_hi"),
+            "indicative_only_n_lt_500": len(group) < 500,
+        }
+
+    return {
+        "scope": "handball genuine draw forecasts; 0.005 <= p(draw) <0.05 for tail tests",
+        "fold_contract": "fixed calendar quarters 2024-Q1 through 2026-Q3, including empty folds",
+        "predeclared_persistence_rule": (
+            "At least 75% of nonempty folds positive, at least 50% with month-block "
+            "lower bound >0, and the final two nonempty folds both positive."
+        ),
+        "walk_forward_folds": folds,
+        "persistence_summary": {
+            "nonempty_folds": len(nonempty),
+            "positive_sign_folds": positive,
+            "month_interval_excludes_zero_positive_folds": significant_positive,
+            "final_two_nonempty_positive": (
+                len(final_two) == 2 and all(fold["sign"] == "POSITIVE"
+                                            for fold in final_two)),
+            "persistence_rule_met": persistence,
+        },
+        "league_concentration": {
+            "warning": "League slices are multiplicity-exposed; n<500 is indicative only.",
+            "leagues": league_rows,
+        },
+        "full_draw_calibration_curve": curve,
+    }
+
+
 def _eligible_signal_analysis(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Calibration over every R2-eligible underdog, not only daily R1."""
     def frequency(group: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1471,6 +1637,7 @@ def r1_backtest(root: Path | str = ".", target_date: str | None = None) -> Path:
         "corpus_wide_reconstruction_counts": dict(corpus_wide_reconstruction_counts),
         "three_outcome_calibration_map": _three_outcome_calibration(all_settled_events),
         "low_draw_tail_analysis": _low_draw_tail_analysis(all_settled_events),
+        "handball_draw_diagnostics": _handball_draw_diagnostics(all_settled_events),
         "eligible_underdog_signal": eligible_signal,
         "negative_sport_gate_variant": _negative_sport_gate_variant(
             eligible_signal, all_r1_rows),
@@ -1722,6 +1889,69 @@ def _render_r1_backtest_markdown(analysis: dict[str, Any]) -> str:
                         f"{relative_text} | {interval(day)} | {interval(month)} | "
                         f"{frequency_text} |"
                     )
+
+    handball = analysis.get("handball_draw_diagnostics") or {}
+    if handball:
+        lines += [
+            "", "## Handball low-draw walk-forward", "",
+            handball.get("predeclared_persistence_rule", ""), "",
+            "Persistence summary: " + json.dumps(
+                handball.get("persistence_summary", {}), sort_keys=True),
+            "",
+            "| Fold | n | Predicted | Observed | Surplus | Relative | Month 95% | Sign |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        ]
+        for fold in handball.get("walk_forward_folds", []):
+            lo = fold.get("calendar_month_95_lo")
+            hi = fold.get("calendar_month_95_hi")
+            interval = (f"{lo:+.2%}..{hi:+.2%}"
+                        if lo is not None and hi is not None else "-")
+            relative = fold.get("relative_observed_divided_by_predicted")
+            lines.append(
+                f"| {fold.get('fold')} | {fold.get('n')} | "
+                f"{fold.get('mean_predicted_probability') or 0:.2%} | "
+                f"{fold.get('observed_hit_rate') or 0:.2%} | "
+                f"{fold.get('absolute_surplus') or 0:+.2%} | "
+                f"{relative:.3f} | {interval} | {fold.get('sign')} |"
+                if relative is not None else
+                f"| {fold.get('fold')} | 0 | - | - | - | - | - | EMPTY |"
+            )
+        lines += [
+            "", "### Handball league concentration", "",
+            "| League | n | Share | Predicted | Observed | Relative | Month 95% |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+        for league in (handball.get("league_concentration") or {}).get("leagues", []):
+            lo = league.get("calendar_month_95_lo")
+            hi = league.get("calendar_month_95_hi")
+            relative = league.get("relative_observed_divided_by_predicted")
+            lines.append(
+                f"| {league.get('league')} | {league.get('n')} | "
+                f"{league.get('share_of_handball_tail'):.2%} | "
+                f"{league.get('mean_predicted_probability'):.2%} | "
+                f"{league.get('observed_hit_rate'):.2%} | {relative:.3f} | "
+                f"{lo:+.2%}..{hi:+.2%} |"
+            )
+        lines += [
+            "", "### Full handball draw calibration curve", "",
+            "| Bucket | n | Predicted | Observed | Surplus | Relative | Month 95% |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+        for label, bucket in (handball.get("full_draw_calibration_curve") or {}).items():
+            predicted = bucket.get("mean_predicted_probability")
+            observed = bucket.get("observed_hit_rate")
+            surplus = bucket.get("absolute_surplus")
+            relative = bucket.get("relative_observed_divided_by_predicted")
+            lo = bucket.get("calendar_month_95_lo")
+            hi = bucket.get("calendar_month_95_hi")
+            if predicted is None:
+                lines.append(f"| {label} | 0 | - | - | - | - | - |")
+            else:
+                lines.append(
+                    f"| {label} | {bucket.get('n')} | {predicted:.2%} | "
+                    f"{observed:.2%} | {surplus:+.2%} | {relative:.3f} | "
+                    f"{lo:+.2%}..{hi:+.2%} |"
+                )
 
     signal = analysis.get("eligible_underdog_signal") or {}
     if signal:

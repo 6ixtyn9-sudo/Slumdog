@@ -14,6 +14,7 @@ import pytest
 from slumdog.backtest import (
     KNOWN_LIMITATIONS,
     _cluster_bootstrap_surplus,
+    _handball_draw_diagnostics,
     _low_draw_tail_analysis,
     r1_backtest,
 )
@@ -51,14 +52,15 @@ def _pre_event_selection(event_id, sport, event_date, *, favorite_index, underdo
 
 def _ev(event_id, sport, event_date, p1, p2, winner_index, *,
         probability_1=0.6, probability_2=0.4, draw_probability=None,
-        forebet_pick=1, disposition="SETTLED", reconstruction="HISTORICAL_PAGE"):
+        forebet_pick=1, disposition="SETTLED", reconstruction="HISTORICAL_PAGE",
+        league=""):
     return SettledEvent(
         event_id=event_id, sport=sport, event_date=event_date,
         participant_1=p1, participant_2=p2, winner_index=winner_index,
         score_1=1.0, score_2=0.0,
         probability_1=probability_1, probability_2=probability_2,
         draw_probability=draw_probability, forebet_pick=forebet_pick,
-        disposition=disposition, reconstruction=reconstruction,
+        disposition=disposition, reconstruction=reconstruction, league=league,
     )
 
 
@@ -469,6 +471,38 @@ class TestBaselinesAndBands:
         assert mma_audit["retained_lt_0_20_n"] == 0
         assert analysis["genuine_draw_forecast_contract"][
             "minimum_probability"] == pytest.approx(0.005)
+
+    def test_handball_walk_forward_uses_fixed_quarters_and_predeclared_rule(self):
+        events = []
+        index = 0
+        for year in (2024, 2025, 2026):
+            for quarter in (1, 2, 3, 4):
+                if year == 2026 and quarter == 4:
+                    continue
+                month = (quarter - 1) * 3 + 1
+                events.append(_ev(
+                    f"hb-{index}", "handball", f"{year}-{month:02d}-15",
+                    "Home", "Away", winner_index=0,
+                    probability_1=0.60, probability_2=0.37,
+                    draw_probability=0.03, disposition="SETTLED_DRAW",
+                    league="Test League"))
+                index += 1
+        result = _handball_draw_diagnostics(events)
+        assert len(result["walk_forward_folds"]) == 11
+        assert result["walk_forward_folds"][0]["fold"] == "2024-Q1"
+        assert result["walk_forward_folds"][-1]["fold"] == "2026-Q3"
+        assert result["persistence_summary"] == {
+            "nonempty_folds": 11,
+            "positive_sign_folds": 11,
+            "month_interval_excludes_zero_positive_folds": 11,
+            "final_two_nonempty_positive": True,
+            "persistence_rule_met": True,
+        }
+        league = result["league_concentration"]["leagues"][0]
+        assert league["league"] == "Test League"
+        assert league["share_of_handball_tail"] == pytest.approx(1.0)
+        assert result["full_draw_calibration_curve"]["<0.05"]["n"] == 11
+        assert "75%" in result["predeclared_persistence_rule"]
 
     def test_baselines_computed_on_the_same_rows(self, tmp_path):
         events = _build_eligible_scenario(winner_index=2)

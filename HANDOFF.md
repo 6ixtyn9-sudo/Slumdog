@@ -1,5 +1,31 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — filtered tail is 99% handball; quarterly persistence test implemented.**
+
+Composition answers breadth decisively. Development retained `<0.05` is handball
+`14473/14614` (99.0%): predicted `2.31%`, observed `5.06%`, relative `2.19x`,
+month `[+0.0233,+0.0308]`. Holdout is handball `639/658` (97.1%), relative
+`1.76x`, but month `[-0.0199,+0.0351]` includes zero. Required claim: **Forebet
+under-forecasts low-probability handball draws**, not a general Forebet draw-model
+property. The same handball sport previously reversed underdog differential from
+`+8.96` development to `-30.20` holdout; this does not prove draw reversal, but
+raises the evidentiary bar and is stated beside the finding.
+
+A fixed quarterly walk-forward now covers every quarter 2024-Q1 through 2026-Q3
+(11 folds, empty folds retained). Each reports n, predicted, observed, surplus,
+relative ratio, month-block interval, sign, frequency and `n<500`. Persistence
+was frozen before execution: >=75% of nonempty folds positive, >=50% with month
+lower bound >0, and final two nonempty folds positive. Output also reports every
+handball league's tail n/share/calibration/month interval (multiplicity warning)
+and the complete handball draw curve from `<0.05` through `0.35+`. No result has
+been read yet; persistence is **UNVERIFIED** and no selector exists.
+
+Football remains indicative: development `3.16x`, `n=100`; holdout `4.35x`,
+`n=13`; about 1.25 rows/active day and roughly 400 active days to reach the
+standing `n=500` threshold. Final local gates: focused tests **156 passed**;
+full `python -m pytest` **1775 passed**; tracked-file `py_compile`, changed-file
+`pyflakes`, and `git diff --check` clean.
+
 **2026-09-29 — filtered genuine-forecast tail revalidates; composition unresolved.**
 
 After excluding absent/two-outcome boards and probabilities below `0.005`, the

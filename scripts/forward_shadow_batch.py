@@ -437,34 +437,6 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                 "per_sport_in_full_report": True,
             })
 
-            def compact_sport_tail(period: dict) -> dict:
-                compact = compact_tail_period(period)
-                return {
-                    "population": compact.get("population"),
-                    "forecast_exclusion_audit": compact.get(
-                        "forecast_exclusion_audit"),
-                    "parent_lt_0_20_n": compact.get("parent_lt_0_20_n"),
-                    "lt_0_05": (compact.get("buckets") or {}).get("<0.05"),
-                }
-
-            sport_tail = sorted((tail.get("per_sport") or {}).items())
-            for chunk_index in range(0, len(sport_tail), 2):
-                chunk = sport_tail[chunk_index:chunk_index + 2]
-                emit_notice(
-                    f"r1_backtest_low_draw_tail_sports_{chunk_index // 2 + 1}",
-                    {
-                        sport: {
-                            "draw_outcome_semantics": (
-                                tail.get("draw_outcome_semantics") or {}).get(sport),
-                            "development": compact_sport_tail(
-                                periods.get("development_through_cutoff") or {}),
-                            "holdout": compact_sport_tail(
-                                periods.get("holdout_after_cutoff") or {}),
-                        }
-                        for sport, periods in chunk
-                    },
-                )
-
             composition = tail.get("retained_lt_0_05_composition") or {}
             for period, title_suffix in (
                 ("development_through_cutoff", "development"),
@@ -500,56 +472,30 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
 
         # Provenance remains in the receipt/full report. Reserve the finite
         # notice budget for the same-population tail decomposition and canary.
-        signal = analysis.get("eligible_underdog_signal") or {}
-        if signal:
-            def compact_signal_period(period: dict) -> dict:
-                def compact_leg(calibration_key: str, bootstrap_key: str) -> dict:
-                    calibration = period.get(calibration_key) or {}
-                    bucket = (((period.get(bootstrap_key) or {}).get("schemes") or {})
-                              .get("calendar_day_PRIMARY", {}).get("buckets", {})
-                              .get("all", {}))
-                    return {
-                        "n": calibration.get("n"),
-                        "mean_predicted_probability": calibration.get(
-                            "mean_predicted_probability"),
-                        "observed_hit_rate": calibration.get("hit_rate"),
-                        "observed_minus_predicted": calibration.get(
-                            "observed_minus_predicted"),
-                        "cluster_bootstrap_95_lo": bucket.get("bootstrap_95_lo"),
-                        "cluster_bootstrap_95_hi": bucket.get("bootstrap_95_hi"),
-                    }
-
-                return {
-                    "underdog": compact_leg(
-                        "calibration", "calendar_day_cluster_bootstrap"),
-                    "favourite_control": compact_leg(
-                        "favourite_control",
-                        "favourite_calendar_day_cluster_bootstrap"),
-                    "underdog_minus_favourite": compact_leg(
-                        "differential",
-                        "differential_calendar_day_cluster_bootstrap"),
-                    "candidate_frequency": period.get("candidate_frequency"),
-                }
-
-            # The negative-sport gate is retired: its correctly separated
-            # development intervals include zero. Keep its forensic receipt in
-            # JSON, but do not spend an annotation or imply an open variant.
-
-            emit_notice("r1_backtest_eligible_signal_overall", {
-                "scope": signal.get("scope"), "cutoff": signal.get("cutoff"),
-                "primary_uncertainty_block": signal.get(
-                    "primary_uncertainty_block"),
-                "block_reason": signal.get("block_reason"),
-                "multiplicity_warning": signal.get("multiplicity_warning"),
-                "development": compact_signal_period(
-                    (signal.get("overall") or {}).get(
-                        "development_through_cutoff") or {}),
-                "holdout": compact_signal_period(
-                    (signal.get("overall") or {}).get("holdout_after_cutoff") or {}),
+        handball = analysis.get("handball_draw_diagnostics") or {}
+        if handball:
+            folds = handball.get("walk_forward_folds") or []
+            for chunk_index in range(0, len(folds), 6):
+                emit_notice(
+                    f"r1_backtest_handball_walk_forward_{chunk_index // 6 + 1}",
+                    {
+                        "fold_contract": handball.get("fold_contract"),
+                        "predeclared_persistence_rule": handball.get(
+                            "predeclared_persistence_rule"),
+                        "folds": folds[chunk_index:chunk_index + 6],
+                    },
+                )
+            leagues = (handball.get("league_concentration") or {}).get(
+                "leagues", [])
+            emit_notice("r1_backtest_handball_diagnostic_summary", {
+                "persistence_summary": handball.get("persistence_summary"),
+                "full_draw_calibration_curve": handball.get(
+                    "full_draw_calibration_curve"),
+                "top_leagues_by_tail_n": leagues[:8],
+                "league_warning": (handball.get("league_concentration") or {}).get(
+                    "warning"),
+                "all_leagues_in_full_report": True,
             })
-            # Per-sport eligible-underdog tables remain in the full report.
-            # Their leads are exhausted; reserve annotations for the validated
-            # low-draw tail's sport concentration and semantic audit.
 
         inventory = analysis.get("corpus_inventory") or {}
         per_sport = {}
