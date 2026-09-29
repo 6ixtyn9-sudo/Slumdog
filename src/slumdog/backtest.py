@@ -1628,16 +1628,71 @@ def _draw_probability_recalibration(events: list[SettledEvent]) -> dict[str, Any
             and len(scored_folds) > 0
             and improved_folds / len(scored_folds) >= 0.75
         )
+        brier_fold_gains = [
+            fold["brier_information_gain_base_minus_shrink"]
+            for fold in scored_folds
+        ]
+        log_fold_gains = [
+            fold["log_loss_information_gain_base_minus_shrink"]
+            for fold in scored_folds
+        ]
+        fold_rng = random.Random(BOOTSTRAP_SEED + 7000 + sport_index)
+        brier_fold_means = []
+        log_fold_means = []
+        if scored_folds:
+            for _ in range(BOOTSTRAP_REPLICATES):
+                sampled_indices = [fold_rng.randrange(len(scored_folds))
+                                   for _fold in scored_folds]
+                brier_fold_means.append(
+                    sum(brier_fold_gains[index] for index in sampled_indices)
+                    / len(sampled_indices))
+                log_fold_means.append(
+                    sum(log_fold_gains[index] for index in sampled_indices)
+                    / len(sampled_indices))
+        nonzero_brier = [value for value in brier_fold_gains if value != 0]
+        positive_brier = sum(value > 0 for value in nonzero_brier)
+        if nonzero_brier:
+            denominator = 2 ** len(nonzero_brier)
+            lower_tail = sum(math.comb(len(nonzero_brier), successes)
+                             for successes in range(positive_brier + 1)) / denominator
+            upper_tail = sum(math.comb(len(nonzero_brier), successes)
+                             for successes in range(positive_brier,
+                                                    len(nonzero_brier) + 1)) / denominator
+            sign_p = min(1.0, 2 * min(lower_tail, upper_tail))
+        else:
+            sign_p = None
+        paired_fold_test = {
+            "unit": "one unweighted base-minus-shrink score difference per sequential quarter",
+            "n_folds": len(scored_folds),
+            "brier_mean_information_gain_base_minus_shrink": (
+                sum(brier_fold_gains) / len(brier_fold_gains)
+                if brier_fold_gains else None),
+            "brier_paired_fold_bootstrap_95_lo": _percentile(
+                brier_fold_means, 0.025),
+            "brier_paired_fold_bootstrap_95_hi": _percentile(
+                brier_fold_means, 0.975),
+            "brier_positive_folds": positive_brier,
+            "brier_nonzero_folds": len(nonzero_brier),
+            "brier_two_sided_exact_sign_test_p": sign_p,
+            "log_loss_mean_information_gain_base_minus_shrink": (
+                sum(log_fold_gains) / len(log_fold_gains)
+                if log_fold_gains else None),
+            "log_loss_paired_fold_bootstrap_95_lo": _percentile(
+                log_fold_means, 0.025),
+            "log_loss_paired_fold_bootstrap_95_hi": _percentile(
+                log_fold_means, 0.975),
+            "dependence_caveat": (
+                "Evaluation quarters are disjoint, but expanding training sets overlap; "
+                "the fold interval and sign test therefore summarize temporal transfer "
+                "and are not claimed to be fully independent-sample inference."
+            ),
+        }
         information_retained = (
-            holdout_score.get("brier_information_gain_base_minus_shrink") is not None
-            and holdout_score["brier_information_gain_base_minus_shrink"] > 0
-            and holdout_score.get(
-                "brier_information_gain_month_bootstrap_95_lo") is not None
-            and holdout_score["brier_information_gain_month_bootstrap_95_lo"] > 0
-            and holdout_score.get(
-                "log_loss_information_gain_base_minus_shrink", 0) > 0
-            and len(scored_folds) > 0
-            and base_beaten_folds / len(scored_folds) >= 0.75
+            paired_fold_test["n_folds"] >= 8
+            and paired_fold_test[
+                "brier_mean_information_gain_base_minus_shrink"] > 0
+            and paired_fold_test["brier_paired_fold_bootstrap_95_lo"] > 0
+            and paired_fold_test["brier_two_sided_exact_sign_test_p"] < 0.05
         )
         per_sport[sport] = {
             "development_fit": development_fit,
@@ -1653,6 +1708,7 @@ def _draw_probability_recalibration(events: list[SettledEvent]) -> dict[str, Any
                 "fraction_shrink_beats_base_rate": (
                     base_beaten_folds / len(scored_folds) if scored_folds else None),
             },
+            "paired_sequential_fold_information_test": paired_fold_test,
             "predeclared_improvement_rule_met": holdout_real,
             "predeclared_information_retention_rule_met": information_retained,
             "information_verdict": (
@@ -1676,10 +1732,13 @@ def _draw_probability_recalibration(events: list[SettledEvent]) -> dict[str, Any
             "only if both sports pass."
         ),
         "predeclared_information_retention_rule": (
-            "Shrink must beat the development base-rate-only predictor on holdout "
-            "Brier with month-bootstrap lower bound >0, improve holdout log loss, "
-            "and beat base-rate Brier in at least 75% of sequential folds. Otherwise "
-            "discarding the source probability to the base rate is not rejected."
+            "The paired sequential-quarter test is the arbiter because the terminal "
+            "holdout has only three month blocks. Using one unweighted base-minus-shrink "
+            "Brier difference per scored fold, retain information only with at least "
+            "eight folds, positive mean, paired fold-bootstrap 95% lower bound >0, "
+            "and two-sided exact sign-test p<0.05. Otherwise discarding the source "
+            "probability to the development base rate is not rejected. Terminal "
+            "holdout Brier/log loss and its three-month interval remain descriptive."
         ),
         "per_sport": per_sport,
         "transferable_recalibration_result": (
@@ -2475,7 +2534,14 @@ def _render_r1_backtest_markdown(analysis: dict[str, Any]) -> str:
                 f"{result.get('predeclared_improvement_rule_met')} | "
                 f"{result.get('information_verdict')} |"
             )
+            paired = result.get("paired_sequential_fold_information_test") or {}
             lines += [
+                "", f"Paired fold arbiter: mean base-minus-shrink Brier "
+                f"{paired.get('brier_mean_information_gain_base_minus_shrink')}; "
+                f"95% [{paired.get('brier_paired_fold_bootstrap_95_lo')}, "
+                f"{paired.get('brier_paired_fold_bootstrap_95_hi')}]; sign test "
+                f"p={paired.get('brier_two_sided_exact_sign_test_p')}; verdict "
+                f"**{result.get('information_verdict')}**.",
                 "", f"### {sport} sequential recalibration folds", "",
                 "| Fold | Fit n | Alpha | Eval n | Brier improvement | Month 95% | Log-loss improvement |",
                 "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",

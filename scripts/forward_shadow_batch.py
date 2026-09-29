@@ -440,6 +440,8 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                 "development_fit": result.get("development_fit"),
                 "holdout_evaluation": result.get("holdout_evaluation"),
                 "quarterly_summary": result.get("quarterly_summary"),
+                "paired_sequential_fold_information_test": result.get(
+                    "paired_sequential_fold_information_test"),
                 "rule_met": result.get("predeclared_improvement_rule_met"),
                 "information_retention_rule_met": result.get(
                     "predeclared_information_retention_rule_met"),

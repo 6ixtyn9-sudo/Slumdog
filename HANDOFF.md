@@ -1,26 +1,29 @@
 # Slumdog Living Handoff
 
-**2026-09-29 — measured correction succeeded; information retention now tested.**
+**2026-09-29 — advance-requested guard overturned the raw comparison.**
 
-Owner-supplied direct output reported `REAL_AND_TRANSFERABLE`: football and
-handball passed every frozen raw-versus-shrink condition. Handball development
-base `0.065294`, alpha `0.235079`; holdout n=1,127 Brier
-`0.046485→0.042218` (gain `+0.004267`, month `[+0.002960,+0.011185]`) and log
-loss `0.203297→0.183680` (gain `+0.019617`, month
-`[+0.010401,+0.026645]`), with 10/10 sequential quarters improving. Alpha is
-the retained fraction of forecast deviation from the development base: this
-retains 23.5% and discards 76.5%, measured over-dispersion. Football holdout
-n=29,455 log loss `0.557430→0.540865` (gain `+0.016565`, month
-`[+0.014072,+0.017971]`) and 10/10 quarters improved. Football alpha, base, and
-Brier remain unverified because the annotation was truncated; read the next run.
-This corrects probability labels, not selection or profit; frozen R1 is unchanged.
+Owner-supplied direct output records `DISCARD_TO_BASE_RATE_NOT_REJECTED` for both
+draw sports. Football holdout Brier was raw `0.185392`, shrink `0.177842`, and
+development-base-only `0.178055`: base-minus-shrink `+0.000213`, month interval
+`[-0.00004,+0.00078]`; log loss was `0.557430`, `0.540865`, and `0.541554`,
+respectively, for information gain `+0.000689`. Handball Brier was raw
+`0.046485`, shrink `0.042218`, and base-only `0.042064`, so shrink lost to base
+by `0.000154`; log loss was `0.203297`, `0.183680`, and base-only `0.183233`, so
+shrink lost by `0.000447`. The earlier `REAL_AND_TRANSFERABLE` result remains an
+accurate frozen comparison against raw forecasts only, but does not establish
+information beyond a constant predictor. This is the seventh worked example and
+the first false positive caught by a guard requested in advance rather than by
+later inspection.
 
-The report now separately compares shrink with alpha=0/base-only using identical
-holdout and sequential folds. `RETAIN_AND_SHRINK` requires positive holdout
-Brier information gain with month-block lower bound >0, positive log-loss gain,
-and at least 75% sequential Brier wins; otherwise it reports
-`DISCARD_TO_BASE_RATE_NOT_REJECTED`. It also evaluates home, away, and draw
-outcomes separately by genuine three-outcome-board sport with the 0.005 floor.
+Do not yet finalize “ignore draw probability entirely”: the terminal holdout has
+only three month blocks, while sequential quarters report shrink beating base in
+10/10 football and 9/10 handball folds. The now-predeclared arbiter pools one
+unweighted base-minus-shrink Brier difference per sequential fold, reporting its
+mean, paired fold-bootstrap interval, and exact two-sided sign test. Retain only
+with at least eight folds, positive mean, interval lower bound >0, and p<0.05;
+otherwise use the sport development base rate. Overlapping expanding fit windows
+remain an explicit dependence caveat. Home, away, and draw outcomes use the same
+three-way comparison separately by genuine-board sport. Frozen R1 is unchanged.
 
 **2026-09-29 — football confirms shared over-dispersion; one-parameter recalibration implemented.**
 

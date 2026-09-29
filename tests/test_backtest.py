@@ -566,6 +566,10 @@ class TestBaselinesAndBands:
             assert "brier_information_gain_base_minus_shrink" in holdout
             assert "log_loss_base_rate_only" in holdout
             assert "information_verdict" in sport_result
+            paired = sport_result["paired_sequential_fold_information_test"]
+            assert paired["n_folds"] == sport_result["quarterly_summary"]["scored_folds"]
+            assert "brier_two_sided_exact_sign_test_p" in paired
+            assert "brier_paired_fold_bootstrap_95_lo" in paired
             assert len(sport_result["sequential_quarterly_folds"]) == 11
             assert "<0.05" in sport_result["holdout_recalibrated_curve"]
         assert "both sports pass" in result["predeclared_real_improvement_rule"]

@@ -102,20 +102,8 @@ class TestEveryDeclaredArtifactIsPersisted:
 
 
 class TestPersistFailureCorrections:
-    def test_staged_copy_only_adds_the_untracked_report_shelter(self, live_text):
-        staged = STAGED.read_text()
-        start = staged.index(
-            "          # Backtest reports are artifact-only and untracked.")
-        end = staged.index(
-            "          git pull --rebase --autostash origin main", start)
-        stripped = staged[:start] + staged[end:]
-        stripped = stripped.replace(
-            "          restore_r1_reports\n          trap - EXIT\n"
-            "      - name: Upload full evidence",
-            "      - name: Upload full evidence",
-            1,
-        )
-        assert stripped == live_text
+    def test_owner_applied_staged_untracked_report_shelter(self, live_text):
+        assert STAGED.read_text() == live_text
 
     def test_all_three_optional_finds_neutralize_exit_before_pipefail(self):
         persist = STAGED.read_text().split(PERSIST_STEP_NAME, 1)[1]
