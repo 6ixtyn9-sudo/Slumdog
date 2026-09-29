@@ -421,6 +421,10 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
             emit_notice("r1_backtest_low_draw_tail_development", {
                 "predeclared_shape_interpretation": tail.get(
                     "predeclared_shape_interpretation"),
+                "validated_shape_verdict": (tail.get("pooled") or {}).get(
+                    "validated_shape_verdict"),
+                "validation_rule_application": (tail.get("pooled") or {}).get(
+                    "validation_rule_application"),
                 "result": compact_tail_period(
                     (tail.get("pooled") or {}).get(
                         "development_through_cutoff") or {}),
@@ -431,6 +435,32 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                     (tail.get("pooled") or {}).get("holdout_after_cutoff") or {}),
                 "per_sport_in_full_report": True,
             })
+
+            def compact_sport_tail(period: dict) -> dict:
+                compact = compact_tail_period(period)
+                return {
+                    "population": compact.get("population"),
+                    "parent_lt_0_20_n": compact.get("parent_lt_0_20_n"),
+                    "lt_0_05": (compact.get("buckets") or {}).get("<0.05"),
+                }
+
+            sport_tail = sorted((tail.get("per_sport") or {}).items())
+            for chunk_index in range(0, len(sport_tail), 2):
+                chunk = sport_tail[chunk_index:chunk_index + 2]
+                emit_notice(
+                    f"r1_backtest_low_draw_tail_sports_{chunk_index // 2 + 1}",
+                    {
+                        sport: {
+                            "draw_outcome_semantics": (
+                                tail.get("draw_outcome_semantics") or {}).get(sport),
+                            "development": compact_sport_tail(
+                                periods.get("development_through_cutoff") or {}),
+                            "holdout": compact_sport_tail(
+                                periods.get("holdout_after_cutoff") or {}),
+                        }
+                        for sport, periods in chunk
+                    },
+                )
 
         # Provenance remains in the receipt/full report. Reserve the finite
         # notice budget for the same-population tail decomposition and canary.
@@ -481,18 +511,9 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                 "holdout": compact_signal_period(
                     (signal.get("overall") or {}).get("holdout_after_cutoff") or {}),
             })
-            signal_sports = sorted((signal.get("per_sport") or {}).items())
-            for chunk_index in range(0, len(signal_sports), 4):
-                chunk = signal_sports[chunk_index:chunk_index + 4]
-                emit_notice(f"r1_backtest_eligible_signal_sports_{chunk_index // 4 + 1}", {
-                    sport: {
-                        "development": compact_signal_period(
-                            periods.get("development_through_cutoff") or {}),
-                        "holdout": compact_signal_period(
-                            periods.get("holdout_after_cutoff") or {}),
-                    }
-                    for sport, periods in chunk
-                })
+            # Per-sport eligible-underdog tables remain in the full report.
+            # Their leads are exhausted; reserve annotations for the validated
+            # low-draw tail's sport concentration and semantic audit.
 
         inventory = analysis.get("corpus_inventory") or {}
         per_sport = {}

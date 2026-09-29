@@ -433,6 +433,9 @@ class TestBaselinesAndBands:
             "calendar_day_PRIMARY", "calendar_month"}
         assert "extreme_tail_power_play_shape" in analysis[
             "predeclared_shape_interpretation"]
+        assert "no-result" in analysis["draw_outcome_semantics"]["cricket"]
+        assert "split fight draw" in analysis["draw_outcome_semantics"]["mma"]
+        assert analysis["pooled"]["validated_shape_verdict"] == "NOT VALIDATED"
 
     def test_baselines_computed_on_the_same_rows(self, tmp_path):
         events = _build_eligible_scenario(winner_index=2)

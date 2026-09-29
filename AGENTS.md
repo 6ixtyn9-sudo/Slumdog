@@ -456,6 +456,26 @@ Rules:
   across a changed outcome-space mixture; two-way merit is underdog surplus and
   draw-capable merit is the same-row underdog-minus-favourite differential.
 
+## Validated Low-Draw Parallel-Track Finding
+
+The first predeclared shape to validate is the pooled `<0.05` draw tail. On all
+ledger-valid settled rows in draw-capable sports: development `n=26344`, mean
+predicted `0.0129`, observed `0.0342`, surplus `+0.021388`, observed/predicted
+`2.664`, month-block interval `[+0.018620,+0.024322]`; all three neighbouring
+5-point buckets had ratios `0.999..1.055` and month intervals including zero.
+Holdout repeated the tail direction: `n=1802`, surplus `+0.014329`, ratio
+`2.821`, month interval `[+0.002247,+0.027317]`. The frozen contract therefore
+returns **EXTREME-TAIL / POWER-PLAY SHAPE, VALIDATED** even though holdout's
+standalone four-bucket classifier is mixed; development sets the shape and
+holdout was predeclared only to repeat the `<0.05` direction.
+
+Limits must accompany every mention: this is calibration, not profit; a 2.7x
+relative error on a 1.29% base is still only a roughly 3.4% event. No odds, EV,
+payout, Kelly or staking inference follows. It does not mutate frozen R1. Before
+a parallel selector, inspect every sport separately and preserve outcome
+semantics: football/handball level scores, cricket textual draws (no-result is
+VOID), and MMA fight draws are not interchangeable objects.
+
 ## Documentation Governance
 
 - `docs/STATE.md` is canonical current truth, not append-only diary. Git history is history.

@@ -1,4 +1,22 @@
 
+### Update 2026-09-29: extreme-tail draw shape validated; sport concentration next
+
+Pooled development `<0.05` draw calibration meets every frozen shape criterion:
+`n=26344`, predicted `1.29%`, observed `3.42%`, surplus `+0.021388`, relative
+`2.664x`, month `[+0.018620,+0.024322]`; all three neighbouring buckets are
+`0.999..1.055x` with month intervals including zero. Holdout repeats direction:
+`n=1802`, `+0.014329`, `2.821x`, month `[+0.002247,+0.027317]`. Verdict:
+**EXTREME-TAIL / POWER-PLAY SHAPE, VALIDATED**. Holdout alone remains “mixed”;
+that is compatible with the frozen rule because development sets shape and
+holdout only had to repeat the `<0.05` direction.
+
+This is a price-free calibration result, not profit: observed draw incidence is
+about 3.4%, still rare, and no return/odds/EV/Kelly/staking claim follows. A
+parallel selector is not yet authorized. Per-sport `<0.05` development/holdout
+annotations now expose concentration and firing rate, with explicit semantic
+contracts for football/handball score draws, cricket textual draws excluding
+VOID no-results, and MMA fight draws excluding no-contests.
+
 ### Update 2026-09-29: tail scope clarified, mixed verdict, gate retired
 
 The four emitted sub-buckets summing to `5836` were holdout-period all-settled

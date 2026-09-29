@@ -980,6 +980,30 @@ def _low_draw_tail_analysis(events: list[SettledEvent]) -> dict[str, Any]:
         }
         for period in output.values():
             period["frozen_shape_verdict"] = classify_shape(period)
+        development_verdict = output["development_through_cutoff"][
+            "frozen_shape_verdict"]
+        holdout = output["holdout_after_cutoff"]
+        holdout_tail = holdout["buckets"]["<0.05"]
+        holdout_month = holdout["cluster_bootstrap"]["schemes"].get(
+            "calendar_month", {}).get("buckets", {}).get("<0.05", {})
+        holdout_repeats_direction = (
+            holdout_tail.get("absolute_surplus") is not None
+            and holdout_tail["absolute_surplus"] > 0
+            and holdout_month.get("bootstrap_95_lo") is not None
+            and holdout_month["bootstrap_95_lo"] > 0
+        )
+        output["validated_shape_verdict"] = (
+            "EXTREME-TAIL / POWER-PLAY SHAPE, VALIDATED"
+            if development_verdict.startswith("extreme-tail")
+            and holdout_repeats_direction
+            else "NOT VALIDATED"
+        )
+        output["validation_rule_application"] = {
+            "development_sets_shape": development_verdict,
+            "holdout_need_only_repeat_positive_lt_0_05_direction": (
+                holdout_repeats_direction),
+            "holdout_standalone_verdict": holdout.get("frozen_shape_verdict"),
+        }
         return output
 
     by_sport: dict[str, list[SettledEvent]] = defaultdict(list)
@@ -992,6 +1016,24 @@ def _low_draw_tail_analysis(events: list[SettledEvent]) -> dict[str, Any]:
         ),
         "cutoff": HOLDOUT_CUTOFF,
         "bucket_contract": labels,
+        "draw_outcome_semantics": {
+            "football": "level full-time score; settled draw",
+            "handball": "level full-time score; settled draw",
+            "cricket": (
+                "result text explicitly says draw; no-result, abandoned and "
+                "cancelled contests are VOID and excluded by the history loader"
+            ),
+            "mma": (
+                "unanimous, majority or split fight draw; no-contest is VOID and "
+                "excluded by the history loader; Forebet's board is two-outcome, "
+                "so draw_probability may be absent"
+            ),
+        },
+        "semantic_warning": (
+            "A cricket draw and an MMA fight draw are not the same object as a "
+            "level-score football/handball draw; interpret per-sport concentration "
+            "before proposing a shared product."
+        ),
         "interval_contract": (
             "absolute observed-minus-predicted surplus, calendar-day primary and "
             "calendar-month sensitivity; relative surplus is observed/predicted"

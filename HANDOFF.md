@@ -1,5 +1,35 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — extreme-tail draw shape validated; per-sport semantics is next.**
+
+The frozen pooled criteria are met. Development `<0.05`: `n=26344`, predicted
+`1.29%`, observed `3.42%`, surplus `+0.021388`, relative `2.664x`, month
+`[+0.018620,+0.024322]`. Higher buckets were `0.999..1.055x` and all three
+month intervals included zero. Holdout repeated the tail: `n=1802`, surplus
+`+0.014329`, relative `2.821x`, month `[+0.002247,+0.027317]`. Verdict:
+**EXTREME-TAIL / POWER-PLAY SHAPE, VALIDATED**. Holdout's standalone classifier
+is mixed because its `0.15-0.20` interval excludes zero; this does not overturn
+the frozen contract, under which development sets shape and holdout need only
+repeat positive `<0.05` direction.
+
+This is calibration, not profit. A 2.67x error on a 1.29% base means roughly a
+3.4% event, with no claim about return, odds, EV, Kelly or staking. Frozen R1 is
+unchanged. The report now carries an explicit validated-shape field rather than
+requiring readers to reconcile per-period strings themselves.
+
+The immediate product-shaping question is sport concentration. Bounded
+annotations now emit each historical draw-settling sport's `<0.05` development
+and holdout n, predicted, observed, absolute/relative surplus, month interval,
+and rows per active day. Outcome semantics are explicit: football/handball are
+level full-time scores; cricket settles only explicit textual draws while
+no-result/abandoned/cancelled are VOID and excluded; MMA settles unanimous,
+majority or split fight draws while no-contest is VOID, and its two-outcome board
+may have no draw probability. These are not interchangeable outcomes. Per-sport
+eligible-underdog annotations were dropped as lower-value exhausted analysis;
+the full report retains them. Final local gates: focused tests **154 passed**;
+full `python -m pytest` **1773 passed**; tracked-file `py_compile`, changed-file
+`pyflakes`, and `git diff --check` clean.
+
 **2026-09-29 — tail scope clarified; frozen verdict mixed; gate retired.**
 
 The apparent `80668` versus `5836` mismatch was a period-label presentation
