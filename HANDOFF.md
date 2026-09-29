@@ -1,5 +1,27 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — measured correction succeeded; information retention now tested.**
+
+Owner-supplied direct output reported `REAL_AND_TRANSFERABLE`: football and
+handball passed every frozen raw-versus-shrink condition. Handball development
+base `0.065294`, alpha `0.235079`; holdout n=1,127 Brier
+`0.046485→0.042218` (gain `+0.004267`, month `[+0.002960,+0.011185]`) and log
+loss `0.203297→0.183680` (gain `+0.019617`, month
+`[+0.010401,+0.026645]`), with 10/10 sequential quarters improving. Alpha is
+the retained fraction of forecast deviation from the development base: this
+retains 23.5% and discards 76.5%, measured over-dispersion. Football holdout
+n=29,455 log loss `0.557430→0.540865` (gain `+0.016565`, month
+`[+0.014072,+0.017971]`) and 10/10 quarters improved. Football alpha, base, and
+Brier remain unverified because the annotation was truncated; read the next run.
+This corrects probability labels, not selection or profit; frozen R1 is unchanged.
+
+The report now separately compares shrink with alpha=0/base-only using identical
+holdout and sequential folds. `RETAIN_AND_SHRINK` requires positive holdout
+Brier information gain with month-block lower bound >0, positive log-loss gain,
+and at least 75% sequential Brier wins; otherwise it reports
+`DISCARD_TO_BASE_RATE_NOT_REJECTED`. It also evaluates home, away, and draw
+outcomes separately by genuine three-outcome-board sport with the 0.005 floor.
+
 **2026-09-29 — football confirms shared over-dispersion; one-parameter recalibration implemented.**
 
 Football shows the same monotonic calibration defect with much stronger

@@ -15,6 +15,7 @@ from slumdog.backtest import (
     KNOWN_LIMITATIONS,
     _cluster_bootstrap_surplus,
     _draw_model_discrimination,
+    _all_outcome_probability_recalibration,
     _draw_probability_recalibration,
     _handball_draw_diagnostics,
     _low_draw_tail_analysis,
@@ -561,9 +562,18 @@ class TestBaselinesAndBands:
             holdout = sport_result["holdout_evaluation"]
             assert holdout["n"] == 2
             assert "brier_before" in holdout and "log_loss_after" in holdout
+            assert "brier_base_rate_only" in holdout
+            assert "brier_information_gain_base_minus_shrink" in holdout
+            assert "log_loss_base_rate_only" in holdout
+            assert "information_verdict" in sport_result
             assert len(sport_result["sequential_quarterly_folds"]) == 11
             assert "<0.05" in sport_result["holdout_recalibrated_curve"]
         assert "both sports pass" in result["predeclared_real_improvement_rule"]
+        outcomes = _all_outcome_probability_recalibration(events, result)
+        assert set(outcomes["outcomes"]) == {"home_win", "away_win", "draw"}
+        assert outcomes["outcomes"]["draw"] is result
+        assert outcomes["outcomes"]["home_win"]["per_sport"]["football"][
+            "development_fit"]["n"] == 4
 
     def test_baselines_computed_on_the_same_rows(self, tmp_path):
         events = _build_eligible_scenario(winner_index=2)

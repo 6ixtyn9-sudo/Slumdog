@@ -50,6 +50,7 @@ import json
 import math
 import random
 from collections import Counter, defaultdict
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -1487,55 +1488,71 @@ def _draw_probability_recalibration(events: list[SettledEvent]) -> dict[str, Any
         if not group or fit_result.get("shrink_coefficient") is None:
             return {"n": 0, "status": "NO_EVALUATION_ROWS"}
         rows = []
+        base = min(1 - eps, max(eps, fit_result["base_rate"]))
         for event in group:
             y = 1.0 if event.winner_index == 0 else 0.0
             p = min(1 - eps, max(eps, float(event.draw_probability)))
             q = adjusted(p, fit_result)
-            before_brier = (y - p) ** 2
-            after_brier = (y - q) ** 2
-            before_log = -(y * math.log(p) + (1 - y) * math.log(1 - p))
-            after_log = -(y * math.log(q) + (1 - y) * math.log(1 - q))
-            rows.append((event.event_date, before_brier, after_brier,
-                         before_log, after_log))
-        blocks: dict[str, list[float]] = defaultdict(lambda: [0.0] * 5)
-        for day, before_brier, after_brier, before_log, after_log in rows:
-            block = blocks[day[:7]]
+            rows.append((
+                event.event_date,
+                (y - p) ** 2, (y - q) ** 2, (y - base) ** 2,
+                -(y * math.log(p) + (1 - y) * math.log(1 - p)),
+                -(y * math.log(q) + (1 - y) * math.log(1 - q)),
+                -(y * math.log(base) + (1 - y) * math.log(1 - base)),
+            ))
+        blocks: dict[str, list[float]] = defaultdict(lambda: [0.0] * 7)
+        for row in rows:
+            block = blocks[row[0][:7]]
             block[0] += 1
-            block[1] += before_brier
-            block[2] += after_brier
-            block[3] += before_log
-            block[4] += after_log
-        totals = [sum(block[index] for block in blocks.values()) for index in range(5)]
+            for index, value in enumerate(row[1:], start=1):
+                block[index] += value
+        totals = [sum(block[index] for block in blocks.values()) for index in range(7)]
         n = totals[0]
-        brier_improvements = []
-        log_improvements = []
+        raw_brier_improvements = []
+        raw_log_improvements = []
+        base_brier_improvements = []
+        base_log_improvements = []
         keys = sorted(blocks)
         rng = random.Random(BOOTSTRAP_SEED + 6000 + seed_offset)
         for _ in range(BOOTSTRAP_REPLICATES):
-            sampled = [0.0] * 5
+            sampled = [0.0] * 7
             for _block in keys:
                 block = blocks[keys[rng.randrange(len(keys))]]
                 for index, value in enumerate(block):
                     sampled[index] += value
             if sampled[0]:
-                brier_improvements.append((sampled[1] - sampled[2]) / sampled[0])
-                log_improvements.append((sampled[3] - sampled[4]) / sampled[0])
+                raw_brier_improvements.append((sampled[1] - sampled[2]) / sampled[0])
+                raw_log_improvements.append((sampled[4] - sampled[5]) / sampled[0])
+                base_brier_improvements.append((sampled[3] - sampled[2]) / sampled[0])
+                base_log_improvements.append((sampled[6] - sampled[5]) / sampled[0])
         return {
             "n": int(n),
             "brier_before": totals[1] / n,
             "brier_after": totals[2] / n,
+            "brier_base_rate_only": totals[3] / n,
             "brier_improvement_before_minus_after": (totals[1] - totals[2]) / n,
             "brier_improvement_month_bootstrap_95_lo": _percentile(
-                brier_improvements, 0.025),
+                raw_brier_improvements, 0.025),
             "brier_improvement_month_bootstrap_95_hi": _percentile(
-                brier_improvements, 0.975),
-            "log_loss_before": totals[3] / n,
-            "log_loss_after": totals[4] / n,
-            "log_loss_improvement_before_minus_after": (totals[3] - totals[4]) / n,
+                raw_brier_improvements, 0.975),
+            "brier_information_gain_base_minus_shrink": (totals[3] - totals[2]) / n,
+            "brier_information_gain_month_bootstrap_95_lo": _percentile(
+                base_brier_improvements, 0.025),
+            "brier_information_gain_month_bootstrap_95_hi": _percentile(
+                base_brier_improvements, 0.975),
+            "log_loss_before": totals[4] / n,
+            "log_loss_after": totals[5] / n,
+            "log_loss_base_rate_only": totals[6] / n,
+            "log_loss_improvement_before_minus_after": (totals[4] - totals[5]) / n,
             "log_loss_improvement_month_bootstrap_95_lo": _percentile(
-                log_improvements, 0.025),
+                raw_log_improvements, 0.025),
             "log_loss_improvement_month_bootstrap_95_hi": _percentile(
-                log_improvements, 0.975),
+                raw_log_improvements, 0.975),
+            "log_loss_information_gain_base_minus_shrink": (totals[6] - totals[5]) / n,
+            "log_loss_information_gain_month_bootstrap_95_lo": _percentile(
+                base_log_improvements, 0.025),
+            "log_loss_information_gain_month_bootstrap_95_hi": _percentile(
+                base_log_improvements, 0.975),
             "months": len(keys),
         }
 
@@ -1562,8 +1579,10 @@ def _draw_probability_recalibration(events: list[SettledEvent]) -> dict[str, Any
             }
         return out
 
-    sports = [sport for sport in ("football", "handball")
-              if any(event.sport == sport for event in events)]
+    sports = sorted({
+        event.sport for event in events
+        if SPORTS[event.sport].draw_settles and SPORTS[event.sport].draw_possible
+    })
     per_sport = {}
     for sport_index, sport in enumerate(sports):
         all_rows = usable(sport, events)
@@ -1597,6 +1616,9 @@ def _draw_probability_recalibration(events: list[SettledEvent]) -> dict[str, Any
         improved_folds = sum(
             fold.get("brier_improvement_before_minus_after", 0) > 0
             for fold in scored_folds)
+        base_beaten_folds = sum(
+            fold.get("brier_information_gain_base_minus_shrink", 0) > 0
+            for fold in scored_folds)
         holdout_real = (
             holdout_score.get("brier_improvement_before_minus_after") is not None
             and holdout_score["brier_improvement_before_minus_after"] >= 0.001
@@ -1605,6 +1627,17 @@ def _draw_probability_recalibration(events: list[SettledEvent]) -> dict[str, Any
             and holdout_score.get("log_loss_improvement_before_minus_after", 0) > 0
             and len(scored_folds) > 0
             and improved_folds / len(scored_folds) >= 0.75
+        )
+        information_retained = (
+            holdout_score.get("brier_information_gain_base_minus_shrink") is not None
+            and holdout_score["brier_information_gain_base_minus_shrink"] > 0
+            and holdout_score.get(
+                "brier_information_gain_month_bootstrap_95_lo") is not None
+            and holdout_score["brier_information_gain_month_bootstrap_95_lo"] > 0
+            and holdout_score.get(
+                "log_loss_information_gain_base_minus_shrink", 0) > 0
+            and len(scored_folds) > 0
+            and base_beaten_folds / len(scored_folds) >= 0.75
         )
         per_sport[sport] = {
             "development_fit": development_fit,
@@ -1616,13 +1649,20 @@ def _draw_probability_recalibration(events: list[SettledEvent]) -> dict[str, Any
                 "brier_improved_folds": improved_folds,
                 "fraction_brier_improved": (
                     improved_folds / len(scored_folds) if scored_folds else None),
+                "shrink_beats_base_rate_folds": base_beaten_folds,
+                "fraction_shrink_beats_base_rate": (
+                    base_beaten_folds / len(scored_folds) if scored_folds else None),
             },
             "predeclared_improvement_rule_met": holdout_real,
+            "predeclared_information_retention_rule_met": information_retained,
+            "information_verdict": (
+                "RETAIN_AND_SHRINK" if information_retained
+                else "DISCARD_TO_BASE_RATE_NOT_REJECTED"),
         }
     transferable = (
-        len(per_sport) == 2
-        and all(result["predeclared_improvement_rule_met"]
-                for result in per_sport.values())
+        all(sport in per_sport for sport in ("football", "handball"))
+        and all(per_sport[sport]["predeclared_improvement_rule_met"]
+                for sport in ("football", "handball"))
     )
     return {
         "method": (
@@ -1635,10 +1675,56 @@ def _draw_probability_recalibration(events: list[SettledEvent]) -> dict[str, Any
             "least 75% of sequential quarterly folds improve Brier. Transferable "
             "only if both sports pass."
         ),
+        "predeclared_information_retention_rule": (
+            "Shrink must beat the development base-rate-only predictor on holdout "
+            "Brier with month-bootstrap lower bound >0, improve holdout log loss, "
+            "and beat base-rate Brier in at least 75% of sequential folds. Otherwise "
+            "discarding the source probability to the base rate is not rejected."
+        ),
         "per_sport": per_sport,
         "transferable_recalibration_result": (
             "REAL_AND_TRANSFERABLE" if transferable else "NOT_DEMONSTRATED"
         ),
+    }
+
+
+def _all_outcome_probability_recalibration(
+    events: list[SettledEvent], draw_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Apply the same frozen shrink test to home, away and draw outcomes."""
+    outcomes = {
+        "home_win": ("probability_1", 1),
+        "away_win": ("probability_2", 2),
+        "draw": ("draw_probability", 0),
+    }
+    result = {}
+    genuine_board_events = [
+        event for event in events
+        if SPORTS[event.sport].draw_settles and SPORTS[event.sport].draw_possible
+    ]
+    for label, (attribute, winner_index) in outcomes.items():
+        if label == "draw" and draw_result is not None:
+            result[label] = draw_result
+            continue
+        transformed = []
+        for event in genuine_board_events:
+            probability = getattr(event, attribute)
+            if not isinstance(probability, (int, float)) or isinstance(probability, bool):
+                continue
+            transformed.append(replace(
+                event,
+                draw_probability=float(probability),
+                winner_index=0 if event.winner_index == winner_index else 1,
+                disposition=("SETTLED_DRAW" if event.winner_index == winner_index
+                             else "SETTLED"),
+            ))
+        result[label] = _draw_probability_recalibration(transformed)
+    return {
+        "scope": (
+            "home win, away win and draw probabilities on sports with genuine "
+            "three-outcome boards; same development-only one-coefficient contract"
+        ),
+        "outcomes": result,
     }
 
 
@@ -1946,6 +2032,9 @@ def r1_backtest(root: Path | str = ".", target_date: str | None = None) -> Path:
         rows_by_population[row["reconstruction"]].append(row)
 
     eligible_signal = _eligible_signal_analysis(all_cohort_rows)
+    draw_recalibration = _draw_probability_recalibration(all_settled_events)
+    all_outcome_recalibration = _all_outcome_probability_recalibration(
+        all_settled_events, draw_recalibration)
     analysis: dict[str, Any] = {
         "generated_at_target_date": target_date,
         "provenance_verdict": provenance_verdict,
@@ -1976,8 +2065,8 @@ def r1_backtest(root: Path | str = ".", target_date: str | None = None) -> Path:
         "low_draw_tail_analysis": _low_draw_tail_analysis(all_settled_events),
         "handball_draw_diagnostics": _handball_draw_diagnostics(all_settled_events),
         "draw_model_discrimination": _draw_model_discrimination(all_settled_events),
-        "draw_probability_recalibration": _draw_probability_recalibration(
-            all_settled_events),
+        "draw_probability_recalibration": draw_recalibration,
+        "all_outcome_probability_recalibration": all_outcome_recalibration,
         "eligible_underdog_signal": eligible_signal,
         "negative_sport_gate_variant": _negative_sport_gate_variant(
             eligible_signal, all_r1_rows),
@@ -2347,8 +2436,10 @@ def _render_r1_backtest_markdown(analysis: dict[str, Any]) -> str:
                 "predeclared_real_improvement_rule", ""), "",
             "Transferable result: **" + recalibration.get(
                 "transferable_recalibration_result", "") + "**", "",
-            "| Sport | Fit n | Base rate | Alpha | Holdout n | Brier before | after | improvement [month 95%] | Log loss before | after | improvement | Quarterly improved | Rule met |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+            "Information-retention rule: " + recalibration.get(
+                "predeclared_information_retention_rule", ""), "",
+            "| Sport | Fit n | Base rate | Alpha | Holdout n | Brier raw | shrink | base | raw gain [month 95%] | info gain [month 95%] | Log loss raw | shrink | base | Base folds beaten | Raw rule | Information verdict |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
         ]
         for sport, result in (recalibration.get("per_sport") or {}).items():
             fit_result = result.get("development_fit") or {}
@@ -2370,13 +2461,19 @@ def _render_r1_backtest_markdown(analysis: dict[str, Any]) -> str:
                 f"{fit_result.get('shrink_coefficient'):.4f} | "
                 f"{holdout.get('n')} | {holdout.get('brier_before'):.6f} | "
                 f"{holdout.get('brier_after'):.6f} | "
+                f"{holdout.get('brier_base_rate_only'):.6f} | "
                 f"{holdout.get('brier_improvement_before_minus_after'):.6f} "
-                f"[{lo:.6f},{hi:.6f}] | {holdout.get('log_loss_before'):.6f} | "
+                f"[{lo:.6f},{hi:.6f}] | "
+                f"{holdout.get('brier_information_gain_base_minus_shrink'):.6f} "
+                f"[{holdout.get('brier_information_gain_month_bootstrap_95_lo'):.6f},"
+                f"{holdout.get('brier_information_gain_month_bootstrap_95_hi'):.6f}] | "
+                f"{holdout.get('log_loss_before'):.6f} | "
                 f"{holdout.get('log_loss_after'):.6f} | "
-                f"{holdout.get('log_loss_improvement_before_minus_after'):.6f} | "
-                f"{quarterly.get('brier_improved_folds')}/"
+                f"{holdout.get('log_loss_base_rate_only'):.6f} | "
+                f"{quarterly.get('shrink_beats_base_rate_folds')}/"
                 f"{quarterly.get('scored_folds')} | "
-                f"{result.get('predeclared_improvement_rule_met')} |"
+                f"{result.get('predeclared_improvement_rule_met')} | "
+                f"{result.get('information_verdict')} |"
             )
             lines += [
                 "", f"### {sport} sequential recalibration folds", "",

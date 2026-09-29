@@ -435,10 +435,15 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                 "method": recalibration.get("method"),
                 "predeclared_rule": recalibration.get(
                     "predeclared_real_improvement_rule"),
+                "information_retention_rule": recalibration.get(
+                    "predeclared_information_retention_rule"),
                 "development_fit": result.get("development_fit"),
                 "holdout_evaluation": result.get("holdout_evaluation"),
                 "quarterly_summary": result.get("quarterly_summary"),
                 "rule_met": result.get("predeclared_improvement_rule_met"),
+                "information_retention_rule_met": result.get(
+                    "predeclared_information_retention_rule_met"),
+                "information_verdict": result.get("information_verdict"),
                 "transferable_result": recalibration.get(
                     "transferable_recalibration_result"),
                 "folds_and_curve_in_full_report": True,
