@@ -24,6 +24,31 @@ from scripts.probe_kickoff_timezone import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_network_direct_vs_relay(monkeypatch):
+    """``direct_vs_relay_probe`` (owner finding, 2026-09-28) is now
+    ``run_probe``'s first stage and makes eight real network calls (six
+    football-JSON legs across ``www.``/``m.``/bare ``forebet.com``, two
+    HTML-board legs) through ``direct_get_diagnostic``/
+    ``relay_get_diagnostic``/``relay_get_markdown``. This file's own header
+    promises no test touches the network, so default those to a fast,
+    deterministic failure for every test — ``direct_vs_relay_probe``
+    already turns a raised exception (or an ``{"ok": False, ...}``
+    diagnostic result) into a reported leaf rather than propagating it, so
+    this is a harmless no-op for every test that does not care about this
+    stage. Tests in ``TestDirectVsRelayProbe``/``TestDirectVsRelayOnlyCLIMode``
+    override these explicitly, which simply wins over this fixture's setup.
+    """
+    import scripts.probe_kickoff_timezone as probe
+
+    def _stub(*a, **k):
+        raise RuntimeError("network disabled in tests")
+
+    monkeypatch.setattr(probe, "direct_get_diagnostic", _stub)
+    monkeypatch.setattr(probe, "relay_get_diagnostic", _stub)
+    monkeypatch.setattr(probe, "relay_get_markdown", _stub)
+
+
 def _boom(message: str):
     def _raise(*args, **kwargs):
         raise RuntimeError(message)
@@ -300,6 +325,26 @@ class TestBodyFingerprint:
         from scripts.probe_kickoff_timezone import body_fingerprint
 
         assert body_fingerprint(None)["looks_like"] == "empty"
+
+    def test_the_second_challenge_wording_is_caught_here_too(self):
+        """Regression for the exact miss found in run 36455080098
+        (2026-09-28): this function's own challenge-marker list had no
+        entry for "performing security verification" even though
+        forebet.py's canonical list has carried it since the 2026-09-28
+        wording addition, so a real 272-byte challenge page came back
+        ``looks_like: "unknown"`` here — and the canary derived from it
+        (canary_from_render_clock) would have silently read a site-wide
+        block as "unknown", not "challenge_page". Fixed by reusing
+        forebet.looks_like_challenge_page instead of a second list.
+        """
+        from scripts.probe_kickoff_timezone import body_fingerprint
+
+        body = (
+            b"## www.forebet.com ## Performing security verification "
+            b"This website uses a security service to protect against "
+            b"malicious bots."
+        )
+        assert body_fingerprint(body)["looks_like"] == "challenge_page"
 
     def test_verdict_calls_out_a_board_that_never_arrived(self):
         from scripts.probe_kickoff_timezone import summarise_offsets, verdict
@@ -2649,7 +2694,8 @@ class TestTheProductionPathIsDrivenEndToEnd:
                 self.root = Path(root)
 
             def capture_selected(self, target_date, sports=None, force=False,
-                                 receipt_name=None, pause_seconds=0):
+                                 receipt_name=None, pause_seconds=0,
+                                 **kwargs):
                 if raises:
                     raise raises
                 reports = self.root / "data" / "reports"
@@ -2764,6 +2810,799 @@ class TestTheProductionPathIsDrivenEndToEnd:
         assert Path("data/reports/capture_probe_2026-09-29.json").exists() is False
 
 
+class TestCollectorEndToEndReportsCaptureTiming:
+    """Priority 1 (2026-09-28), item (iii) of the owner's follow-up: this
+    probe must surface capture_selected's capture_timing, not just the
+    receipt's captured/failures counts, and must use pause_seconds>0 (not
+    literally 0) to actually populate it."""
+
+    def test_serial_is_explicit_so_the_timed_path_is_used(
+            self, monkeypatch):
+        """serial=True must be passed outright, not inferred from a
+        pause_seconds value that is truthy only to select the branch and
+        never actually sleeps for a single-sport call — see forebet.py's
+        capture_selected docstring for why that used to be a trap."""
+        import scripts.probe_kickoff_timezone as probe
+
+        seen = {}
+
+        class _Collector:
+            def __init__(self, root=None, **kwargs):
+                self.root = Path(root)
+
+            def capture_selected(self, target_date, sports=None,
+                                 force=False, receipt_name=None,
+                                 pause_seconds=0, serial=None, **kwargs):
+                seen["serial"] = serial
+                reports = self.root / "data" / "reports"
+                reports.mkdir(parents=True, exist_ok=True)
+                (reports / receipt_name).write_text(json.dumps(
+                    {"captured": [], "failures": []}))
+                return []
+
+        monkeypatch.setattr("slumdog.forebet.ForebetCollector", _Collector)
+        probe.collector_end_to_end("2026-09-29", timeout=1, pause=0)
+        assert seen["serial"] is True
+
+    def test_capture_timing_is_read_from_the_receipt(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        class _Collector:
+            def __init__(self, root=None, **kwargs):
+                self.root = Path(root)
+
+            def capture_selected(self, target_date, sports=None,
+                                 force=False, receipt_name=None,
+                                 pause_seconds=0, **kwargs):
+                reports = self.root / "data" / "reports"
+                reports.mkdir(parents=True, exist_ok=True)
+                (reports / receipt_name).write_text(json.dumps({
+                    "captured": [], "failures": ["x:ValueError:boom"],
+                    "capture_timing": [{
+                        "sport": "volleyball", "elapsed_seconds": 1.5,
+                        "requests": 2, "outcome": "COVERAGE_GAP"}],
+                }))
+                return []
+
+        monkeypatch.setattr("slumdog.forebet.ForebetCollector", _Collector)
+        record = probe.collector_end_to_end("2026-09-29", timeout=1, pause=0)
+        assert record["capture_timing"] == [{
+            "sport": "volleyball", "elapsed_seconds": 1.5,
+            "requests": 2, "outcome": "COVERAGE_GAP"}]
+
+    def test_circuit_breaker_columns_is_forwarded_to_the_collector(
+            self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        seen = {}
+
+        class _Collector:
+            def __init__(self, root=None, circuit_breaker_columns=0,
+                        circuit_breaker_attempts=1, **kwargs):
+                seen["circuit_breaker_columns"] = circuit_breaker_columns
+                seen["circuit_breaker_attempts"] = circuit_breaker_attempts
+                self.root = Path(root)
+
+            def capture_selected(self, target_date, sports=None,
+                                 force=False, receipt_name=None,
+                                 pause_seconds=0, **kwargs):
+                reports = self.root / "data" / "reports"
+                reports.mkdir(parents=True, exist_ok=True)
+                (reports / receipt_name).write_text(json.dumps(
+                    {"captured": [], "failures": []}))
+                return []
+
+        monkeypatch.setattr("slumdog.forebet.ForebetCollector", _Collector)
+        probe.collector_end_to_end(
+            "2026-09-29", timeout=1, pause=0, circuit_breaker_columns=2)
+        assert seen["circuit_breaker_columns"] == 2
+
+
+class TestCircuitBreakerComparison:
+    """The pure comparison, extracted so it can be called on records
+    run_probe already has (the near board from the plain
+    collector_end_to_end stage) instead of paying for a second capture of
+    the same board — see circuit_breaker_comparison's own docstring."""
+
+    def test_no_requests_are_made(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        def _boom(*a, **k):
+            raise AssertionError("must not make a request")
+
+        monkeypatch.setattr(probe, "fetch", _boom)
+        monkeypatch.setattr(probe, "collector_end_to_end", _boom)
+        out = probe.circuit_breaker_comparison(
+            {"capture_timing": [{"requests": 10,
+                                 "outcome": "CAPTURED:relay_columns"}],
+             "failures": []},
+            {"capture_timing": [{"requests": 2, "outcome": "COVERAGE_GAP"}],
+             "failures": ["v 2026-10-04: circuit breaker tripped"]})
+        assert out["near_requests"] == 10
+        assert out["far_requests"] == 2
+
+    def test_a_cheap_trip_on_the_far_board_is_recognised(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        out = probe.circuit_breaker_comparison(
+            {"capture_timing": [{"requests": 10,
+                                 "outcome": "CAPTURED:relay_columns"}],
+             "failures": []},
+            {"capture_timing": [{"requests": 2, "outcome": "COVERAGE_GAP"}],
+             "failures": ["v 2026-10-04: circuit breaker tripped — ..."]})
+        assert out["far_breaker_tripped"] is True
+        assert out["near_false_abort"] is False
+
+    def test_a_false_abort_on_the_near_board_is_recognised(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        out = probe.circuit_breaker_comparison(
+            {"capture_timing": [{"requests": 2, "outcome": "COVERAGE_GAP"}],
+             "failures": ["v 2026-09-29: circuit breaker tripped — ..."]},
+            {"capture_timing": [{"requests": 2, "outcome": "COVERAGE_GAP"}],
+             "failures": ["v 2026-10-04: circuit breaker tripped — ..."]})
+        assert out["near_false_abort"] is True
+
+    def test_the_worst_case_is_computed_not_hardcoded(self):
+        """Was a bare ``24`` once; must track COLUMN_SELECTORS so a future
+        column added/removed does not silently make this number wrong."""
+        import scripts.probe_kickoff_timezone as probe
+
+        out = probe.circuit_breaker_comparison(
+            {"capture_timing": [{}], "failures": []},
+            {"capture_timing": [{}], "failures": []})
+        assert out["no_breaker_worst_case_requests"] == (
+            len(probe.COLUMN_SELECTORS) * 3)
+
+    def test_missing_capture_timing_does_not_crash(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        out = probe.circuit_breaker_comparison(
+            {"verdict": "skipped: out of time budget"},
+            {"verdict": "skipped: out of time budget"})
+        assert out["near_requests"] is None
+        assert out["far_requests"] is None
+        assert out["far_breaker_tripped"] is False
+
+    def test_far_requests_are_reported_against_a_measured_near_figure(self):
+        # 2026-09-28 correction: no_breaker_worst_case_requests is a
+        # theoretical ceiling that has never been observed; the honest
+        # comparison is against near_requests, which IS measured.
+        import scripts.probe_kickoff_timezone as probe
+
+        out = probe.circuit_breaker_comparison(
+            {"capture_timing": [{"requests": 10,
+                                 "outcome": "CAPTURED:relay_columns"}],
+             "failures": []},
+            {"capture_timing": [{"requests": 3, "outcome": "COVERAGE_GAP"}],
+             "failures": ["v 2026-10-04: circuit breaker tripped — ..."]})
+        assert out["far_requests_vs_measured_near_requests"] == 3 - 10
+
+
+class TestCircuitBreakerComparisonCanaryGate:
+    """Owner finding, 2026-09-28: run 36455080098's near board and far
+    board both refused with HTTP 422 while Cloudflare was
+    challenge-blocking the whole site. Read alone, that run's
+    ``near_false_abort=True`` looked like a breaker defect; read against
+    the canary, it was an invalid trial — the site was refusing
+    everything, near board included, so nothing in that run can be
+    attributed to the breaker's own judgement.
+    """
+
+    NEAR_ABORT = {
+        "capture_timing": [{"requests": 3, "outcome": "COVERAGE_GAP"}],
+        "failures": ["v 2026-09-29: circuit breaker tripped — ..."],
+    }
+    FAR_ABORT = {
+        "capture_timing": [{"requests": 3, "outcome": "COVERAGE_GAP"}],
+        "failures": ["v 2026-10-04: circuit breaker tripped — ..."],
+    }
+
+    def test_canary_down_marks_the_trial_invalid_but_keeps_the_raw_numbers(
+            self):
+        import scripts.probe_kickoff_timezone as probe
+
+        canary = {"sport": "football", "checked": True, "healthy": False,
+                  "reason": "football tz=0 JSON looked like 'unknown' "
+                           "(272 bytes)"}
+        out = probe.circuit_breaker_comparison(
+            self.NEAR_ABORT, self.FAR_ABORT, canary=canary)
+        # The measurement is not thrown away...
+        assert out["near_false_abort"] is True
+        assert out["far_breaker_tripped"] is True
+        # ...but it is explicitly not evidence about the breaker.
+        assert out["trial_valid"] is False
+        assert "canary" in out["invalid_reason"].lower()
+        assert "unknown" in out["invalid_reason"]
+
+    def test_canary_healthy_marks_the_trial_valid(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        canary = {"sport": "football", "checked": True, "healthy": True,
+                  "reason": None}
+        out = probe.circuit_breaker_comparison(
+            self.NEAR_ABORT, self.FAR_ABORT, canary=canary)
+        assert out["trial_valid"] is True
+        assert out["invalid_reason"] is None
+
+    def test_no_canary_argument_is_reported_as_unchecked_not_valid(self):
+        # A caller that forgot to pass canary must not silently read as a
+        # clean trial — "no reading" and "healthy reading" must not look
+        # the same.
+        import scripts.probe_kickoff_timezone as probe
+
+        out = probe.circuit_breaker_comparison(self.NEAR_ABORT, self.FAR_ABORT)
+        assert out["trial_valid"] is None
+        assert "not checked" in out["invalid_reason"]
+
+
+class TestCanaryFromRenderClock:
+    """The discriminator behind TestCircuitBreakerComparisonCanaryGate —
+    derived purely from render_clock's already-computed record, no
+    request of its own."""
+
+    def test_healthy_when_instants_were_parsed(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        canary = probe.canary_from_render_clock(
+            {"json_matches": 139, "proven": True})
+        assert canary == {"sport": "football", "checked": True,
+                          "healthy": True, "reason": None}
+
+    def test_down_when_the_json_endpoint_returned_a_fingerprinted_failure(
+            self):
+        import scripts.probe_kickoff_timezone as probe
+
+        canary = probe.canary_from_render_clock({
+            "json_matches": 0,
+            "json_body": {"looks_like": "challenge_page", "bytes": 272},
+        })
+        assert canary["healthy"] is False
+        assert canary["checked"] is True
+        assert "challenge_page" in canary["reason"]
+        assert "272" in canary["reason"]
+
+    def test_not_checked_when_render_clock_never_ran(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        canary = probe.canary_from_render_clock({})
+        assert canary == {"sport": "football", "checked": False,
+                          "healthy": None,
+                          "reason": "render_clock stage did not run this pass"}
+
+    def test_not_checked_when_render_clock_ran_but_judged_nothing(self):
+        import scripts.probe_kickoff_timezone as probe
+
+        canary = probe.canary_from_render_clock(
+            {"verdict": "stopped: stage slice of 90s spent"})
+        assert canary["checked"] is False
+        assert canary["healthy"] is None
+
+
+class TestDirectVsRelayProbe:
+    """Owner finding, 2026-09-28: a server-side fetch got a real response
+    DIRECT from forebet.com at the exact moment the relay (r.jina.ai)
+    returned a challenge page for the identical URL. Runner-side settlement
+    of that question via ``direct_get_diagnostic``/``relay_get_diagnostic``
+    (STATUS CODE + header snippet, never just an exception class name —
+    2026-09-28 second correction, after run 36470920157 showed the
+    original finding was more nuanced: direct failed outright while relay
+    at least got a real, challenged, response). Eight single-attempt
+    requests total (football JSON x {direct, relay} on www./m./bare hosts,
+    one HTML board x {direct, relay}), never retried, never raising.
+    """
+
+    def test_reports_every_leg_when_everything_succeeds(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(
+            probe, "direct_get_diagnostic",
+            lambda url, timeout=40: {
+                "ok": True, "transport": "urllib", "status": 200,
+                "headers": {}, "body": b'[[{"id": 1}]]'})
+        monkeypatch.setattr(
+            probe, "relay_get_diagnostic",
+            lambda url, *, markdown, expected_url="", timeout=45: {
+                "ok": True, "transport": "urllib", "status": 200,
+                "headers": {},
+                "body": (b'[[{"id": 1}]]' if markdown
+                        else b"<html>rcnt board content here</html>")})
+
+        result = probe.direct_vs_relay_probe(
+            "2026-09-29", timeout=5, sport="basketball")
+        assert result["target_date"] == "2026-09-29"
+        assert result["sport"] == "basketball"
+        assert result["football_json"]["direct"]["ok"] is True
+        assert result["football_json"]["direct"]["status"] == 200
+        assert result["football_json"]["relay"]["ok"] is True
+        assert result["html_board"]["direct"]["ok"] is True
+        assert result["html_board"]["relay"]["ok"] is True
+        # Alternate hostnames (owner directive, 2026-09-28): different
+        # hostnames often sit behind different WAF rules.
+        assert result["alt_hosts"]["m"]["direct"]["ok"] is True
+        assert result["alt_hosts"]["m"]["relay"]["ok"] is True
+        assert "m.forebet.com" in result["alt_hosts"]["m"]["url"]
+        assert result["alt_hosts"]["bare"]["direct"]["ok"] is True
+        assert result["alt_hosts"]["bare"]["relay"]["ok"] is True
+        assert result["alt_hosts"]["bare"]["url"].startswith(
+            "https://forebet.com/")
+        assert "www.forebet.com" not in result["alt_hosts"]["bare"]["url"]
+
+    def test_the_finding_reports_status_and_headers_not_just_exception_names(
+            self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        challenge = (
+            b"Performing security verification This website uses a "
+            b"security service to protect against malicious bots."
+        )
+        monkeypatch.setattr(
+            probe, "direct_get_diagnostic",
+            lambda url, timeout=40: {
+                "ok": False, "transport": "urllib", "status": None,
+                "headers": {}, "error": "HTTPError: connection refused"})
+        monkeypatch.setattr(
+            probe, "relay_get_diagnostic",
+            lambda url, *, markdown, expected_url="", timeout=45: {
+                "ok": True, "transport": "urllib", "status": 200,
+                "headers": {"Server": "cloudflare", "CF-Ray": "abc123-DUR"},
+                "body": challenge})
+
+        result = probe.direct_vs_relay_probe(
+            "2026-09-29", timeout=5, sport="basketball")
+        # Owner directive, 2026-09-28: "urllib=HTTPError" alone is not a
+        # finding — the status code and a header snippet must be present.
+        assert result["football_json"]["direct"]["ok"] is False
+        assert result["football_json"]["direct"]["status"] is None
+        assert result["football_json"]["relay"]["ok"] is True
+        assert result["football_json"]["relay"]["status"] == 200
+        assert result["football_json"]["relay"]["headers"]["Server"] == \
+            "cloudflare"
+        assert result["football_json"]["relay"]["headers"]["CF-Ray"] == \
+            "abc123-DUR"
+        assert result["football_json"]["relay"]["looks_like"] == \
+            "challenge_page"
+        assert result["html_board"]["relay"]["looks_like"] == \
+            "challenge_page"
+
+    def test_a_failed_leg_is_reported_not_raised(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        def _boom(*a, **k):
+            raise TimeoutError("connection timed out")
+
+        monkeypatch.setattr(probe, "direct_get_diagnostic", _boom)
+        monkeypatch.setattr(
+            probe, "relay_get_diagnostic",
+            lambda url, *, markdown, expected_url="", timeout=45: {
+                "ok": True, "transport": "urllib", "status": 200,
+                "headers": {},
+                "body": (b'[[{"id": 1}]]' if markdown
+                        else b"<html>rcnt board content here</html>")})
+
+        result = probe.direct_vs_relay_probe(
+            "2026-09-29", timeout=5, sport="basketball")
+        assert result["football_json"]["direct"]["ok"] is False
+        assert "TimeoutError" in result["football_json"]["direct"]["error"]
+        assert result["html_board"]["direct"]["ok"] is False
+        assert result["alt_hosts"]["m"]["direct"]["ok"] is False
+
+    def test_each_leg_is_exactly_one_attempt_no_retries(self, monkeypatch):
+        seen = {}
+
+        import scripts.probe_kickoff_timezone as probe
+
+        def fake_direct_get(url, timeout=40):
+            seen.setdefault("direct_urls", []).append(url)
+            return {"ok": True, "transport": "urllib", "status": 200,
+                    "headers": {}, "body": b'[[{"id": 1}]]'}
+
+        def fake_relay_get(url, *, markdown, expected_url="", timeout=45):
+            seen.setdefault("relay_markdown_flags", []).append(markdown)
+            return {"ok": True, "transport": "urllib", "status": 200,
+                    "headers": {},
+                    "body": (b'[[{"id": 1}]]' if markdown
+                            else b"<html>rcnt board content here</html>")}
+
+        monkeypatch.setattr(probe, "direct_get_diagnostic", fake_direct_get)
+        monkeypatch.setattr(probe, "relay_get_diagnostic", fake_relay_get)
+
+        probe.direct_vs_relay_probe("2026-09-29", timeout=5, sport="basketball")
+        # One direct + one relay call per leg: football_json (www), the
+        # HTML board, and each of the two alt hosts — 4 direct + 4 relay.
+        assert len(seen["direct_urls"]) == 4
+        assert len(seen["relay_markdown_flags"]) == 4
+        # Three football-JSON legs (www/m/bare) use markdown mode, the one
+        # HTML board leg uses HTML mode.
+        assert seen["relay_markdown_flags"].count(True) == 3
+        assert seen["relay_markdown_flags"].count(False) == 1
+        # direct_get_diagnostic/relay_get_diagnostic are themselves
+        # documented as single-attempt (max_retries=1 internally, no
+        # parameter for this caller to even request more) — nothing here
+        # passes a retryable count through, which is the point.
+
+
+class TestDirectVsRelayOnlyCLIMode:
+    def test_a_full_success_prints_a_report_and_exits_zero(
+            self, monkeypatch, capsys):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(
+            probe, "direct_vs_relay_probe",
+            lambda *a, **k: {
+                "target_date": "2026-09-29", "sport": "basketball",
+                "football_json": {
+                    "direct": {"ok": True, "looks_like": "unknown"},
+                    "relay": {"ok": False, "error": "boom"}},
+                "html_board": {
+                    "direct": {"ok": True, "looks_like": "board_html"},
+                    "relay": {"ok": False, "error": "boom"}}})
+
+        rc = probe.main([
+            "--date", "2026-09-29", "--direct-vs-relay-only",
+        ])
+        assert rc == 0
+        report = json.loads(capsys.readouterr().out.strip())
+        assert report["mode"] == "direct_vs_relay_only"
+        assert report["direct_vs_relay"]["football_json"]["direct"]["ok"]
+
+    def test_both_paths_failing_for_the_same_endpoint_exits_non_zero(
+            self, monkeypatch, capsys):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(
+            probe, "direct_vs_relay_probe",
+            lambda *a, **k: {
+                "target_date": "2026-09-29", "sport": "basketball",
+                "football_json": {
+                    "direct": {"ok": False, "error": "boom"},
+                    "relay": {"ok": False, "error": "boom"}},
+                "html_board": {
+                    "direct": {"ok": True, "looks_like": "board_html"},
+                    "relay": {"ok": False, "error": "boom"}}})
+
+        rc = probe.main([
+            "--date", "2026-09-29", "--direct-vs-relay-only",
+        ])
+        assert rc == 1
+
+    def test_never_touches_the_full_sweep_or_the_breaker_probe(
+            self, monkeypatch, capsys):
+        import scripts.probe_kickoff_timezone as probe
+
+        def _must_not_run(*a, **k):
+            raise AssertionError("direct-vs-relay-only must not reach this")
+
+        monkeypatch.setattr(probe, "run_probe", _must_not_run)
+        monkeypatch.setattr(
+            probe, "circuit_breaker_measurement", _must_not_run)
+        monkeypatch.setattr(
+            probe, "direct_vs_relay_probe",
+            lambda *a, **k: {
+                "target_date": "2026-09-29", "sport": "basketball",
+                "football_json": {
+                    "direct": {"ok": True, "looks_like": "unknown"},
+                    "relay": {"ok": True, "looks_like": "unknown"}},
+                "html_board": {
+                    "direct": {"ok": True, "looks_like": "board_html"},
+                    "relay": {"ok": True, "looks_like": "board_html"}}})
+
+        rc = probe.main(["--date", "2026-09-29", "--direct-vs-relay-only"])
+        assert rc == 0
+
+
+class TestCircuitBreakerFarStageInRunProbe:
+    """Item (iii)'s default-sweep wiring: circuit_breaker_far must be a
+    normal, budget-shared stage the owner's existing hardcoded workflow
+    command already exercises, not something that needs a CLI flag."""
+
+    def test_a_non_empty_capture_timing_is_success_even_on_a_coverage_gap(
+            self):
+        """Unlike the plain collector_end_to_end stage, a COVERAGE_GAP here
+        is the expected, useful answer (the far board doesn't exist yet),
+        not a failure to keep retrying."""
+        import scripts.probe_kickoff_timezone as probe
+
+        assert probe.stage_succeeded(
+            "circuit_breaker_far",
+            {"capture_timing": [{"outcome": "COVERAGE_GAP"}],
+             "parsed_events": 0})
+        assert not probe.stage_succeeded("circuit_breaker_far", {})
+        assert not probe.stage_succeeded(
+            "circuit_breaker_far", {"verdict": "skipped: out of budget"})
+
+    def test_run_probe_computes_the_comparison_from_its_own_two_stages(
+            self, monkeypatch):
+        """run_probe must not call circuit_breaker_measurement (which would
+        capture the near board a second time) — it builds the comparison
+        from collector_end_to_end + circuit_breaker_far directly."""
+        import scripts.probe_kickoff_timezone as probe
+
+        def _boom(*a, **k):
+            raise AssertionError(
+                "run_probe must not re-capture the near board")
+
+        monkeypatch.setattr(probe, "circuit_breaker_measurement", _boom)
+        monkeypatch.setattr(probe, "fetch", lambda *a, **k: b"")
+        monkeypatch.setattr(probe, "render_clock_probe",
+                            lambda *a, **k: {"proven": True})
+        monkeypatch.setattr(probe, "settlement_probe",
+                            lambda *a, **k: {"hockey": {"graded": 1}})
+
+        calls = {"n": 0}
+
+        def e2e(date, *a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return {"parsed_events": 3, "capture_timing": [
+                    {"requests": 10, "outcome": "CAPTURED:relay_columns"}],
+                    "failures": []}
+            return {"capture_timing": [
+                {"requests": 2, "outcome": "COVERAGE_GAP"}],
+                "failures": [f"v {date}: circuit breaker tripped — ..."]}
+
+        monkeypatch.setattr(probe, "collector_end_to_end", e2e)
+        monkeypatch.setattr(probe, "r1_coverage", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "coverage_sweep", lambda *a, **k: {})
+        report = probe.run_probe("2026-09-29", sport="basketball",
+                                 timeout=1, pause=0)
+        assert report["circuit_breaker_comparison"]["near_requests"] == 10
+        assert report["circuit_breaker_comparison"]["far_breaker_tripped"]
+        assert report["circuit_breaker_comparison"]["near_false_abort"] is False
+        # render_clock_probe here returned {"proven": True} with no
+        # json_matches/json_body — the canary was never actually read, so
+        # the comparison must say "not checked", not silently "valid".
+        assert report["canary"]["checked"] is False
+        assert report["circuit_breaker_comparison"]["trial_valid"] is None
+
+    def test_run_probe_marks_the_comparison_invalid_when_the_canary_is_down(
+            self, monkeypatch):
+        """The exact scenario run 36455080098 hit: near AND far both
+        refuse, and football's own tz=0 JSON was ALSO a challenge page.
+        run_probe must surface report["canary"] and mark the comparison
+        invalid, not report near_false_abort as a breaker finding."""
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "circuit_breaker_measurement",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("must not re-capture")))
+        monkeypatch.setattr(probe, "fetch", lambda *a, **k: b"")
+        monkeypatch.setattr(probe, "render_clock_probe", lambda *a, **k: {
+            "json_matches": 0,
+            "json_body": {"looks_like": "challenge_page", "bytes": 272},
+            "verdict": "no tz=0 instants; nothing to join against",
+        })
+        monkeypatch.setattr(probe, "settlement_probe",
+                            lambda *a, **k: {"hockey": {"graded": 0}})
+
+        def e2e(date, *a, **k):
+            return {"capture_timing": [
+                {"requests": 3, "outcome": "COVERAGE_GAP"}],
+                "failures": [f"v {date}: circuit breaker tripped — ..."]}
+
+        monkeypatch.setattr(probe, "collector_end_to_end", e2e)
+        monkeypatch.setattr(probe, "r1_coverage", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "coverage_sweep", lambda *a, **k: {})
+        report = probe.run_probe("2026-09-29", sport="volleyball",
+                                 timeout=1, pause=0)
+        assert report["canary"]["healthy"] is False
+        assert report["circuit_breaker_comparison"]["near_false_abort"] is True
+        assert report["circuit_breaker_comparison"]["trial_valid"] is False
+        assert "canary" in \
+            report["circuit_breaker_comparison"]["invalid_reason"].lower()
+
+    def test_run_probe_wires_direct_vs_relay_in_as_its_first_stage(
+            self, monkeypatch):
+        """Priority change, owner finding 2026-09-28: this must run before
+        open_questions, unconditionally, and must not crash the whole
+        probe if it raises."""
+        import scripts.probe_kickoff_timezone as probe
+
+        order = []
+
+        def _dvr(*a, **k):
+            order.append("direct_vs_relay")
+            return {"target_date": a[0], "sport": k.get("sport"),
+                    "football_json": {"direct": {"ok": True},
+                                      "relay": {"ok": False}},
+                    "html_board": {"direct": {"ok": True},
+                                   "relay": {"ok": False}}}
+
+        def _oq(*a, **k):
+            order.append("open_questions")
+            return {"passes_used": {}, "stage_meta": {}}
+
+        monkeypatch.setattr(probe, "direct_vs_relay_probe", _dvr)
+        monkeypatch.setattr(probe, "run_open_questions", _oq)
+        monkeypatch.setattr(probe, "fetch", lambda *a, **k: b"")
+        monkeypatch.setattr(probe, "r1_coverage", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "coverage_sweep", lambda *a, **k: {})
+
+        report = probe.run_probe("2026-09-29", sport="basketball",
+                                 timeout=1, pause=0)
+        assert order == ["direct_vs_relay", "open_questions"]
+        assert report["direct_vs_relay"]["football_json"]["direct"]["ok"]
+
+    def test_a_crash_in_direct_vs_relay_does_not_crash_the_whole_probe(
+            self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        def _boom(*a, **k):
+            raise RuntimeError("unexpected crash")
+
+        monkeypatch.setattr(probe, "direct_vs_relay_probe", _boom)
+        monkeypatch.setattr(probe, "fetch", lambda *a, **k: b"")
+        monkeypatch.setattr(probe, "render_clock_probe",
+                            lambda *a, **k: {"proven": True})
+        monkeypatch.setattr(probe, "settlement_probe", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "collector_end_to_end",
+                            lambda *a, **k: {})
+        monkeypatch.setattr(probe, "r1_coverage", lambda *a, **k: {})
+        monkeypatch.setattr(probe, "coverage_sweep", lambda *a, **k: {})
+
+        report = probe.run_probe("2026-09-29", sport="basketball",
+                                 timeout=1, pause=0)
+        assert "crashed" in report["direct_vs_relay"]
+
+    def test_r1_coverage_gets_what_is_left_not_a_flat_45s(self, monkeypatch):
+        """Run a5e5720 (2026-09-28): budget_left 482s, r1_coverage still
+        spent only 235.2s and reported every sport "stopped: stage slice of
+        45s spent" — hundreds of seconds sat unused. r1_coverage's own
+        default (45.0) must not be what run_probe hands it when there is
+        far more than that left."""
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "fetch", lambda *a, **k: b"")
+        monkeypatch.setattr(probe, "render_clock_probe",
+                            lambda *a, **k: {"proven": True})
+        monkeypatch.setattr(probe, "settlement_probe",
+                            lambda *a, **k: {"hockey": {"graded": 1}})
+        monkeypatch.setattr(
+            probe, "collector_end_to_end",
+            lambda *a, **k: {"parsed_events": 1, "capture_timing": [
+                {"requests": 1, "outcome": "CAPTURED:relay_columns"}]})
+        monkeypatch.setattr(probe, "coverage_sweep", lambda *a, **k: {})
+
+        seen = {}
+
+        def _r1(date, *, timeout, pause, slice_seconds=45.0, **k):
+            seen["slice_seconds"] = slice_seconds
+            return {}
+
+        monkeypatch.setattr(probe, "r1_coverage", _r1)
+        probe.set_deadline(650)
+        try:
+            probe.run_probe("2026-09-29", sport="basketball",
+                            timeout=1, pause=0)
+        finally:
+            probe.set_deadline(None)
+        # (time_left() - 60) / len(COVERAGE_SPORTS), evaluated with
+        # essentially the whole 650s still on the clock (every other stage
+        # above is mocked to return instantly) — comfortably above the old
+        # flat 45s regardless of exactly how much overhead the test itself
+        # costs.
+        assert seen["slice_seconds"] > 100
+
+
+class TestCircuitBreakerMeasurement:
+    """The live, two-capture measurement the owner asked for instead of a
+    re-dispatch of the 350-minute Forward Shadow job: does the breaker
+    abort a likely-absent board cheaply, and does it NOT falsely abort a
+    likely-published one."""
+
+    def _stub(self, monkeypatch, *, near, far):
+        import scripts.probe_kickoff_timezone as probe
+        calls = []
+
+        def _fake_e2e(date, *, timeout, pause, sport, slice_seconds,
+                     circuit_breaker_columns=0, circuit_breaker_attempts=1):
+            calls.append({"date": date,
+                          "circuit_breaker_columns": circuit_breaker_columns})
+            return near if len(calls) == 1 else far
+
+        monkeypatch.setattr(probe, "collector_end_to_end", _fake_e2e)
+        monkeypatch.setattr(probe, "pace", lambda *a, **k: None)
+        monkeypatch.setattr(probe, "time_left", lambda: 600.0)
+        return calls
+
+    def test_the_far_date_is_offset_from_the_near_date(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        calls = self._stub(
+            monkeypatch,
+            near={"capture_timing": [{"requests": 24,
+                                      "outcome": "CAPTURED:relay_columns"}],
+                  "failures": []},
+            far={"capture_timing": [{"requests": 2,
+                                     "outcome": "COVERAGE_GAP"}],
+                 "failures": ["v 2026-10-03: circuit breaker tripped"]})
+        out = probe.circuit_breaker_measurement(
+            "2026-09-29", timeout=5, pause=0, far_offset_days=5)
+        assert out["near_date"] == "2026-09-29"
+        assert out["far_date"] == "2026-10-04"
+        assert calls[0]["date"] == "2026-09-29"
+        assert calls[1]["date"] == "2026-10-04"
+        # The forward pass's exact opt-in, on both halves.
+        assert calls[0]["circuit_breaker_columns"] == 2
+        assert calls[1]["circuit_breaker_columns"] == 2
+
+    def test_a_cheap_trip_on_the_far_board_is_recognised(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        self._stub(
+            monkeypatch,
+            near={"capture_timing": [{"requests": 24,
+                                      "outcome": "CAPTURED:relay_columns"}],
+                  "failures": []},
+            far={"capture_timing": [{"requests": 2,
+                                     "outcome": "COVERAGE_GAP"}],
+                 "failures": ["v 2026-10-04: circuit breaker tripped — ..."]})
+        out = probe.circuit_breaker_measurement(
+            "2026-09-29", timeout=5, pause=0)
+        assert out["comparison"]["far_requests"] == 2
+        assert out["comparison"]["far_breaker_tripped"] is True
+        assert out["comparison"]["near_false_abort"] is False
+
+    def test_a_false_abort_on_the_near_board_is_recognised(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        self._stub(
+            monkeypatch,
+            near={"capture_timing": [{"requests": 2,
+                                      "outcome": "COVERAGE_GAP"}],
+                  "failures": ["v 2026-09-29: circuit breaker tripped — ..."]},
+            far={"capture_timing": [{"requests": 2,
+                                     "outcome": "COVERAGE_GAP"}],
+                 "failures": ["v 2026-10-04: circuit breaker tripped — ..."]})
+        out = probe.circuit_breaker_measurement(
+            "2026-09-29", timeout=5, pause=0)
+        assert out["comparison"]["near_false_abort"] is True
+
+    def test_skips_cleanly_when_the_budget_is_already_gone(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+        monkeypatch.setattr(probe, "time_left", lambda: 10.0)
+        out = probe.circuit_breaker_measurement(
+            "2026-09-29", timeout=5, pause=0)
+        assert "skipped" in out["verdict"]
+
+
+class TestCircuitBreakerProbeCLI:
+    def test_the_flag_bypasses_the_full_diagnostic_sweep(
+            self, monkeypatch, capsys):
+        import scripts.probe_kickoff_timezone as probe
+
+        def _boom(*a, **k):
+            raise AssertionError("run_probe must not run under --circuit-breaker-probe")
+
+        monkeypatch.setattr(probe, "run_probe", _boom)
+        monkeypatch.setattr(
+            probe, "circuit_breaker_measurement",
+            lambda *a, **k: {
+                "near_date": "2026-09-29", "far_date": "2026-10-04",
+                "near": {"capture_timing": [{"outcome": "CAPTURED:direct"}]},
+                "far": {"capture_timing": [{"outcome": "COVERAGE_GAP"}]},
+                "comparison": {"far_breaker_tripped": True,
+                              "near_false_abort": False}})
+        rc = probe.main([
+            "--date", "2026-09-29", "--circuit-breaker-probe",
+            "--budget-seconds", "300",
+        ])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "circuit_breaker_measurement" in out
+        assert "far_breaker_tripped" in out
+
+    def test_an_unanswered_probe_exits_nonzero(self, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(probe, "run_probe", lambda *a, **k: {})
+        monkeypatch.setattr(
+            probe, "circuit_breaker_measurement",
+            lambda *a, **k: {"verdict": "skipped: out of time budget"})
+        rc = probe.main([
+            "--date", "2026-09-29", "--circuit-breaker-probe",
+            "--budget-seconds", "300",
+        ])
+        assert rc == 1
+
+
 class TestTheOpenQuestionsAreAskedInPasses:
     """Run 36407370005 spent three stages' slices retrying refusals that
     were still in force seconds later, and answered nothing. The refusals
@@ -2790,8 +3629,14 @@ class TestTheOpenQuestionsAreAskedInPasses:
             return {"proven": True, "offset_minutes": -120}
 
         def e2e(*a, **k):
+            # Shared by two stages now: "collector_end_to_end" (near board)
+            # and "circuit_breaker_far" (far board) both call
+            # collector_end_to_end — see run_open_questions' stages tuple.
+            # capture_timing must be present or circuit_breaker_far's own
+            # stage_succeeded() never returns True and it keeps retrying.
             calls["e2e"] += 1
-            return {"parsed_events": 3}
+            return {"parsed_events": 3,
+                   "capture_timing": [{"outcome": "CAPTURED:relay_columns"}]}
 
         def settle(*a, **k):
             calls["settle"] += 1
@@ -2801,8 +3646,9 @@ class TestTheOpenQuestionsAreAskedInPasses:
         monkeypatch.setattr(probe, "collector_end_to_end", e2e)
         monkeypatch.setattr(probe, "settlement_probe", settle)
         out = probe.run_open_questions("2026-09-29", timeout=1, pause=0)
-        assert calls == {"clock": 1, "e2e": 1, "settle": 1}
+        assert calls == {"clock": 1, "e2e": 2, "settle": 1}
         assert out["passes_used"]["render_clock"] == 1
+        assert out["passes_used"]["circuit_breaker_far"] == 1
 
     def test_a_stage_that_refuses_is_retried_in_a_later_pass(self,
                                                              monkeypatch):
@@ -2892,27 +3738,38 @@ class TestTheBudgetFollowsTheOpenQuestions:
             self, monkeypatch):
         import scripts.probe_kickoff_timezone as probe
 
+        e2e_shares: list[float] = []
         shares: dict[str, float] = {}
         probe.set_deadline(600)
         monkeypatch.setattr(probe, "render_clock_probe",
                             lambda *a, **k: {"proven": True})
-        monkeypatch.setattr(
-            probe, "collector_end_to_end",
-            lambda date, timeout=0, pause=0, slice_seconds=0, **k: (
-                shares.__setitem__("e2e", slice_seconds),
-                {"parsed_events": 1})[1])
+
+        def e2e(date, timeout=0, pause=0, slice_seconds=0, **k):
+            # Called once for "collector_end_to_end" (near) and once for
+            # "circuit_breaker_far" (far) — both go through this same
+            # function, see run_open_questions' stages tuple. Recorded by
+            # position, not by date, so the assertion below does not need
+            # to reproduce the far-date arithmetic itself.
+            e2e_shares.append(slice_seconds)
+            return {"parsed_events": 1,
+                   "capture_timing": [{"outcome": "CAPTURED:relay_columns"}]}
+
+        monkeypatch.setattr(probe, "collector_end_to_end", e2e)
         monkeypatch.setattr(
             probe, "settlement_probe",
             lambda date, timeout=0, pause=0, slice_seconds=0, **k: (
                 shares.__setitem__("settle", slice_seconds),
                 {"hockey": {"graded": 1}})[1])
         probe.run_open_questions("2026-09-29", timeout=1, pause=0)
-        # Two costly questions, ~600s on the clock, ~70s held back for
-        # reporting: each gets about half. The calibration is not in the
-        # split - it has proven the same offset three times on two
-        # requests, and runs on what is left.
-        assert 230 < shares["e2e"] < 290
-        assert 230 < shares["settle"] < 290
+        # Three costly questions now (collector_end_to_end, settlement_probe
+        # and circuit_breaker_far all share "what's left"), ~600s on the
+        # clock, ~70s held back for reporting: each gets about a third. The
+        # calibration is not in the split - it has proven the same offset
+        # three times on two requests, and runs on what is left.
+        assert len(e2e_shares) == 2
+        for share in e2e_shares:
+            assert 150 < share < 200
+        assert 150 < shares["settle"] < 200
 
     def test_a_board_gets_more_than_a_calibration_needs(self, monkeypatch):
         import scripts.probe_kickoff_timezone as probe
@@ -3001,3 +3858,99 @@ class TestTheFailureCodesAreCounted:
                             lambda **k: type("L", (), {"records": []})())
         record = probe.collector_end_to_end("2026-09-29", timeout=1, pause=0)
         assert record["column_http"] == {"403": 2, "422": 1}
+
+
+class TestCanaryOnlyMode:
+    """Owner directive, 2026-09-28: measuring how MUCH to ask is moot if
+    WHEN to ask is the binding constraint. ``--canary-only`` must answer in
+    one request — not share a budget scheduler with any other stage — so it
+    is cheap enough for a tight cron to build an availability map from.
+    """
+
+    def test_a_healthy_sample_prints_a_report_and_exits_zero(
+            self, tmp_path, monkeypatch, capsys):
+        import scripts.probe_kickoff_timezone as probe
+
+        healthy = {"sport": "football", "checked": True, "healthy": True,
+                  "reason": None, "sampled_at": "2026-09-29T00:00:00+00:00"}
+        monkeypatch.setattr(
+            "slumdog.forebet.sample_canary", lambda *a, **k: healthy)
+
+        rc = probe.main(["--date", "2026-09-29", "--canary-only"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        report = json.loads(out.split("\n\n")[0]
+                            if "\n\n" in out else out)
+        assert report["mode"] == "canary_only"
+        assert report["canary"] == healthy
+
+    def test_an_unhealthy_sample_exits_non_zero(
+            self, monkeypatch, capsys):
+        import scripts.probe_kickoff_timezone as probe
+
+        unhealthy = {"sport": "football", "checked": True, "healthy": False,
+                    "reason": "football tz=0 JSON looked like "
+                              "'challenge_page' (272 bytes)",
+                    "sampled_at": "2026-09-29T00:00:00+00:00"}
+        monkeypatch.setattr(
+            "slumdog.forebet.sample_canary", lambda *a, **k: unhealthy)
+
+        rc = probe.main(["--date", "2026-09-29", "--canary-only"])
+        assert rc == 1
+        report = json.loads(capsys.readouterr().out.strip())
+        assert report["canary"]["healthy"] is False
+        assert "challenge_page" in report["canary"]["reason"]
+
+    def test_a_crash_in_the_sample_itself_still_reports_and_fails_closed(
+            self, monkeypatch, capsys):
+        import scripts.probe_kickoff_timezone as probe
+
+        def _boom(*a, **k):
+            raise TimeoutError("relay timed out")
+
+        monkeypatch.setattr("slumdog.forebet.sample_canary", _boom)
+
+        rc = probe.main(["--date", "2026-09-29", "--canary-only"])
+        assert rc == 1
+        report = json.loads(capsys.readouterr().out.strip())
+        assert report["canary"]["healthy"] is False
+        assert "TimeoutError" in report["canary"]["reason"]
+
+    def test_canary_only_never_touches_the_full_sweep_or_the_breaker_probe(
+            self, monkeypatch, capsys):
+        # The killer property: --canary-only must not call run_probe or
+        # circuit_breaker_measurement at all — it is meant to run far more
+        # often than either, on a much tighter budget.
+        import scripts.probe_kickoff_timezone as probe
+
+        def _must_not_run(*a, **k):
+            raise AssertionError("canary-only must not reach this stage")
+
+        monkeypatch.setattr(probe, "run_probe", _must_not_run)
+        monkeypatch.setattr(probe, "circuit_breaker_measurement", _must_not_run)
+        monkeypatch.setattr(
+            "slumdog.forebet.sample_canary",
+            lambda *a, **k: {"sport": "football", "checked": True,
+                             "healthy": True, "reason": None,
+                             "sampled_at": "2026-09-29T00:00:00+00:00"})
+
+        rc = probe.main(["--date", "2026-09-29", "--canary-only"])
+        assert rc == 0
+
+    def test_canary_only_writes_the_out_file_when_given(
+            self, tmp_path, monkeypatch):
+        import scripts.probe_kickoff_timezone as probe
+
+        monkeypatch.setattr(
+            "slumdog.forebet.sample_canary",
+            lambda *a, **k: {"sport": "football", "checked": True,
+                             "healthy": True, "reason": None,
+                             "sampled_at": "2026-09-29T00:00:00+00:00"})
+        out_path = tmp_path / "canary.json"
+        rc = probe.main([
+            "--date", "2026-09-29", "--canary-only", "--out", str(out_path),
+        ])
+        assert rc == 0
+        written = json.loads(out_path.read_text())
+        assert written["mode"] == "canary_only"
+        assert written["canary"]["healthy"] is True

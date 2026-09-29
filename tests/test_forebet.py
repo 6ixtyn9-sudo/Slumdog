@@ -98,6 +98,176 @@ def test_football_fetch_retries_truncated_then_succeeds(tmp_path, monkeypatch):
     assert (tmp_path / cap.body_path).read_bytes() == good
 
 
+class TestCaptureTimingInstrumentation:
+    """Priority 1 (2026-09-28): before this, ``forward_shadow_batch.py`` had
+    zero internal timing (``grep -c 'time.time()\\|elapsed'`` was 0), so
+    Forward Shadow #33 (run 36426785929) could only be reported as ">=1h56m
+    on one undifferentiated step" — nobody could say which sport-date cost
+    what. ``capture_timing`` is per-sport-date elapsed time, request count
+    and outcome, the measurement Priority 1's actual fix needs to prove
+    itself against."""
+
+    def test_a_successful_capture_is_timed_and_labelled_by_route(
+        self, tmp_path, monkeypatch
+    ):
+        from slumdog.forebet import ForebetCollector, RawCapture
+
+        def fake_fetch(self, sport, target_date):
+            self.before_request()  # the initial-attempt call every _fetch makes
+            self.before_request()  # a simulated column-route attempt
+            return RawCapture(
+                sport, target_date, "2026-09-29T04:00:00+00:00", "u", "r",
+                "columns_v1", "abc", 3, "p.txt", "p.json", route="relay_columns")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        collector.capture_selected(
+            "2026-09-29", sports=["volleyball"], pause_seconds=0.01)
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        [timing] = receipt["capture_timing"]
+        assert timing["sport"] == "volleyball"
+        assert timing["outcome"] == "CAPTURED:relay_columns"
+        assert timing["requests"] == 2
+        assert timing["elapsed_seconds"] >= 0
+
+    def test_a_column_route_gap_is_labelled_from_the_raised_message(
+        self, tmp_path, monkeypatch
+    ):
+        def fake_fetch(self, sport, target_date):
+            raise ValueError(
+                f"{sport} {target_date}: html capture rejected and column "
+                f"capture returned COVERAGE_GAP: missing required column(s)")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        from slumdog.forebet import ForebetCollector
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        collector.capture_selected(
+            "2026-09-29", sports=["rugby"], pause_seconds=0.01)
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        [timing] = receipt["capture_timing"]
+        assert timing["outcome"] == "COVERAGE_GAP"
+        assert receipt["failures"] == [
+            "rugby:ValueError:rugby 2026-09-29: html capture rejected and "
+            "column capture returned COVERAGE_GAP: missing required "
+            "column(s)"]
+
+    def test_an_unclassified_exception_is_labelled_raised_not_silently_dropped(
+        self, tmp_path, monkeypatch
+    ):
+        def fake_fetch(self, sport, target_date):
+            raise RuntimeError("connection reset")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        from slumdog.forebet import ForebetCollector
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        collector.capture_selected(
+            "2026-09-29", sports=["mma"], pause_seconds=0.01)
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        [timing] = receipt["capture_timing"]
+        assert timing["outcome"] == "RAISED"
+
+    def test_the_parallel_path_is_not_timed(self, tmp_path, monkeypatch):
+        # capture_timing is a serial-path (pause_seconds>0) instrument only;
+        # the parallel path (workers>1, used for historical backfill, not
+        # the timing-sensitive forward pass) is left as it was.
+        from slumdog.forebet import ForebetCollector, RawCapture
+
+        def fake_fetch(self, sport, target_date):
+            return RawCapture(
+                sport, target_date, "2026-09-29T04:00:00+00:00", "u", "r",
+                "html", "abc", 3, "p.txt", "p.json", route="direct")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=2)
+        collector.capture_selected("2026-09-29", sports=["football"])
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        assert receipt["capture_timing"] == []
+
+    def test_serial_true_times_a_single_sport_even_at_pause_zero(
+        self, tmp_path, monkeypatch
+    ):
+        """The probe used to select the timed path with pause_seconds=0.001
+        — small enough to be free (a single-sport call never sleeps) but
+        truthy enough to pick the branch, which nothing marked as
+        load-bearing and a future refactor could silently undo. serial=True
+        must select the same path outright, at pause_seconds=0."""
+        from slumdog.forebet import ForebetCollector, RawCapture
+
+        def fake_fetch(self, sport, target_date):
+            self.before_request()
+            return RawCapture(
+                sport, target_date, "2026-09-29T04:00:00+00:00", "u", "r",
+                "columns_v1", "abc", 3, "p.txt", "p.json",
+                route="relay_columns")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        collector.capture_selected(
+            "2026-09-29", sports=["volleyball"], pause_seconds=0,
+            serial=True)
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        [timing] = receipt["capture_timing"]
+        assert timing["sport"] == "volleyball"
+        assert timing["requests"] == 1
+
+    def test_on_capture_timing_without_serial_is_refused(
+        self, tmp_path, monkeypatch
+    ):
+        """A callback that can only ever fire on the serial path must be
+        refused outright when the caller did not select that path, not
+        silently ignored — an empty capture_timing would look identical to
+        a callback that fired zero times because nothing failed."""
+        from slumdog.forebet import ForebetCollector
+
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=2)
+        with pytest.raises(ValueError, match="on_capture_timing requires"):
+            collector.capture_selected(
+                "2026-09-29", sports=["football"], pause_seconds=0,
+                on_capture_timing=lambda entry: None)
+
+    def test_a_caller_supplied_before_request_still_runs_under_the_counter(
+        self, tmp_path, monkeypatch
+    ):
+        # The counting wrapper must delegate to whatever before_request the
+        # caller already installed (e.g. a request budget), not replace it.
+        from slumdog.forebet import ForebetCollector, RawCapture
+
+        outer_calls = {"n": 0}
+
+        def fake_fetch(self, sport, target_date):
+            self.before_request()
+            return RawCapture(
+                sport, target_date, "2026-09-29T04:00:00+00:00", "u", "r",
+                "html", "abc", 3, "p.txt", "p.json", route="direct")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        collector = ForebetCollector(
+            root=tmp_path, timeout=5, workers=1,
+            before_request=lambda: outer_calls.__setitem__(
+                "n", outer_calls["n"] + 1))
+        collector.capture_selected(
+            "2026-09-29", sports=["hockey"], pause_seconds=0.01)
+        assert outer_calls["n"] == 1
+        # And the caller's own before_request is restored afterwards.
+        assert collector.before_request is not None
+
+
 class TestCaptureSelectedRefreshParams:
     def test_receipt_name_validation(self, tmp_path):
         from slumdog.forebet import ForebetCollector
@@ -197,3 +367,557 @@ class TestTheBoardIsNotTheSource:
                 continue
             assert board_url(spec, "2026-09-29") == source_url(
                 spec, "2026-09-29")
+
+
+class TestCanaryDiscriminatesPathBlockedFromPublicationGap:
+    """Owner finding, 2026-09-28 (Priority 1, item iii): a near/far
+    circuit-breaker comparison run while Cloudflare was challenge-blocking
+    the whole site could not tell "not published yet" from "refused right
+    now" apart — both surface identically as an HTTP 422 / COVERAGE_GAP.
+    Football's tz=0 JSON is the cheap, already-fetched discriminator: if
+    it also failed this same run, no other sport's COVERAGE_GAP may be
+    read as evidence of absence.
+    """
+
+    def test_canary_healthy_when_football_succeeds(self, tmp_path, monkeypatch):
+        from slumdog.forebet import ForebetCollector, RawCapture
+
+        def fake_fetch(self, sport, target_date):
+            return RawCapture(
+                sport, target_date, "2026-09-29T04:00:00+00:00", "u", "r",
+                "html", "abc", 3, "p.txt", "p.json", route="relay_markdown")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        monkeypatch.setattr(
+            "slumdog.forebet.fetch_football_markets", lambda *a, **k: None)
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        collector.capture_selected(
+            "2026-09-29", sports=["football", "hockey"], pause_seconds=0.01)
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        assert receipt["canary"] == {
+            "sport": "football", "checked": True, "healthy": True,
+            "reason": None,
+        }
+        # Nothing to correct: hockey succeeded too, so its outcome is
+        # untouched.
+        [hockey_timing] = [t for t in receipt["capture_timing"]
+                           if t["sport"] == "hockey"]
+        assert hockey_timing["outcome"] == "CAPTURED:relay_markdown"
+
+    def test_canary_down_relabels_other_sports_coverage_gap_but_not_football(
+            self, tmp_path, monkeypatch):
+        from slumdog.forebet import ForebetCollector
+
+        def fake_fetch(self, sport, target_date):
+            if sport == "football":
+                raise ValueError(
+                    f"{sport} {target_date}: football JSON body missing: "
+                    "challenge page")
+            raise ValueError(
+                f"{sport} {target_date}: html capture rejected and column "
+                "capture returned COVERAGE_GAP: circuit breaker tripped "
+                "\u2014 the first 2 column(s) all refused with a "
+                "not-published signal (HTTP 422)")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        monkeypatch.setattr(
+            "slumdog.forebet.fetch_football_markets", lambda *a, **k: None)
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        collector.capture_selected(
+            "2026-09-29", sports=["football", "volleyball"],
+            pause_seconds=0.01)
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        assert receipt["canary"]["healthy"] is False
+        assert "football" in receipt["canary"]["reason"]
+
+        [volleyball_timing] = [t for t in receipt["capture_timing"]
+                               if t["sport"] == "volleyball"]
+        assert volleyball_timing["outcome"] == "COVERAGE_GAP:canary_path_blocked"
+        [volleyball_failure] = [f for f in receipt["failures"]
+                                if "volleyball:" in f]
+        assert volleyball_failure.startswith("[CANARY PATH BLOCKED")
+        assert "not evidence the board is unpublished" in \
+            volleyball_failure.lower()
+        assert "not proof the source itself refused us" in \
+            volleyball_failure.lower()
+
+        # Football's own entry is never relabelled by this pass — it IS
+        # the canary, not a sport being corrected by it.
+        [football_timing] = [t for t in receipt["capture_timing"]
+                             if t["sport"] == "football"]
+        assert football_timing["outcome"] == "RAISED"
+
+    def test_no_rows_for_date_is_never_touched_even_when_canary_is_down(
+            self, tmp_path, monkeypatch):
+        # NO_ROWS_FOR_DATE is only ever returned on POSITIVE evidence (the
+        # board rendered cleanly and held nothing for this date) — a sport
+        # that reached that status was not refused, regardless of what
+        # happened to football in the same run.
+        from slumdog.forebet import ForebetCollector
+
+        def fake_fetch(self, sport, target_date):
+            if sport == "football":
+                raise ValueError(f"{sport} {target_date}: challenge page")
+            raise ValueError(
+                f"{sport} {target_date}: html capture rejected and column "
+                "capture returned NO_ROWS_FOR_DATE: board rendered 40 rows,"
+                " none on this date")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        monkeypatch.setattr(
+            "slumdog.forebet.fetch_football_markets", lambda *a, **k: None)
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        collector.capture_selected(
+            "2026-09-29", sports=["football", "rugby"], pause_seconds=0.01)
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        assert receipt["canary"]["healthy"] is False
+        [rugby_timing] = [t for t in receipt["capture_timing"]
+                          if t["sport"] == "rugby"]
+        assert rugby_timing["outcome"] == "NO_ROWS_FOR_DATE"
+        [rugby_failure] = [f for f in receipt["failures"]
+                           if f.startswith("rugby:")]
+        assert not rugby_failure.startswith("[CANARY PATH BLOCKED")
+
+    def test_canary_not_checked_when_football_was_not_requested(
+            self, tmp_path, monkeypatch):
+        from slumdog.forebet import ForebetCollector, RawCapture
+
+        def fake_fetch(self, sport, target_date):
+            return RawCapture(
+                sport, target_date, "2026-09-29T04:00:00+00:00", "u", "r",
+                "html", "abc", 3, "p.txt", "p.json", route="direct")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        monkeypatch.setattr(
+            "slumdog.forebet.fetch_football_markets", lambda *a, **k: None)
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        collector.capture_selected(
+            "2026-09-29", sports=["hockey"], pause_seconds=0.01)
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        assert receipt["canary"] == {
+            "sport": "football", "checked": False, "healthy": None,
+            "reason": "football was not requested in this capture",
+        }
+
+    def test_canary_not_rechecked_when_football_is_reused_from_disk(
+            self, tmp_path, monkeypatch):
+        from slumdog.forebet import ForebetCollector, RawCapture
+
+        # Simulate a football capture already frozen on disk for this date
+        # (same-day re-dispatch) — capture_selected's reuse rule skips
+        # re-fetching it, so this call's canary must say "not rechecked"
+        # rather than silently reporting a stale "healthy".
+        directory = tmp_path / "data" / "raw" / "football" / "2026-09-29"
+        directory.mkdir(parents=True)
+        cap = RawCapture(
+            "football", "2026-09-29", "2026-09-28T00:00:00+00:00",
+            "u", "r", "html", "abc", 3,
+            str((directory / "body.txt").relative_to(tmp_path)),
+            str((directory / "meta.json").relative_to(tmp_path)))
+        (directory / "body.txt").write_text("x")
+        (directory / "meta.json").write_text(json.dumps(vars(cap)))
+
+        def fake_fetch(self, sport, target_date):
+            return RawCapture(
+                sport, target_date, "2026-09-29T04:00:00+00:00", "u", "r",
+                "html", "abc", 3, "p.txt", "p.json", route="direct")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        monkeypatch.setattr(
+            "slumdog.forebet.fetch_football_markets", lambda *a, **k: None)
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=1)
+        collector.capture_selected(
+            "2026-09-29", sports=["football", "hockey"],
+            pause_seconds=0.01)
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        assert receipt["canary"]["checked"] is False
+        assert receipt["canary"]["healthy"] is None
+        assert "reused" in receipt["canary"]["reason"]
+
+
+    def test_parallel_path_also_records_a_canary(self, tmp_path, monkeypatch):
+        # capture_timing is serial-only, but canary is not — the parallel
+        # (historical-backfill) path still has captures/failures to read
+        # football's outcome from.
+        from slumdog.forebet import ForebetCollector, RawCapture
+
+        def fake_fetch(self, sport, target_date):
+            if sport == "football":
+                raise ValueError("challenge page")
+            return RawCapture(
+                sport, target_date, "2026-09-29T04:00:00+00:00", "u", "r",
+                "html", "abc", 3, "p.txt", "p.json", route="direct")
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector._fetch", fake_fetch)
+        monkeypatch.setattr(
+            "slumdog.forebet.fetch_football_markets", lambda *a, **k: None)
+        collector = ForebetCollector(root=tmp_path, timeout=5, workers=2)
+        collector.capture_selected("2026-09-29", sports=["football", "hockey"])
+        receipt = json.loads(
+            (tmp_path / "data" / "reports" / "capture_2026-09-29.json")
+            .read_text())
+        assert receipt["canary"]["checked"] is True
+        assert receipt["canary"]["healthy"] is False
+
+
+class TestSampleCanaryStandalone:
+    """``sample_canary`` is the pre-flight version of ``_canary_state``:
+    a dual-path (relay, then direct on relay failure) request, callable
+    BEFORE any per-sport capture has spent a single request — the check
+    ``forward_shadow_batch.py`` now runs before (and periodically during)
+    its forward pass so a path WAF block never again grinds ~70 sport-dates
+    through their full retry budgets against a wall (run 36426785929).
+    Dual-path since 2026-09-28 (direct-vs-relay probe, run 36470920157):
+    mirrors ``fetch_with_fallback``'s now-measured-per-run direct fallback,
+    so the canary cannot abort a forward pass that a real capture would
+    actually have completed via direct.
+    """
+
+    def test_healthy_when_the_json_parses_cleanly(self, monkeypatch):
+        from slumdog.forebet import sample_canary
+
+        monkeypatch.setattr(
+            "slumdog.forebet.relay_get_markdown",
+            lambda *a, **k: b'[[{"id": 1}]]')
+        result = sample_canary("2026-09-29", timeout=5)
+        assert result == {
+            "sport": "football", "checked": True, "healthy": True,
+            "reason": None, "relay": {"ok": True, "reason": None},
+            "direct": None, "sampled_at": result["sampled_at"],
+        }
+        # sampled_at is a real UTC timestamp, not a placeholder.
+        assert result["sampled_at"].endswith("+00:00")
+
+    def test_unhealthy_when_the_body_is_a_challenge_page(self, monkeypatch):
+        from slumdog.forebet import sample_canary
+
+        challenge = (
+            b"Performing security verification This website uses a "
+            b"security service to protect against malicious bots."
+        )
+        monkeypatch.setattr(
+            "slumdog.forebet.relay_get_markdown", lambda *a, **k: challenge)
+        monkeypatch.setattr(
+            "slumdog.forebet.direct_get",
+            lambda *a, **k: (_ for _ in ()).throw(
+                RuntimeError("direct also refused")))
+        result = sample_canary("2026-09-29", timeout=5)
+        assert result["checked"] is True
+        assert result["healthy"] is False
+        assert "challenge page" in result["reason"]
+        assert str(len(challenge)) in result["reason"]
+        assert result["relay"] == {
+            "ok": False,
+            "reason": f"looked like a challenge page ({len(challenge)} bytes)",
+        }
+        assert result["direct"]["ok"] is False
+        assert "direct also refused" in result["direct"]["reason"]
+
+    def test_unhealthy_when_the_fetch_itself_raises(self, monkeypatch):
+        from slumdog.forebet import sample_canary
+
+        def _boom(*a, **k):
+            raise TimeoutError("relay timed out")
+
+        monkeypatch.setattr("slumdog.forebet.relay_get_markdown", _boom)
+        monkeypatch.setattr(
+            "slumdog.forebet.direct_get",
+            lambda *a, **k: (_ for _ in ()).throw(
+                TimeoutError("direct timed out too")))
+        result = sample_canary("2026-09-29", timeout=5)
+        assert result["checked"] is True
+        assert result["healthy"] is False
+        assert "TimeoutError" in result["reason"]
+        assert "relay timed out" in result["reason"]
+        assert "direct timed out too" in result["reason"]
+
+    def test_unhealthy_when_the_body_is_not_challenge_but_still_unparseable(
+            self, monkeypatch):
+        from slumdog.forebet import sample_canary
+
+        monkeypatch.setattr(
+            "slumdog.forebet.relay_get_markdown",
+            lambda *a, **k: b"not json at all and not a challenge page")
+        monkeypatch.setattr(
+            "slumdog.forebet.direct_get",
+            lambda *a, **k: b"also not json at all")
+        result = sample_canary("2026-09-29", timeout=5)
+        assert result["checked"] is True
+        assert result["healthy"] is False
+        assert "failed to parse" in result["reason"]
+
+    def test_healthy_via_direct_when_relay_fails_but_direct_serves(
+            self, monkeypatch):
+        # Owner finding, 2026-09-28: a canary that only ever tested relay
+        # could abort a forward pass that a real capture would actually
+        # have completed via direct (fetch_with_fallback now tries both
+        # too). The canary must mirror that: healthy iff EITHER leg works.
+        from slumdog.forebet import sample_canary
+
+        monkeypatch.setattr(
+            "slumdog.forebet.relay_get_markdown",
+            lambda *a, **k: (_ for _ in ()).throw(
+                RuntimeError("relay challenged")))
+        monkeypatch.setattr(
+            "slumdog.forebet.direct_get", lambda *a, **k: b'[[{"id": 1}]]')
+        result = sample_canary("2026-09-29", timeout=5)
+        assert result["healthy"] is True
+        assert result["reason"] is None
+        assert result["relay"]["ok"] is False
+        assert result["direct"] == {"ok": True, "reason": None}
+
+    def test_direct_is_not_attempted_at_all_when_relay_already_succeeded(
+            self, monkeypatch):
+        # No reason to spend the extra request once relay has already
+        # answered the question.
+        from slumdog.forebet import sample_canary
+
+        direct_calls = {"n": 0}
+
+        def fake_direct(*a, **k):
+            direct_calls["n"] += 1
+            return b'[[{"id": 1}]]'
+
+        monkeypatch.setattr(
+            "slumdog.forebet.relay_get_markdown",
+            lambda *a, **k: b'[[{"id": 1}]]')
+        monkeypatch.setattr("slumdog.forebet.direct_get", fake_direct)
+        result = sample_canary("2026-09-29", timeout=5)
+        assert result["healthy"] is True
+        assert result["direct"] is None
+        assert direct_calls["n"] == 0
+
+    def test_only_one_attempt_is_made_no_retry_on_a_refusal(self, monkeypatch):
+        # Owner instruction, 2026-09-28: "Do not add retries or backoff to
+        # cope with the WAF. It is a refusal, not congestion." The canary
+        # must ask relay_get_markdown for exactly one attempt, and — when
+        # it falls back — direct_get for exactly one attempt too.
+        from slumdog.forebet import sample_canary
+
+        seen_kwargs = {}
+
+        def fake_relay_get_markdown(url, expected_url, timeout=45,
+                                    max_retries=3):
+            seen_kwargs["relay_max_retries"] = max_retries
+            return b'[[{"id": 1}]]'
+
+        monkeypatch.setattr(
+            "slumdog.forebet.relay_get_markdown", fake_relay_get_markdown)
+        sample_canary("2026-09-29", timeout=5)
+        assert seen_kwargs["relay_max_retries"] == 1
+
+    def test_direct_fallback_also_gets_exactly_one_attempt(self, monkeypatch):
+        from slumdog.forebet import sample_canary
+
+        seen_kwargs = {}
+
+        monkeypatch.setattr(
+            "slumdog.forebet.relay_get_markdown",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("challenged")))
+
+        def fake_direct(url, timeout=40, max_retries=3):
+            seen_kwargs["direct_max_retries"] = max_retries
+            return b'[[{"id": 1}]]'
+
+        monkeypatch.setattr("slumdog.forebet.direct_get", fake_direct)
+        sample_canary("2026-09-29", timeout=5)
+        assert seen_kwargs["direct_max_retries"] == 1
+
+    def test_defaults_to_todays_date_when_none_given(self, monkeypatch):
+        from slumdog.forebet import sample_canary
+
+        seen = {}
+
+        def fake_relay_get_markdown(url, expected_url, timeout=45,
+                                    max_retries=3):
+            seen["expected_url"] = expected_url
+            return b'[[{"id": 1}]]'
+
+        monkeypatch.setattr(
+            "slumdog.forebet.relay_get_markdown", fake_relay_get_markdown)
+        import datetime as _dt
+        result = sample_canary(timeout=5)
+        today = _dt.date.today().isoformat()
+        assert today in seen["expected_url"]
+        assert result["healthy"] is True
+
+
+class TestDiagnosticFetchesRecordStatusAndHeaders:
+    """Owner directive, 2026-09-28 (after run 36470920157): "Record the
+    STATUS CODE, not the exception class." ``direct_get_diagnostic``/
+    ``relay_get_diagnostic`` back ``direct_vs_relay_probe`` and must never
+    collapse a failure to an opaque exception name when the transport
+    actually returned an HTTP status.
+    """
+
+    def test_urllib_get_diagnostic_reports_status_and_a_header_snippet_on_success(
+            self, monkeypatch):
+        from slumdog import forebet
+
+        class _FakeResponse:
+            status = 200
+            headers = {"Server": "nginx", "Content-Type": "application/json",
+                      "Set-Cookie": "session=secret"}
+
+            def read(self):
+                return b'[[{"id": 1}]]'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(
+            forebet.urllib.request, "urlopen", lambda *a, **k: _FakeResponse())
+        result = forebet._urllib_get_diagnostic(
+            "https://www.forebet.com/x", 5, {"User-Agent": "test"})
+        assert result["ok"] is True
+        assert result["status"] == 200
+        assert result["headers"] == {"Server": "nginx",
+                                     "Content-Type": "application/json"}
+        # Set-Cookie is never persisted (owner directive: no sensitive
+        # headers in a public CI annotation).
+        assert "Set-Cookie" not in result["headers"]
+        assert result["body"] == b'[[{"id": 1}]]'
+
+    def test_urllib_get_diagnostic_reports_the_http_status_on_an_error_response(
+            self, monkeypatch):
+        import urllib.error
+        from slumdog import forebet
+
+        def _boom(*a, **k):
+            raise urllib.error.HTTPError(
+                "https://www.forebet.com/x", 403, "Forbidden",
+                {"Server": "cloudflare", "CF-Ray": "abc-DUR"}, None)
+
+        monkeypatch.setattr(forebet.urllib.request, "urlopen", _boom)
+        result = forebet._urllib_get_diagnostic(
+            "https://www.forebet.com/x", 5, {"User-Agent": "test"})
+        assert result["ok"] is False
+        assert result["status"] == 403
+        assert result["headers"]["Server"] == "cloudflare"
+        assert result["headers"]["CF-Ray"] == "abc-DUR"
+        assert "403" in result["error"]
+
+    def test_urllib_get_diagnostic_reports_no_status_on_a_connection_failure(
+            self, monkeypatch):
+        from slumdog import forebet
+
+        def _boom(*a, **k):
+            raise TimeoutError("connection timed out")
+
+        monkeypatch.setattr(forebet.urllib.request, "urlopen", _boom)
+        result = forebet._urllib_get_diagnostic(
+            "https://www.forebet.com/x", 5, {"User-Agent": "test"})
+        assert result["ok"] is False
+        assert result["status"] is None
+        assert "TimeoutError" in result["error"]
+
+    def test_direct_get_diagnostic_never_raises_and_reports_every_attempt(
+            self, monkeypatch):
+        from slumdog import forebet
+
+        monkeypatch.setattr(
+            forebet, "_urllib_get_diagnostic",
+            lambda *a, **k: {"ok": False, "transport": "urllib",
+                             "status": 403, "headers": {}, "error": "HTTP 403"})
+        monkeypatch.setattr(
+            "importlib.util.find_spec", lambda name: None)
+        result = forebet.direct_get_diagnostic("https://www.forebet.com/x", timeout=5)
+        assert result["ok"] is False
+        assert result["status"] == 403
+        assert len(result["attempts"]) == 1
+        assert result["attempts"][0]["transport"] == "urllib"
+        assert "body" not in result["attempts"][0]
+
+    def test_direct_get_diagnostic_falls_back_to_curl_cffi_when_urllib_fails(
+            self, monkeypatch):
+        from slumdog import forebet
+
+        monkeypatch.setattr(
+            forebet, "_urllib_get_diagnostic",
+            lambda *a, **k: {"ok": False, "transport": "urllib",
+                             "status": None, "headers": {},
+                             "error": "URLError: refused"})
+        monkeypatch.setattr("importlib.util.find_spec", lambda name: object())
+        monkeypatch.setattr(
+            forebet, "_cffi_get_diagnostic",
+            lambda url, impersonate, timeout: {
+                "ok": True, "transport": f"curl_cffi:{impersonate}",
+                "status": 200, "headers": {}, "body": b"real body"})
+        result = forebet.direct_get_diagnostic("https://www.forebet.com/x", timeout=5)
+        assert result["ok"] is True
+        assert result["status"] == 200
+        assert result["body"] == b"real body"
+        # Both the failed urllib attempt and the successful curl_cffi
+        # attempt are recorded — nothing about the path taken is hidden.
+        assert len(result["attempts"]) == 2
+        assert result["attempts"][0]["transport"] == "urllib"
+        assert result["attempts"][1]["ok"] is True
+
+    def test_relay_get_diagnostic_markdown_mode_unwraps_on_success(
+            self, monkeypatch):
+        from slumdog import forebet
+
+        wrapped = (
+            b"Title: \n\nURL Source: https://www.forebet.com/x\n\n"
+            b"Markdown Content:\n[[{\"id\": 1, \"padding\": \"enough-bytes-to-pass\"}]]"
+        )
+        monkeypatch.setattr(
+            forebet, "_urllib_get_diagnostic",
+            lambda url, timeout, headers: {
+                "ok": True, "transport": "urllib", "status": 200,
+                "headers": {}, "body": wrapped})
+        result = forebet.relay_get_diagnostic(
+            "https://r.jina.ai/https://www.forebet.com/x", markdown=True,
+            expected_url="https://www.forebet.com/x", timeout=5)
+        assert result["ok"] is True
+        assert result["body"] == \
+            b'[[{"id": 1, "padding": "enough-bytes-to-pass"}]]'
+
+    def test_relay_get_diagnostic_markdown_mode_reports_unwrap_failure(
+            self, monkeypatch):
+        from slumdog import forebet
+
+        monkeypatch.setattr(
+            forebet, "_urllib_get_diagnostic",
+            lambda url, timeout, headers: {
+                "ok": True, "transport": "urllib", "status": 200,
+                "headers": {}, "body": b"not a reader wrapper at all"})
+        result = forebet.relay_get_diagnostic(
+            "https://r.jina.ai/https://www.forebet.com/x", markdown=True,
+            expected_url="https://www.forebet.com/x", timeout=5)
+        assert result["ok"] is False
+        assert "unwrap failed" in result["error"]
+
+    def test_relay_get_diagnostic_html_mode_returns_the_raw_body(
+            self, monkeypatch):
+        from slumdog import forebet
+
+        monkeypatch.setattr(
+            forebet, "_urllib_get_diagnostic",
+            lambda url, timeout, headers: {
+                "ok": True, "transport": "urllib", "status": 200,
+                "headers": {}, "body": b"<html>board</html>"})
+        result = forebet.relay_get_diagnostic(
+            "https://r.jina.ai/https://www.forebet.com/en/x", markdown=False,
+            timeout=5)
+        assert result["ok"] is True
+        assert result["body"] == b"<html>board</html>"

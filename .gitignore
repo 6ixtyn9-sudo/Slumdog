@@ -31,6 +31,16 @@ data/reports/shadow/**/*.tar.gz
 data/reports/shadow_event_day/**/raw_bodies/*
 data/reports/shadow_event_day/**/*.tar.gz
 
+# R1 scorecard (offline, from committed evidence only -- slumdog.cli
+# r1-scorecard / analyze.r1_scorecard). Unlike analysis_*.json/.md (a
+# different, uncommitted analyze.py output), this one is explicitly
+# committed per owner instruction so the finding persists without needing
+# a re-run to review.
+!data/reports/r1_scorecard_*.json
+!data/reports/r1_scorecard_*.md
+!data/reports/r1_backtest_*.json
+!data/reports/r1_backtest_*.md
+
 # Settlement evidence: commit receipts, exclude raw capture bodies.
 data/settlement_evidence/*
 !data/settlement_evidence/.gitkeep

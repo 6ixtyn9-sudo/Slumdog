@@ -1,0 +1,330 @@
+{
+  "generated_for_date": "2026-09-28",
+  "method": {
+    "grading_contract": "reuses shadow_settle.grade_underdog_win unmodified: VOID/NO_CONTEST/CANCELLED/ABANDONED -> UNRESOLVED (excluded); a settled draw -> FAILURE; missing winner or missing pick identity -> UNRESOLVED (never fabricated as a loss)",
+    "interval": "Wilson score interval, 95% two-sided",
+    "r1_definition": "a grade row with considered_status == 'PRIMARY_SHADOW_SELECTION' (equivalently rank_within_sport_day == 1); verified 1:1 on every committed row this scorecard has ever read",
+    "significance_floor": 30
+  },
+  "tracks": {
+    "EVENT_DAY": {
+      "available": false,
+      "note": "no data/reports/shadow_event_day directory exists in this checkout \u2014 no real run has ever been committed on this track. This is the finding, reported plainly, not papered over.",
+      "track": "EVENT_DAY"
+    },
+    "STANDARD": {
+      "available": true,
+      "baselines_same_rows": {
+        "always_favourite_same_rows": {
+          "failures": 25,
+          "hit_rate": 0.4318,
+          "n": 44,
+          "note": "a settled draw fails BOTH the underdog bet and the favourite bet (outright win only, per AGENTS.md invariant 1-3), so this row's successes+failures need not mirror our_r1_pick's exactly even though both are graded on the identical 44 matches (6 of which were draws)",
+          "significant_n": true,
+          "successes": 19,
+          "wilson_95_hi": 0.5778,
+          "wilson_95_lo": 0.2968
+        },
+        "always_underdog_same_rows": {
+          "failures": 25,
+          "hit_rate": 0.4318,
+          "n": 44,
+          "note": "identical to our_r1_pick by construction: every R1 row's pick IS the underdog of its match, so 'always bet the underdog' on these SAME rows cannot differ from the R1 outcome itself. Included because the owner asked for it explicitly as an anchor line, not because it is informative on its own \u2014 see cohort_wide_underdog_rate below for a baseline that actually differs.",
+          "significant_n": true,
+          "successes": 19,
+          "wilson_95_hi": 0.5778,
+          "wilson_95_lo": 0.2968
+        },
+        "forebet_pick_same_rows": {
+          "failures": 22,
+          "hit_rate": 0.3889,
+          "n": 36,
+          "rows_missing_forebet_pick": 24,
+          "significant_n": true,
+          "successes": 14,
+          "wilson_95_hi": 0.5514,
+          "wilson_95_lo": 0.2478
+        },
+        "our_r1_pick": {
+          "failures": 25,
+          "hit_rate": 0.4318,
+          "n": 44,
+          "note": "this IS the headline R1 rate above, repeated here for side-by-side comparison",
+          "settled_draws": 6,
+          "significant_n": true,
+          "successes": 19,
+          "wilson_95_hi": 0.5778,
+          "wilson_95_lo": 0.2968
+        }
+      },
+      "by_sport": {
+        "american_football": {
+          "failures": 0,
+          "hit_rate": 1.0,
+          "n": 1,
+          "note": "n too small to claim significance (n=1, floor=30); Wilson interval above is the honest range, not a confident estimate",
+          "primary_selections_recorded": 2,
+          "significant_n": false,
+          "successes": 1,
+          "wilson_95_hi": 1.0,
+          "wilson_95_lo": 0.2065
+        },
+        "baseball": {
+          "failures": 0,
+          "hit_rate": 1.0,
+          "n": 4,
+          "note": "n too small to claim significance (n=4, floor=30); Wilson interval above is the honest range, not a confident estimate",
+          "primary_selections_recorded": 8,
+          "significant_n": false,
+          "successes": 4,
+          "wilson_95_hi": 1.0,
+          "wilson_95_lo": 0.5101
+        },
+        "basketball": {
+          "failures": 1,
+          "hit_rate": 0.6667,
+          "n": 3,
+          "note": "n too small to claim significance (n=3, floor=30); Wilson interval above is the honest range, not a confident estimate",
+          "primary_selections_recorded": 5,
+          "significant_n": false,
+          "successes": 2,
+          "wilson_95_hi": 0.9385,
+          "wilson_95_lo": 0.2077
+        },
+        "cricket": {
+          "failures": 1,
+          "hit_rate": 0.0,
+          "n": 1,
+          "note": "n too small to claim significance (n=1, floor=30); Wilson interval above is the honest range, not a confident estimate",
+          "primary_selections_recorded": 2,
+          "significant_n": false,
+          "successes": 0,
+          "wilson_95_hi": 0.7935,
+          "wilson_95_lo": 0.0
+        },
+        "football": {
+          "failures": 14,
+          "hit_rate": 0.2632,
+          "n": 19,
+          "note": "n too small to claim significance (n=19, floor=30); Wilson interval above is the honest range, not a confident estimate",
+          "primary_selections_recorded": 23,
+          "significant_n": false,
+          "successes": 5,
+          "wilson_95_hi": 0.4879,
+          "wilson_95_lo": 0.1181
+        },
+        "handball": {
+          "failures": 4,
+          "hit_rate": 0.4286,
+          "n": 7,
+          "note": "n too small to claim significance (n=7, floor=30); Wilson interval above is the honest range, not a confident estimate",
+          "primary_selections_recorded": 10,
+          "significant_n": false,
+          "successes": 3,
+          "wilson_95_hi": 0.7495,
+          "wilson_95_lo": 0.1582
+        },
+        "hockey": {
+          "failures": 2,
+          "hit_rate": 0.3333,
+          "n": 3,
+          "note": "n too small to claim significance (n=3, floor=30); Wilson interval above is the honest range, not a confident estimate",
+          "primary_selections_recorded": 5,
+          "significant_n": false,
+          "successes": 1,
+          "wilson_95_hi": 0.7923,
+          "wilson_95_lo": 0.0615
+        },
+        "rugby": {
+          "failures": 1,
+          "hit_rate": 0.6667,
+          "n": 3,
+          "note": "n too small to claim significance (n=3, floor=30); Wilson interval above is the honest range, not a confident estimate",
+          "primary_selections_recorded": 4,
+          "significant_n": false,
+          "successes": 2,
+          "wilson_95_hi": 0.9385,
+          "wilson_95_lo": 0.2077
+        },
+        "volleyball": {
+          "failures": 2,
+          "hit_rate": 0.3333,
+          "n": 3,
+          "note": "n too small to claim significance (n=3, floor=30); Wilson interval above is the honest range, not a confident estimate",
+          "primary_selections_recorded": 3,
+          "significant_n": false,
+          "successes": 1,
+          "wilson_95_hi": 0.7923,
+          "wilson_95_lo": 0.0615
+        }
+      },
+      "by_underdog_probability_band": {
+        "0.20-0.30": {
+          "failures": 6,
+          "hit_rate": 0.25,
+          "n": 8,
+          "note": "n too small to claim significance (n=8, floor=30); Wilson interval above is the honest range, not a confident estimate",
+          "primary_selections_recorded": 11,
+          "significant_n": false,
+          "successes": 2,
+          "wilson_95_hi": 0.5907,
+          "wilson_95_lo": 0.0715
+        },
+        "0.30-0.40": {
+          "failures": 9,
+          "hit_rate": 0.25,
+          "n": 12,
+          "note": "n too small to claim significance (n=12, floor=30); Wilson interval above is the honest range, not a confident estimate",
+          "primary_selections_recorded": 13,
+          "significant_n": false,
+          "successes": 3,
+          "wilson_95_hi": 0.5323,
+          "wilson_95_lo": 0.0889
+        },
+        "0.40+": {
+          "failures": 10,
+          "hit_rate": 0.5833,
+          "n": 24,
+          "note": "n too small to claim significance (n=24, floor=30); Wilson interval above is the honest range, not a confident estimate",
+          "primary_selections_recorded": 38,
+          "significant_n": false,
+          "successes": 14,
+          "wilson_95_hi": 0.7553,
+          "wilson_95_lo": 0.3883
+        },
+        "<0.20": {
+          "failures": 0,
+          "hit_rate": null,
+          "n": 0,
+          "note": "n=0 \u2014 no settled rows; nothing to report",
+          "primary_selections_recorded": 0,
+          "significant_n": false,
+          "successes": 0,
+          "wilson_95_hi": null,
+          "wilson_95_lo": null
+        },
+        "unknown": {
+          "failures": 0,
+          "hit_rate": null,
+          "n": 0,
+          "note": "n=0 \u2014 no settled rows; nothing to report",
+          "primary_selections_recorded": 0,
+          "significant_n": false,
+          "successes": 0,
+          "wilson_95_hi": null,
+          "wilson_95_lo": null
+        }
+      },
+      "cohort_wide_underdog_rate_supplementary": {
+        "failures": 1396,
+        "hit_rate": 0.1803,
+        "n": 1703,
+        "note": "supplementary, NOT one of the three required same-row baselines \u2014 a different, larger row set (every R2-eligible candidate any rank, not just the rank-1 pick actually selected).",
+        "significant_n": true,
+        "successes": 307,
+        "wilson_95_hi": 0.1992,
+        "wilson_95_lo": 0.1627
+      },
+      "coverage": {
+        "by_sport": {
+          "american_football": {
+            "sport_days_attempted": 3,
+            "sport_days_with_r1": 2
+          },
+          "baseball": {
+            "sport_days_attempted": 8,
+            "sport_days_with_r1": 8
+          },
+          "basketball": {
+            "sport_days_attempted": 8,
+            "sport_days_with_r1": 5
+          },
+          "cricket": {
+            "sport_days_attempted": 4,
+            "sport_days_with_r1": 2
+          },
+          "football": {
+            "sport_days_attempted": 29,
+            "sport_days_with_r1": 28
+          },
+          "handball": {
+            "sport_days_attempted": 13,
+            "sport_days_with_r1": 10
+          },
+          "hockey": {
+            "sport_days_attempted": 7,
+            "sport_days_with_r1": 5
+          },
+          "mma": {
+            "sport_days_attempted": 1,
+            "sport_days_with_r1": 0
+          },
+          "rugby": {
+            "sport_days_attempted": 5,
+            "sport_days_with_r1": 4
+          },
+          "volleyball": {
+            "sport_days_attempted": 5,
+            "sport_days_with_r1": 3
+          }
+        },
+        "note": "'attempted' means this sport appeared in that date's sport_day_summary at all \u2014 a sport that failed to fetch entirely that day (WAF block, timing hold, etc.) never appears here and is not counted as an attempt; see HANDOFF.md / docs/STATE.md for the fetch-failure history this coverage table cannot see.",
+        "total_sport_days_attempted": 83,
+        "total_sport_days_with_r1": 67
+      },
+      "overall": {
+        "failures": 25,
+        "hit_rate": 0.4318,
+        "n": 44,
+        "settled_draws": 6,
+        "significant_n": true,
+        "successes": 19,
+        "wilson_95_hi": 0.5778,
+        "wilson_95_lo": 0.2968
+      },
+      "scope": {
+        "note": "only target dates with a committed settlement.json are scored; 7 additional date(s) have selections but no settlement yet and are excluded from every rate below (not zero-filled, not guessed).",
+        "settled_target_date_count": 23,
+        "settled_target_date_range": [
+          "2026-09-02",
+          "2026-09-26"
+        ],
+        "settled_target_dates": [
+          "2026-09-02",
+          "2026-09-05",
+          "2026-09-06",
+          "2026-09-07",
+          "2026-09-08",
+          "2026-09-09",
+          "2026-09-10",
+          "2026-09-11",
+          "2026-09-12",
+          "2026-09-13",
+          "2026-09-14",
+          "2026-09-15",
+          "2026-09-16",
+          "2026-09-17",
+          "2026-09-18",
+          "2026-09-19",
+          "2026-09-20",
+          "2026-09-21",
+          "2026-09-22",
+          "2026-09-23",
+          "2026-09-24",
+          "2026-09-25",
+          "2026-09-26"
+        ],
+        "unsettled_target_dates_excluded": [
+          "2026-09-27",
+          "2026-09-28",
+          "2026-09-29",
+          "2026-09-30",
+          "2026-10-01",
+          "2026-10-02",
+          "2026-10-03"
+        ]
+      },
+      "track": "STANDARD"
+    }
+  }
+}

@@ -51,6 +51,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -67,6 +68,128 @@ from pathlib import Path
 STANDARD_SHADOW_SUBDIR = "shadow"
 EVENT_DAY_SHADOW_SUBDIR = "shadow_event_day"
 EVENT_DAY_CONFIG = "config/shadow_evaluator_event_day.json"
+
+
+def _capture_timing_logger(phase: str, target_date: str):
+    """A ``ForebetCollector.capture_selected(on_capture_timing=...)``
+    callback that prints one stderr line per sport-date the moment it
+    finishes (elapsed seconds, request count, outcome classification).
+
+    Priority 1 (2026-09-28): Forward Shadow #33 (run 36426785929) was
+    cancelled after 92 minutes of complete stderr silence following its
+    last printed line — nobody could tell which stage, sport, or date the
+    time went into, because nothing printed anything until a whole stage
+    finished (or never printed at all if cancelled mid-stage). This closes
+    that gap: each line lands in the job log the instant it happens, so a
+    killed run still shows exactly how far it got and where the time went,
+    even though the receipt file for the in-flight date never gets
+    written. ``phase`` distinguishes which driver stage this is (the
+    capture_timing dict itself only knows the sport, not the caller).
+    """
+    def _log(entry: dict) -> None:
+        print(
+            f"    [{phase}:{target_date}] {entry['sport']}: "
+            f"{entry['outcome']} "
+            f"(elapsed={entry['elapsed_seconds']}s "
+            f"requests={entry['requests']})",
+            file=sys.stderr,
+        )
+    return _log
+
+
+def _annotation_escape(text: str) -> str:
+    """Escape a value for a GitHub Actions workflow command.
+
+    Ported from ``scripts/probe_kickoff_timezone.py`` — same tool, same
+    escaping rules, no reason for two implementations to drift apart.
+    """
+    return (text.replace("%", "%25").replace("\r", "%0D")
+                .replace("\n", "%0A").replace("::", "%3A%3A"))
+
+
+#: Run 36426785929 (Forward Shadow #33) is unreadable to this day: its only
+#: annotations are the two GitHub adds automatically on cancellation
+#: ("The run was canceled by @owner"). Everything it actually did — which
+#: date, which sport, how long, captured or refused — lived only in stdout
+#: and the 30-day artifact, both of which need a repo ADMIN's own signed URL
+#: to read (confirmed 2026-09-28: an ANONYMOUS request to
+#: /actions/runs/<id>/logs on this public repo gets 403 "Must have admin
+#: rights to Repository" — repo visibility never mattered, only who can
+#: mint that specific URL). Annotations, by contrast, are anonymous-
+#: readable forever (`/check-runs/<job_id>/annotations`, verified the same
+#: day with no credential at all) — exactly what scripts/probe_kickoff_
+#: timezone.py already relies on via its own ``emit_section``. This gives
+#: the batch driver the same property: one ::notice per phase as it
+#: finishes, so a run killed at the 15-minute (probe) or job-timeout
+#: (batch) wall — or cancelled outright — still leaves a readable trail
+#: nobody needs to ask for.
+MAX_NOTICE_CHARS = 2600
+
+
+def emit_notice(title: str, payload) -> None:
+    """Print one GitHub Actions ``::notice`` the moment ``payload`` exists.
+
+    A no-op outside Actions (``GITHUB_ACTIONS`` unset), so local runs and
+    tests without that env var stay silent by default — set it to exercise
+    this in a test. Truncates like the probe does: a single annotation
+    silently truncates around a few thousand characters, and the useful
+    part of a phase's result is usually the summary counts near the front,
+    not whatever list happens to be longest.
+    """
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    if not payload:
+        return
+    blob = json.dumps(payload, sort_keys=True, default=str)[:MAX_NOTICE_CHARS]
+    print(f"::notice title=forward_shadow:{title}::{_annotation_escape(blob)}",
+          flush=True)
+
+
+def canary_gate(*, timeout: int = 45) -> dict:
+    """One cheap, standalone sample of the canary (football's
+    tz=0 JSON) — see ``slumdog.forebet.sample_canary``'s docstring for the
+    full rationale. Wrapped here, rather than calling ``sample_canary``
+    directly from ``main()``, purely so a test can monkeypatch
+    ``forward_shadow_batch.canary_gate`` the same way it already
+    monkeypatches ``process_date`` — no import-path knowledge required.
+
+    Local import: this module is meant to import even before ``slumdog``
+    is installed (see the module docstring's constants above); the network
+    call itself only happens when this function actually runs.
+    """
+    from slumdog.forebet import sample_canary
+    return sample_canary(timeout=timeout)
+
+
+def summarize_capture_timing(entries: list[dict] | None) -> dict:
+    """Roll up one date's per-sport ``capture_timing`` into one small dict.
+
+    A single target date can capture a dozen-plus sports; annotating each
+    one for every one of the forward pass's several target dates would
+    blow well past what a job's annotations can usefully carry. This is
+    the "compact roll-up" — total requests and elapsed time (the two
+    numbers Priority 1's cost regression is actually about) plus a count
+    per outcome family, not a full per-sport breakdown. The per-sport
+    detail still exists: it is what ``_capture_timing_logger`` already
+    prints to stderr, one line per sport as it finishes.
+    """
+    entries = entries or []
+    by_outcome: dict[str, int] = {}
+    for entry in entries:
+        outcome = str(entry.get("outcome", "UNKNOWN"))
+        # Group by outcome FAMILY (the part before ":"), not the exact
+        # string — "CAPTURED:relay_columns" and "CAPTURED:direct" are the
+        # same answer to "did this sport-date produce something usable".
+        family = outcome.split(":", 1)[0]
+        by_outcome[family] = by_outcome.get(family, 0) + 1
+    return {
+        "sports": len(entries),
+        "total_requests": sum(e.get("requests", 0) or 0 for e in entries),
+        "total_elapsed_seconds": round(
+            sum(e.get("elapsed_seconds", 0.0) or 0.0 for e in entries), 1),
+        "by_outcome": by_outcome,
+    }
+
 
 # Single source of truth for every SMALL evidence file this pipeline can
 # write and that must survive the runner (the scoped git waiver in AGENTS.md:
@@ -719,9 +842,15 @@ def run_refresh_for_date(
             repo_root / "data" / "reports" / "shadow" / target_date / run_id)
         entry["excluded_frozen"] = len(exclude_ids)
 
+        # Same dead-parameter bug as run_capture (see its NOTE): forward
+        # pause_seconds through so this stage is also paced and timed.
+        # Deliberately does NOT pass circuit_breaker_columns — see
+        # run_capture's docstring on why the breaker is opt-in per stage.
         collector = ForebetCollector(root=repo_root, timeout=timeout, workers=1)
         collector.capture_selected(
-            target_date, force=True, receipt_name=receipt_name)
+            target_date, force=True, receipt_name=receipt_name,
+            pause_seconds=pause_seconds,
+            on_capture_timing=_capture_timing_logger("refresh", target_date))
 
         exclude_path = Path(tempfile.mkstemp(
             prefix="refresh_exclude_", suffix=".json",
@@ -1016,7 +1145,8 @@ def run_event_day_for_date(
         collector.capture_selected(
             target_date, selected_sports,
             force=True, receipt_name=receipt_name,
-            pause_seconds=pause_seconds)
+            pause_seconds=pause_seconds,
+            on_capture_timing=_capture_timing_logger("event_day", target_date))
         try:
             receipt = json.loads((reports_dir / receipt_name).read_text())
             entry["captured_sports"] = len(receipt.get("captured", []))
@@ -1062,14 +1192,74 @@ def run_capture(target_date: str, repo_root: Path, *, pause_seconds: int = 62, t
 
     Uses the existing collector with workers=1 and 62s pauses.
     Returns the capture receipt dict.
+
+    This is the D+2..D+6 forward-pass call site, and the ONLY one that
+    opts into the column-route circuit breaker (Priority 1, scoped
+    2026-09-28): most sport-dates this far out genuinely have no board
+    yet, so a clean "not published" refusal on the first two probed
+    columns is real signal here. run_refresh_for_date (T+1/T+2, near-term)
+    and run_event_day_for_date (today) deliberately do NOT pass this —
+    their boards usually already exist, and a false trip there would
+    silently cost a real pick or a real grade instead of a wasted probe.
+
+    Also the ONLY call site gated by the publication-horizon check
+    (Priority 1, item v, 2026-09-28, ``slumdog.horizon``): before any
+    request is issued, each sport is checked against its own observed
+    forward-reachability ceiling (computed offline from every committed
+    capture receipt — see ``horizon.compute_observed_horizons``) and
+    dropped from this date's ``sports`` list if the offset has never once
+    been confirmed reachable for it. This is deliberately narrower than a
+    fixed "N days ahead" table: most sports here turn out to have been
+    confirmed reachable at every offset this pass ever requests (their
+    boards are calendar-driven, not offset-gated), so the gate mostly
+    protects against sports with zero confirmed forward reachability at
+    all (e.g. esports) and against any future widening of ``--dates``
+    past what has actually been observed. Every decision — allowed and
+    refused — is written into this date's receipt under
+    ``horizon_gate`` so the refusal (and its evidence) is auditable from
+    the committed artifact itself, not just this function's return value.
     """
     from slumdog.forebet import ForebetCollector
+    from slumdog.horizon import compute_observed_horizons, filter_sports_by_horizon
+    from slumdog.sports import SPORTS
 
-    collector = ForebetCollector(root=repo_root, timeout=timeout, workers=1)
-    captures = collector.capture_selected(target_date)
+    as_of_date = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    horizons = compute_observed_horizons(repo_root)
+    allowed_sports, horizon_decisions = filter_sports_by_horizon(
+        list(SPORTS), target_date, as_of_date, horizons)
+    refused = [d for d in horizon_decisions if not d.allowed]
+
+    # NOTE (found 2026-09-28, while wiring per-sport-date timing): this
+    # function accepted `pause_seconds` and its docstring above claimed
+    # "62s pauses", but nothing below ever forwarded it to
+    # capture_selected() — so this call ran through capture_selected's
+    # UNTIMED, UNPACED parallel branch (ThreadPoolExecutor, workers=1, so
+    # serial in effect but with no inter-board pause and none of
+    # capture_selected's `capture_timing` instrumentation, which only
+    # exists on the pause_seconds>0 serial path). Fixed here: the forward
+    # pass is exactly the stage the new instrumentation and the circuit
+    # breaker need visible.
+    collector = ForebetCollector(root=repo_root, timeout=timeout, workers=1,
+                                 circuit_breaker_columns=2,
+                                 circuit_breaker_attempts=1)
+    captures = collector.capture_selected(
+        target_date, sports=allowed_sports, pause_seconds=pause_seconds,
+        on_capture_timing=_capture_timing_logger("forward", target_date))
     receipt_path = repo_root / "data" / "reports" / f"capture_{target_date}.json"
     if receipt_path.is_file():
-        return json.loads(receipt_path.read_text())
+        receipt = json.loads(receipt_path.read_text())
+        receipt["horizon_gate"] = {
+            "as_of_date": as_of_date,
+            "method": (
+                "slumdog.horizon.filter_sports_by_horizon, evaluated "
+                "against every committed data/reports/capture_*.json "
+                "receipt at call time (no hardcoded table)"),
+            "refused": [d.to_dict() for d in refused],
+            "allowed_count": len(allowed_sports),
+            "refused_count": len(refused),
+        }
+        receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True))
+        return receipt
     return {
         "target_date": target_date,
         "captured": [{"sport": c.sport, "sha256": c.sha256} for c in captures],
@@ -1230,6 +1420,20 @@ def process_date(
             "captured": captured_count,
             "failures": failure_count,
         }
+        # The receipt already carries capture_timing (Priority 1, this
+        # session) — roll it up here so a killed run's per-date annotation
+        # (see main()'s forward-pass loop) shows the cost, not just the
+        # counts.
+        result["capture_timing_summary"] = summarize_capture_timing(
+            capture_receipt.get("capture_timing"))
+        # Recorded for every date (Priority 1, item iii correction,
+        # 2026-09-28): whether football (the canary) was itself refused
+        # this date's capture. A date whose canary is down means none of
+        # this date's other COVERAGE_GAP sports can be read as "not
+        # published" — see forebet.ForebetCollector.capture_selected's
+        # _canary_state, which already applied that correction to the
+        # receipt above before this function ever saw it.
+        result["canary"] = capture_receipt.get("canary")
 
         if captured_count == 0:
             result["status"] = "NO_CAPTURES"
@@ -1333,6 +1537,14 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"    Error: {sr['error']}", file=sys.stderr)
         else:
             print("Settlement backlog: nothing overdue", file=sys.stderr)
+        emit_notice("settlement", {
+            "count": len(settlement_results),
+            "settled": sum(1 for r in settlement_results
+                          if r["status"] == "SETTLED"),
+            "failed": sum(1 for r in settlement_results
+                         if r["status"] == "SETTLEMENT_FAILED"),
+            "dates": [r["target_date"] for r in settlement_results],
+        })
 
         # Completion pass second: revisit recently settled runs whose
         # one-shot D+1 grade left rows UNSETTLED/UNRESOLVED (typically
@@ -1368,6 +1580,17 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"    Error: {cr['error']}", file=sys.stderr)
         else:
             print("Settlement completion: nothing due", file=sys.stderr)
+        emit_notice("completion", {
+            "count": len(completion_results),
+            "supplements_written": sum(
+                1 for r in completion_results
+                if r["status"] == "SUPPLEMENT_WRITTEN"),
+            "resolved_successes": sum(
+                r.get("resolved_successes", 0) for r in completion_results),
+            "resolved_failures": sum(
+                r.get("resolved_failures", 0) for r in completion_results),
+            "dates": [r["target_date"] for r in completion_results],
+        })
 
         # Delta settlement third: one-shot grade of the selections_delta_*
         # payloads the daily refresh appended to the runs settled above.
@@ -1402,6 +1625,12 @@ def main(argv: list[str] | None = None) -> int:
                      if dr.get("deltas_graded") is not None and
                      dr["status"] == "DELTAS_GRADED" else ""),
                   file=sys.stderr)
+        emit_notice("delta_settlement", {
+            "count": len(delta_settlement_results),
+            "graded": sum(r.get("deltas_graded", 0)
+                         for r in delta_settlement_results),
+            "dates": [r["target_date"] for r in delta_settlement_results],
+        })
 
     # Daily refresh (near-term re-capture, owner directive 2026-09-22):
     # re-snapshot the T+1..T+N dates that already hold a completed run so
@@ -1425,6 +1654,13 @@ def main(argv: list[str] | None = None) -> int:
                 + (f" [{rr['error']}]" if rr.get("error") else ""),
                 file=sys.stderr,
             )
+        emit_notice("refresh", {
+            "count": len(refresh_results),
+            "deltas_written": sum(1 for r in refresh_results
+                                  if r["status"] == "DELTA_WRITTEN"),
+            "new_events": sum(r.get("new_events", 0) for r in refresh_results),
+            "dates": [r["target_date"] for r in refresh_results],
+        })
 
     # Event-day track (owner decision 2026-09-26). Runs BEFORE the
     # forward pass: today's picks are the time-critical ones, and the forward
@@ -1462,13 +1698,55 @@ def main(argv: list[str] | None = None) -> int:
             + (f" [{entry['error']}]" if entry.get("error") else ""),
             file=sys.stderr,
         )
+        emit_notice("event_day", {
+            "settlement_count": len(event_day_settlement),
+            "target_date": entry.get("target_date"),
+            "status": entry.get("status"),
+            "r1_count": entry.get("r1_count"),
+            "sports_with_r1": entry.get("sports_with_r1"),
+            "selection_count": entry.get("selection_count"),
+            "error": entry.get("error"),
+        })
 
     targets = compute_target_dates(args.dates)
     print(f"Forward shadow batch: {len(targets)} dates starting from {targets[0]}", file=sys.stderr)
     print(f"Repository root: {repo_root}", file=sys.stderr)
 
+    # Canary-first abort (owner directive, 2026-09-28, after two consecutive
+    # relay-path WAF blocks): "path availability, not request count, may be
+    # the binding constraint." Sample before EVERY date this loop is about
+    # to spend a capture budget on — the first sample covers "before the
+    # forward pass" (nothing has been requested yet), each subsequent one
+    # covers "periodically during it". A run 36426785929-style two hours
+    # (every one of ~70 sport-dates grinding its full retry budget against
+    # a wall) is now four minutes and an annotation instead. Skipped in
+    # --dry-run: no capture budget is at risk there, and every existing
+    # dry-run test predates this gate.
+    canary_samples: list[dict] = []
+    canary_abort: dict | None = None
     results = []
     for i, target_date in enumerate(targets):
+        if not args.dry_run:
+            sample = canary_gate(timeout=args.capture_timeout)
+            canary_samples.append(sample)
+            if sample.get("healthy") is False:
+                canary_abort = {
+                    "aborted_before_date": target_date,
+                    "date_index": f"{i + 1}/{len(targets)}",
+                    "dates_completed": len(results),
+                    "dates_skipped": targets[i:],
+                    "canary": sample,
+                }
+                print(
+                    f"Forward pass ABANDONED on a canary path block before "
+                    f"{target_date} ({i + 1}/{len(targets)}): "
+                    f"{sample.get('reason')} — {len(results)} date(s) "
+                    f"already completed are kept; {len(targets) - i} "
+                    "date(s) not attempted.",
+                    file=sys.stderr,
+                )
+                emit_notice("canary_abort", canary_abort)
+                break
         if i > 0:
             # Pause between dates (not between sports — that's handled by the collector)
             time.sleep(args.pause_seconds)
@@ -1487,6 +1765,22 @@ def main(argv: list[str] | None = None) -> int:
             print("  Bundle: VERIFIED", file=sys.stderr)
         if result.get("error"):
             print(f"  Error: {result['error']}", file=sys.stderr)
+        # One notice per date, emitted the instant this date is done —
+        # this is the forward pass's own stage (Forward Shadow #33 ran for
+        # 1h56m and left zero trace of which date/sport it had reached
+        # when it was killed). Do NOT move this after the loop: a run
+        # killed on date 3 of 5 must still show dates 1-2 happened.
+        emit_notice(f"forward_date:{target_date}", {
+            "date_index": f"{i + 1}/{len(targets)}",
+            "target_date": target_date,
+            "status": result.get("status"),
+            "run_id": result.get("run_id"),
+            "bundle_verified": result.get("bundle_verified"),
+            "capture": result.get("capture"),
+            "capture_timing": result.get("capture_timing_summary"),
+            "canary": result.get("canary"),
+            "error": result.get("error"),
+        })
 
     # Write batch receipt
     batch_receipt = {
@@ -1500,6 +1794,20 @@ def main(argv: list[str] | None = None) -> int:
         "refresh": refresh_results,
         "event_day": event_day_results,
         "event_day_settlement": event_day_settlement,
+        # Canary samples taken before every forward-pass date (see
+        # canary_gate() above) plus, when the pass was abandoned on a
+        # canary path block rather than completing/exhausting its target
+        # dates normally, the abort record itself — the "was abandoned on
+        # a canary path block" statement the owner asked every run to be
+        # able to make, with sample times attached. NOTE (2026-09-28): the
+        # canary is relay-only on a GitHub runner (direct fallback is
+        # skipped there); a block here means our path was refused, not
+        # necessarily the source.
+        "canary_gate": {
+            "samples": canary_samples,
+            "aborted": canary_abort is not None,
+            "abort": canary_abort,
+        },
         "summary": {
             "total": len(results),
             "completed": sum(1 for r in results if r["status"] == "COMPLETED"),
@@ -1558,6 +1866,8 @@ def main(argv: list[str] | None = None) -> int:
             "event_day_settled": sum(
                 1 for r in event_day_settlement if r["status"] == "SETTLED"
             ),
+            "canary_samples": len(canary_samples),
+            "canary_aborted": canary_abort is not None,
         },
     }
     receipt_path = repo_root / "data" / "reports" / "shadow" / "forward_batch_receipt.json"
@@ -1565,6 +1875,10 @@ def main(argv: list[str] | None = None) -> int:
     receipt_path.write_text(json.dumps(batch_receipt, indent=2, sort_keys=True))
     print(f"\nBatch receipt: {receipt_path}", file=sys.stderr)
     print(json.dumps(batch_receipt["summary"], indent=2, sort_keys=True))
+    # Last notice of the run — everything above already went out phase by
+    # phase, so this is a convenience roll-up for a run that finished
+    # cleanly, not the primary source of truth for one that didn't.
+    emit_notice("summary", batch_receipt["summary"])
     return 0
 
 

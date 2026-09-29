@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -1095,7 +1096,8 @@ class TestRunRefreshForDate:
             def __init__(self, root=None, timeout=None, workers=None):
                 pass
 
-            def capture_selected(self, target, force=False, receipt_name=None):
+            def capture_selected(self, target, force=False, receipt_name=None,
+                                 pause_seconds=0, on_capture_timing=None):
                 assert force is True
                 assert receipt_name.startswith("capture_refresh_2026-09-23_")
                 # Emulate the receipt being committed evidence on disk.
@@ -1153,7 +1155,8 @@ class TestRunRefreshForDate:
             def __init__(self, root=None, timeout=None, workers=None):
                 pass
 
-            def capture_selected(self, target, force=False, receipt_name=None):
+            def capture_selected(self, target, force=False, receipt_name=None,
+                                 pause_seconds=0, on_capture_timing=None):
                 (tmp_path / "data" / "reports" / receipt_name).write_text("{}")
 
         def _fake_evaluator(target_date, repo_root, *, receipt_name=None,
@@ -1175,7 +1178,8 @@ class TestRunRefreshForDate:
         from scripts.forward_shadow_batch import run_refresh_for_date
         _make_completed_run(tmp_path, "2026-09-23", "run0001aaaaaaaaaa")
 
-        def _boom(self, target, force=False, receipt_name=None):
+        def _boom(self, target, force=False, receipt_name=None,
+                  pause_seconds=0, on_capture_timing=None):
             raise RuntimeError("fetch exploded")
 
         monkeypatch.setattr(
@@ -1265,3 +1269,518 @@ class TestRefreshInDriverMain:
         ])
         assert rc == 0
         assert len(seen) == 3
+
+
+class TestCaptureTimingStderrLogging:
+    """Priority 1 (2026-09-28), item 3 of the owner's follow-up: a killed
+    run must still show its per-sport-date timing in the job log, not only
+    in a receipt file that may never get written for the in-flight date.
+    ``_capture_timing_logger`` is the callback wired into every
+    ``capture_selected`` call site; these tests are the "does it actually
+    print" half of that claim (the timing itself is
+    tests/test_forebet.py::TestCaptureTimingInstrumentation's job)."""
+
+    def test_the_logger_prints_one_line_naming_phase_date_sport_and_outcome(
+            self, capsys):
+        import scripts.forward_shadow_batch as fsb
+        log = fsb._capture_timing_logger("forward", "2026-10-02")
+        log({"sport": "rugby", "elapsed_seconds": 1.234, "requests": 2,
+             "outcome": "COVERAGE_GAP"})
+        err = capsys.readouterr().err
+        assert "forward:2026-10-02" in err
+        assert "rugby" in err
+        assert "COVERAGE_GAP" in err
+        assert "1.234" in err
+        assert "requests=2" in err
+
+    def test_run_capture_forwards_pause_seconds_and_wires_the_forward_logger(
+            self, tmp_path, monkeypatch, capsys):
+        # This closes a real bug found while wiring this instrumentation:
+        # run_capture() accepted `pause_seconds` and its own docstring
+        # claimed "62s pauses", but nothing forwarded it to
+        # capture_selected(), so the forward pass ran through the untimed
+        # parallel branch and none of capture_timing ever fired for it.
+        import scripts.forward_shadow_batch as fsb
+        seen = {}
+
+        class _FakeCollector:
+            def __init__(self, root=None, timeout=None, workers=None,
+                        circuit_breaker_columns=0,
+                        circuit_breaker_attempts=1):
+                seen["circuit_breaker_columns"] = circuit_breaker_columns
+
+            def capture_selected(self, target_date, sports=None, force=False,
+                                 receipt_name=None, pause_seconds=0,
+                                 on_capture_timing=None):
+                seen["pause_seconds"] = pause_seconds
+                seen["sports"] = sports
+                assert on_capture_timing is not None
+                on_capture_timing({"sport": "hockey", "elapsed_seconds": 0.5,
+                                   "requests": 2, "outcome": "CAPTURED:relay_columns"})
+                (tmp_path / "data" / "reports").mkdir(
+                    parents=True, exist_ok=True)
+                return []
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector", _FakeCollector)
+        fsb.run_capture("2026-10-02", tmp_path, pause_seconds=17)
+        assert seen["pause_seconds"] == 17
+        # The forward pass is the one call site that opts into the breaker.
+        assert seen["circuit_breaker_columns"] == 2
+        err = capsys.readouterr().err
+        assert "forward:2026-10-02" in err
+        assert "hockey" in err
+
+    def test_run_refresh_for_date_forwards_pause_seconds_and_does_not_opt_into_the_breaker(
+            self, tmp_path, monkeypatch, capsys):
+        import scripts.forward_shadow_batch as fsb
+        _make_completed_run(tmp_path, "2026-09-23", "run0001aaaaaaaaaa")
+        seen = {}
+
+        class _FakeCollector:
+            def __init__(self, root=None, timeout=None, workers=None,
+                        **kwargs):
+                # run_refresh_for_date must NOT pass circuit_breaker_columns
+                # (event-day/refresh boards usually already exist).
+                seen["init_kwargs"] = kwargs
+
+            def capture_selected(self, target, force=False, receipt_name=None,
+                                 pause_seconds=0, on_capture_timing=None):
+                seen["pause_seconds"] = pause_seconds
+                assert on_capture_timing is not None
+                on_capture_timing({"sport": "rugby", "elapsed_seconds": 0.1,
+                                   "requests": 2, "outcome": "COVERAGE_GAP"})
+                (tmp_path / "data" / "reports" / receipt_name).write_text("{}")
+
+        def _fake_evaluator(target_date, repo_root, *, receipt_name=None,
+                            exclude_events_path=None):
+            return {"run_status": "SHADOW_NO_SELECTION",
+                    "artifact_dir": str(tmp_path), "refresh_exclusion_count": 0}
+
+        monkeypatch.setattr(
+            "slumdog.forebet.ForebetCollector", _FakeCollector)
+        monkeypatch.setattr(fsb, "run_evaluator", _fake_evaluator)
+        entry = fsb.run_refresh_for_date(
+            "2026-09-23", tmp_path, pause_seconds=31,
+            base_date=dt.date(2026, 9, 22))
+        assert entry["status"] == "NO_NEW_EVENTS"
+        assert seen["pause_seconds"] == 31
+        assert "circuit_breaker_columns" not in seen["init_kwargs"]
+        err = capsys.readouterr().err
+        assert "refresh:2026-09-23" in err
+        assert "rugby" in err
+
+
+# ---------------------------------------------------------------------------
+# Check-run annotations (owner-verified 2026-09-28: raw run logs/artifacts
+# need a repo ADMIN's signed URL even on a public repo — 403 "Must have
+# admin rights to Repository" for an anonymous request — while check-run
+# annotations are anonymous-readable with no credential at all. This is why
+# run 36426785929 (Forward Shadow #33) is permanently unreadable: it emitted
+# none. Standing rule from that finding: every phase must announce its own
+# result THE MOMENT it finishes, not get bundled into one end-of-run print,
+# because the run that most needs this is the one that gets killed midway.
+# ---------------------------------------------------------------------------
+
+class TestEmitNotice:
+    def test_silent_outside_github_actions(self, monkeypatch, capsys):
+        import scripts.forward_shadow_batch as fsb
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+        fsb.emit_notice("settlement", {"count": 3})
+        out = capsys.readouterr().out
+        assert out == ""
+
+    def test_prints_a_notice_command_inside_github_actions(
+            self, monkeypatch, capsys):
+        import scripts.forward_shadow_batch as fsb
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        fsb.emit_notice("settlement", {"count": 3, "settled": 2})
+        out = capsys.readouterr().out
+        assert out.startswith("::notice title=forward_shadow:settlement::")
+        assert '"count": 3' in out
+        assert '"settled": 2' in out
+
+    def test_empty_payload_emits_nothing(self, monkeypatch, capsys):
+        import scripts.forward_shadow_batch as fsb
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        fsb.emit_notice("refresh", {})
+        fsb.emit_notice("refresh", [])
+        fsb.emit_notice("refresh", None)
+        assert capsys.readouterr().out == ""
+
+    def test_escapes_workflow_command_metacharacters(self, monkeypatch, capsys):
+        import scripts.forward_shadow_batch as fsb
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        # json.dumps already turns a real newline into the two literal
+        # characters "\n" before _annotation_escape ever sees it, so the
+        # metacharacters this needs to prove get escaped are the ones JSON
+        # leaves untouched: "::" (workflow-command delimiter) and "%".
+        fsb.emit_notice("event_day", {"error": "line1\nline2::boom%done"})
+        out = capsys.readouterr().out
+        assert out.count("\n") == 1  # only the trailing print() newline
+        assert "%3A%3A" in out
+        assert "%25" in out
+        assert "::boom" not in out
+
+    def test_escapes_a_literal_embedded_newline(self):
+        # json.dumps() never hands emit_notice a raw newline (it escapes
+        # them itself), but _annotation_escape is a small pure function in
+        # its own right — pin its behavior directly too.
+        import scripts.forward_shadow_batch as fsb
+        assert fsb._annotation_escape("a\nb\rc::d%e") == "a%0Ab%0Dc%3A%3Ad%25e"
+
+    def test_truncates_to_the_annotation_char_cap(self, monkeypatch, capsys):
+        import scripts.forward_shadow_batch as fsb
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        huge = {"dates": [f"2026-10-{i:02d}" for i in range(1, 400)]}
+        fsb.emit_notice("forward_date", huge)
+        out = capsys.readouterr().out
+        blob = out.split("::", 2)[-1]
+        assert len(blob) <= fsb.MAX_NOTICE_CHARS + len(
+            "\ntitle=forward_shadow:forward_date::")
+
+
+class TestSummarizeCaptureTiming:
+    def test_empty_input(self):
+        import scripts.forward_shadow_batch as fsb
+        summary = fsb.summarize_capture_timing(None)
+        assert summary == {
+            "sports": 0, "total_requests": 0,
+            "total_elapsed_seconds": 0.0, "by_outcome": {},
+        }
+
+    def test_totals_and_outcome_families(self):
+        import scripts.forward_shadow_batch as fsb
+        entries = [
+            {"sport": "football", "elapsed_seconds": 1.2, "requests": 3,
+             "outcome": "CAPTURED:relay_columns"},
+            {"sport": "hockey", "elapsed_seconds": 2.3, "requests": 1,
+             "outcome": "CAPTURED:direct"},
+            {"sport": "rugby", "elapsed_seconds": 0.5, "requests": 2,
+             "outcome": "COVERAGE_GAP"},
+            {"sport": "cricket", "elapsed_seconds": 0.1, "requests": 1,
+             "outcome": "REFUSED:circuit_breaker"},
+        ]
+        summary = fsb.summarize_capture_timing(entries)
+        assert summary["sports"] == 4
+        assert summary["total_requests"] == 7
+        assert summary["total_elapsed_seconds"] == 4.1
+        # Grouped by the family before ":" — both CAPTURED variants collapse.
+        assert summary["by_outcome"] == {
+            "CAPTURED": 2, "COVERAGE_GAP": 1, "REFUSED": 1,
+        }
+
+
+class TestProcessDateCarriesCaptureTimingSummary:
+    def test_capture_timing_from_the_receipt_is_rolled_up_into_the_result(
+            self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+
+        def _fake_run_capture(target_date, repo_root, *, pause_seconds=62,
+                              timeout=45):
+            return {
+                "target_date": target_date,
+                "captured": [{"sport": "football", "sha256": "x"}],
+                "failures": [],
+                "capture_timing": [
+                    {"sport": "football", "elapsed_seconds": 1.0,
+                     "requests": 2, "outcome": "CAPTURED:relay_columns"},
+                ],
+                "canary": {"sport": "football", "checked": True,
+                          "healthy": True, "reason": None},
+            }
+
+        def _fake_evaluator(target_date, repo_root, **kwargs):
+            return {"run_status": "SHADOW_NO_SELECTION",
+                    "artifact_dir": str(tmp_path)}
+
+        monkeypatch.setattr(fsb, "run_capture", _fake_run_capture)
+        monkeypatch.setattr(fsb, "run_evaluator", _fake_evaluator)
+        result = fsb.process_date("2026-09-10", tmp_path)
+        assert result["capture_timing_summary"] == {
+            "sports": 1, "total_requests": 2,
+            "total_elapsed_seconds": 1.0,
+            "by_outcome": {"CAPTURED": 1},
+        }
+        # The receipt's canary field (see forebet._canary_state) rides
+        # along into the result untouched — this is the per-date
+        # discriminator a killed run's annotation needs (see
+        # TestPhaseAnnotationOrdering / main()'s forward-pass loop).
+        assert result["canary"] == {"sport": "football", "checked": True,
+                                    "healthy": True, "reason": None}
+
+
+class TestPhaseAnnotationOrdering:
+    """The property the owner asked to have test-enforced: a phase's
+    ::notice is on the wire before the NEXT phase's work begins, so a run
+    killed between phases still shows everything that finished. Verified
+    by recording call order from both sides (the phase functions AND
+    emit_notice itself) rather than trusting stdout/stderr interleaving,
+    which pytest's capsys does not preserve across streams.
+    """
+
+    def test_settlement_notice_precedes_the_completion_pass(
+            self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+        order: list[str] = []
+
+        def _fake_settlement(*a, **k):
+            order.append("run:settlement")
+            return []
+
+        def _fake_completion(*a, **k):
+            order.append("run:completion")
+            return []
+
+        def _fake_refresh(*a, **k):
+            order.append("run:refresh")
+            return []
+
+        real_emit_notice = fsb.emit_notice
+
+        def _tracking_emit_notice(title, payload):
+            order.append(f"notice:{title}")
+            return real_emit_notice(title, payload)
+
+        monkeypatch.setattr(fsb, "run_settlement_backlog", _fake_settlement)
+        monkeypatch.setattr(fsb, "run_completion_backlog", _fake_completion)
+        monkeypatch.setattr(fsb, "run_refresh_backlog", _fake_refresh)
+        monkeypatch.setattr(fsb, "emit_notice", _tracking_emit_notice)
+
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "1", "--dry-run",
+            "--skip-event-day",
+        ])
+        assert rc == 0
+        assert order.index("run:settlement") < order.index("notice:settlement")
+        assert order.index("notice:settlement") < order.index("run:completion")
+        assert order.index("run:completion") < order.index("notice:completion")
+        assert order.index("notice:completion") < order.index("run:refresh")
+        assert order.index("run:refresh") < order.index("notice:refresh")
+
+    def test_each_forward_dates_notice_precedes_the_next_dates_capture(
+            self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+        order: list[str] = []
+
+        def _fake_process_date(target_date, repo_root, **kwargs):
+            order.append(f"process_date:{target_date}")
+            return {"target_date": target_date, "status": "SKIPPED_EXISTING",
+                    "run_id": None, "bundle_verified": False, "error": None}
+
+        real_emit_notice = fsb.emit_notice
+
+        def _tracking_emit_notice(title, payload):
+            order.append(f"notice:{title}")
+            return real_emit_notice(title, payload)
+
+        monkeypatch.setattr(fsb, "process_date", _fake_process_date)
+        monkeypatch.setattr(fsb, "emit_notice", _tracking_emit_notice)
+        # Not --dry-run, so the canary gate (added after this test was
+        # first written) would otherwise sample the network for real —
+        # keep it healthy and out of the way; the gate's own behaviour is
+        # covered by TestCanaryGateInDriverMain below.
+        monkeypatch.setattr(fsb, "canary_gate", lambda **k: {
+            "sport": "football", "checked": True, "healthy": True,
+            "reason": None, "sampled_at": "2026-09-28T00:00:00+00:00"})
+
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "3", "--pause-seconds", "0",
+            "--skip-settlement", "--skip-refresh", "--skip-event-day",
+        ])
+        assert rc == 0
+        date_notices = [e for e in order if e.startswith("notice:forward_date:")]
+        assert len(date_notices) == 3
+        # The killer property: date 1's notice is already out before date
+        # 2's process_date call even begins (and likewise 2 before 3) — a
+        # run cancelled between dates leaves every finished date behind.
+        first_date_notice_idx = order.index(date_notices[0])
+        second_date_start_idx = order.index(
+            [e for e in order if e.startswith("process_date:")][1])
+        assert first_date_notice_idx < second_date_start_idx
+        second_date_notice_idx = order.index(date_notices[1])
+        third_date_start_idx = order.index(
+            [e for e in order if e.startswith("process_date:")][2])
+        assert second_date_notice_idx < third_date_start_idx
+
+    def test_summary_notice_is_last(self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+        order: list[str] = []
+        real_emit_notice = fsb.emit_notice
+
+        def _tracking_emit_notice(title, payload):
+            order.append(title)
+            return real_emit_notice(title, payload)
+
+        monkeypatch.setattr(fsb, "emit_notice", _tracking_emit_notice)
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "1", "--dry-run",
+        ])
+        assert rc == 0
+        assert order[-1] == "summary"
+
+
+class TestCanaryGateInDriverMain:
+    """Owner directive, 2026-09-28, after two consecutive relay-path WAF
+    blocks: "path availability, not request count, may be the binding
+    constraint." ``forward_shadow_batch.py`` must sample the canary before
+    the forward pass and periodically during it, and a down canary must
+    stop the pass — with the phases that already ran (settlement etc.)
+    left intact — rather than let ~70 sport-dates grind their full retry
+    budgets against a wall the way run 36426785929 did.
+    """
+
+    def _unhealthy_sample(self, reason="football tz=0 JSON looked like "
+                                        "'challenge_page' (272 bytes)"):
+        return {"sport": "football", "checked": True, "healthy": False,
+                "reason": reason, "sampled_at": "2026-09-28T12:00:00+00:00"}
+
+    def _healthy_sample(self):
+        return {"sport": "football", "checked": True, "healthy": True,
+                "reason": None, "sampled_at": "2026-09-28T12:00:00+00:00"}
+
+    def test_a_canary_down_from_the_start_performs_no_per_sport_captures(
+            self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+
+        calls = []
+
+        def _fake_process_date(target_date, repo_root, **kwargs):
+            calls.append(target_date)
+            return {"target_date": target_date, "status": "COMPLETED"}
+
+        monkeypatch.setattr(fsb, "process_date", _fake_process_date)
+        monkeypatch.setattr(fsb, "canary_gate",
+                           lambda **k: self._unhealthy_sample())
+
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "3", "--pause-seconds", "0",
+            "--skip-settlement", "--skip-refresh", "--skip-event-day",
+        ])
+        assert rc == 0
+        # The killer property: zero per-sport captures were attempted.
+        assert calls == []
+        receipt = json.loads(
+            (tmp_path / "data/reports/shadow/forward_batch_receipt.json")
+            .read_text())
+        assert receipt["results"] == []
+        assert receipt["canary_gate"]["aborted"] is True
+        assert receipt["canary_gate"]["abort"]["dates_completed"] == 0
+        assert len(receipt["canary_gate"]["abort"]["dates_skipped"]) == 3
+        assert receipt["canary_gate"]["samples"] == [self._unhealthy_sample()]
+        assert receipt["summary"]["canary_aborted"] is True
+        assert receipt["summary"]["total"] == 0
+
+    def test_a_canary_down_mid_run_keeps_the_dates_already_completed(
+            self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+
+        calls = []
+        samples = [self._healthy_sample(), self._unhealthy_sample()]
+
+        def _fake_process_date(target_date, repo_root, **kwargs):
+            calls.append(target_date)
+            return {"target_date": target_date, "status": "COMPLETED"}
+
+        monkeypatch.setattr(fsb, "process_date", _fake_process_date)
+        monkeypatch.setattr(
+            fsb, "canary_gate", lambda **k: samples[len(calls)])
+
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "3", "--pause-seconds", "0",
+            "--skip-settlement", "--skip-refresh", "--skip-event-day",
+        ])
+        assert rc == 0
+        # First date processed normally; the gate caught the second date's
+        # pre-flight sample and stopped before it (and before the third).
+        assert calls == [calls[0]]
+        receipt = json.loads(
+            (tmp_path / "data/reports/shadow/forward_batch_receipt.json")
+            .read_text())
+        assert len(receipt["results"]) == 1
+        assert receipt["canary_gate"]["aborted"] is True
+        assert receipt["canary_gate"]["abort"]["dates_completed"] == 1
+        assert len(receipt["canary_gate"]["abort"]["dates_skipped"]) == 2
+        assert len(receipt["canary_gate"]["samples"]) == 2
+
+    def test_a_healthy_canary_throughout_never_aborts(
+            self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+
+        calls = []
+
+        def _fake_process_date(target_date, repo_root, **kwargs):
+            calls.append(target_date)
+            return {"target_date": target_date, "status": "COMPLETED"}
+
+        monkeypatch.setattr(fsb, "process_date", _fake_process_date)
+        monkeypatch.setattr(fsb, "canary_gate",
+                           lambda **k: self._healthy_sample())
+
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "3", "--pause-seconds", "0",
+            "--skip-settlement", "--skip-refresh", "--skip-event-day",
+        ])
+        assert rc == 0
+        assert len(calls) == 3
+        receipt = json.loads(
+            (tmp_path / "data/reports/shadow/forward_batch_receipt.json")
+            .read_text())
+        assert receipt["canary_gate"]["aborted"] is False
+        assert receipt["canary_gate"]["abort"] is None
+        assert len(receipt["canary_gate"]["samples"]) == 3
+        assert receipt["summary"]["canary_aborted"] is False
+
+    def test_a_canary_abort_emits_its_own_annotation(
+            self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+
+        os_environ_backup = dict(os.environ)
+        os.environ["GITHUB_ACTIONS"] = "true"
+        try:
+            notices = []
+            real_emit_notice = fsb.emit_notice
+
+            def _tracking(title, payload):
+                notices.append(title)
+                return real_emit_notice(title, payload)
+
+            monkeypatch.setattr(fsb, "process_date",
+                               lambda *a, **k: {"status": "COMPLETED"})
+            monkeypatch.setattr(fsb, "canary_gate",
+                               lambda **k: self._unhealthy_sample())
+            monkeypatch.setattr(fsb, "emit_notice", _tracking)
+
+            rc = fsb.main([
+                "--root", str(tmp_path), "--dates", "2",
+                "--pause-seconds", "0", "--skip-settlement",
+                "--skip-refresh", "--skip-event-day",
+            ])
+            assert rc == 0
+            assert "canary_abort" in notices
+            assert not any(n.startswith("forward_date:") for n in notices)
+        finally:
+            os.environ.clear()
+            os.environ.update(os_environ_backup)
+
+    def test_dry_run_never_samples_the_canary_at_all(
+            self, tmp_path, monkeypatch):
+        # Dry-run spends no capture budget, so there is nothing for the
+        # gate to protect — and every dry-run test written before this
+        # gate existed must keep passing without mocking it.
+        import scripts.forward_shadow_batch as fsb
+
+        def _boom(**k):
+            raise AssertionError("canary_gate must not run in --dry-run")
+
+        monkeypatch.setattr(fsb, "canary_gate", _boom)
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "2", "--dry-run",
+            "--skip-settlement", "--skip-refresh", "--skip-event-day",
+        ])
+        assert rc == 0
+        receipt = json.loads(
+            (tmp_path / "data/reports/shadow/forward_batch_receipt.json")
+            .read_text())
+        assert receipt["canary_gate"]["samples"] == []
+        assert receipt["canary_gate"]["aborted"] is False

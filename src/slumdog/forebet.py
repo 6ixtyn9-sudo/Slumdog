@@ -179,6 +179,156 @@ def _urllib_get(url: str, timeout: int) -> bytes:
         return response.read()
 
 
+# Headers that discriminate WHY a fetch failed (Cloudflare's CF-Ray/Server
+# identify a WAF challenge; Retry-After identifies real throttling) without
+# persisting the full response header set — some carry Set-Cookie/session
+# tokens that must never land in a public CI annotation. Owner directive,
+# 2026-09-28: "urllib=HTTPError" alone is not a finding; 403 (blocked), 429
+# (rate-limited), 503 (challenge interstitial) and 451 mean different things
+# and imply different responses.
+_DIAGNOSTIC_HEADERS = (
+    "Server", "CF-Ray", "CF-Cache-Status", "cf-mitigated", "Retry-After",
+    "Content-Type",
+)
+
+
+def _response_header_snippet(headers: Any) -> dict[str, str]:
+    if headers is None:
+        return {}
+    out: dict[str, str] = {}
+    for name in _DIAGNOSTIC_HEADERS:
+        value = headers.get(name)
+        if value:
+            out[name] = str(value)
+    return out
+
+
+def _urllib_get_diagnostic(url: str, timeout: int, headers: dict[str, str]) -> dict[str, Any]:
+    """One urllib GET that never raises: every outcome — a clean 2xx, an
+    HTTP error response, or a connection-level failure with no HTTP
+    response at all — reports whatever status code and header snippet it
+    has. See ``_DIAGNOSTIC_HEADERS`` for why the status code is the
+    finding, not the exception's class name. On success the raw body is
+    returned under ``\"body\"``; callers that only want the diagnostic
+    metadata for logging should pop it.
+    """
+    request = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return {
+                "ok": True, "transport": "urllib", "status": response.status,
+                "headers": _response_header_snippet(response.headers),
+                "body": response.read(),
+            }
+    except urllib.error.HTTPError as exc:
+        return {
+            "ok": False, "transport": "urllib", "status": exc.code,
+            "headers": _response_header_snippet(exc.headers),
+            "error": f"HTTPError {exc.code}: {exc.reason}"[:200],
+        }
+    except Exception as exc:
+        return {
+            "ok": False, "transport": "urllib", "status": None,
+            "headers": {}, "error": f"{type(exc).__name__}: {exc}"[:200],
+        }
+
+
+def _cffi_get_diagnostic(url: str, impersonate: str, timeout: int) -> dict[str, Any]:
+    """Same never-raises, status-preserving contract as
+    ``_urllib_get_diagnostic``, for one curl_cffi TLS impersonation."""
+    transport = f"curl_cffi:{impersonate}"
+    try:
+        from curl_cffi import requests as curl_requests
+    except Exception as exc:
+        return {
+            "ok": False, "transport": transport, "status": None,
+            "headers": {}, "error": f"unavailable: {type(exc).__name__}: {exc}"[:200],
+        }
+    headers = {key: value for key, value in _BROWSER_HEADERS.items() if key.lower() != "user-agent"}
+    try:
+        response = curl_requests.get(url, impersonate=impersonate, headers=headers, timeout=timeout)
+    except Exception as exc:
+        return {
+            "ok": False, "transport": transport, "status": None,
+            "headers": {}, "error": f"{type(exc).__name__}: {exc}"[:200],
+        }
+    snippet = _response_header_snippet(response.headers)
+    if response.status_code != 200:
+        return {
+            "ok": False, "transport": transport, "status": response.status_code,
+            "headers": snippet, "error": f"HTTP {response.status_code}",
+        }
+    return {
+        "ok": True, "transport": transport, "status": response.status_code,
+        "headers": snippet, "body": bytes(response.content),
+    }
+
+
+def direct_get_diagnostic(url: str, timeout: int = 40) -> dict[str, Any]:
+    """Single-attempt (no retries — a WAF challenge is a refusal, not
+    congestion) direct fetch that reports the STATUS CODE and a header
+    snippet for every transport tried, never just the last exception's
+    class name. Tries the same transport chain as ``direct_get`` (urllib,
+    then curl_cffi impersonations when installed), but never collapses a
+    failure into one opaque ``RuntimeError`` — every attempt's diagnostic
+    is kept under ``\"attempts\"``, and the first success is merged in at
+    the top level (with its raw body under ``\"body\"``).
+
+    Distinct from ``direct_get`` (production's retrying fetch, used by
+    ``fetch_with_fallback``): this is diagnostic-only, for
+    ``direct_vs_relay_probe`` and similar one-shot measurements, and
+    intentionally makes no retry attempt of its own.
+    """
+    attempts: list[dict[str, Any]] = []
+    first = _urllib_get_diagnostic(url, timeout, _BROWSER_HEADERS)
+    attempts.append({k: v for k, v in first.items() if k != "body"})
+    if first["ok"]:
+        return {**first, "attempts": attempts}
+    import importlib.util
+    if importlib.util.find_spec("curl_cffi") is not None:
+        for impersonate in _CFFI_IMPERSONATIONS:
+            attempt = _cffi_get_diagnostic(url, impersonate, timeout)
+            attempts.append({k: v for k, v in attempt.items() if k != "body"})
+            if attempt["ok"]:
+                return {**attempt, "attempts": attempts}
+    last = attempts[-1] if attempts else {}
+    return {
+        "ok": False,
+        "transport": last.get("transport"),
+        "status": last.get("status"),
+        "headers": last.get("headers", {}),
+        "error": last.get("error", "no transports attempted"),
+        "attempts": attempts,
+    }
+
+
+def relay_get_diagnostic(url: str, *, markdown: bool, expected_url: str = "",
+                          timeout: int = 45) -> dict[str, Any]:
+    """Single-attempt relay fetch with the same status/header-preserving
+    contract as ``direct_get_diagnostic`` — see its docstring for why. Set
+    ``markdown=True`` (with ``expected_url``) for the reader-mode headers
+    ``relay_get_markdown`` uses (needed for football's JSON endpoint on a
+    GitHub runner, per Edge-Factory); ``markdown=False`` for
+    ``relay_get``'s forced-HTML mode (needed for listing boards).
+    """
+    headers = (
+        {"User-Agent": "EdgeFactory/1.0", "Accept": "text/plain", "X-No-Cache": "true"}
+        if markdown else
+        {"User-Agent": "Slumdog", "Accept": "text/plain", "X-No-Cache": "true",
+         "X-Return-Format": "html"}
+    )
+    result = _urllib_get_diagnostic(url, timeout, headers)
+    if not result["ok"]:
+        return result
+    if markdown:
+        try:
+            result = {**result, "body": unwrap_reader(result["body"], expected_url)}
+        except Exception as exc:
+            return {**result, "ok": False,
+                    "error": f"unwrap failed: {type(exc).__name__}: {exc}"[:200]}
+    return result
+
+
 def fetch_with_fallback(
     relay_url: str,
     direct_url: str,
@@ -187,20 +337,39 @@ def fetch_with_fallback(
 ) -> tuple[bytes, str]:
     """Fetch via the relay, falling back to a direct request on any failure.
 
-    Returns ``(body, route)`` where route is ``"relay"`` or ``"direct"``. The
-    relay is throttled/auth-walled on shared runner IPs (football hit
-    deterministic 401s), so a direct browser-like request is the fallback.
+    Returns ``(body, route)`` where route is ``"relay"`` or ``"direct"``.
+
+    Owner finding, 2026-09-28 (direct-vs-relay probe, run 36470920157): this
+    function used to skip the direct fallback entirely on GitHub runners
+    (``on_github_runner()``), based on a measurement taken weeks earlier
+    (Edge-Factory run #503, 2026-08-20) that direct could not succeed from
+    that network. That constant went stale silently — the 2026-09-28 probe
+    found BOTH paths currently failing from a GitHub runner, for different
+    reasons (direct: a transport-level HTTPError before any response at
+    all; relay: a real response that is a Cloudflare challenge page) — a
+    hardcoded rule decided on a network condition weeks old, with nobody
+    told when the condition changed underneath it. Direct is now attempted
+    EVERY time the relay fails, on every network, MEASURED this run rather
+    than assumed from history — bounded to a single round
+    (``max_retries=1``, independent of this function's own ``max_retries``
+    which only governs the relay leg) so a bad run costs exactly one extra
+    request, not a repeat of the relay's retry budget. When both legs fail,
+    the raised error names both failures explicitly, so the outcome is
+    always visible to whatever calls this (receipt/failures list), never
+    silently inherited as "direct wasn't even tried."
     """
     try:
         body = relay_get(relay_url, timeout=timeout, max_retries=max_retries)
         return body, "relay"
-    except Exception:
-        if on_github_runner():
-            # The direct path cannot succeed from a GitHub runner (provider
-            # blocks the IP even with browser TLS, per Edge-Factory). Fail
-            # fast so the date stays retryable instead of stalling the run.
-            raise
-        body = direct_get(direct_url, timeout=timeout, max_retries=max_retries)
+    except Exception as relay_exc:
+        try:
+            body = direct_get(direct_url, timeout=timeout, max_retries=1)
+        except Exception as direct_exc:
+            raise RuntimeError(
+                "both paths failed this run (measured, not assumed) \u2014 "
+                f"relay: {type(relay_exc).__name__}: {relay_exc}; "
+                f"direct: {type(direct_exc).__name__}: {direct_exc}"
+            ) from direct_exc
         return body, "direct"
 
 
@@ -468,9 +637,221 @@ def validate_capture_body(body: bytes, sport: str, target_date: str, route: str)
     validate_html_body(body, sport, target_date)
 
 
+def _classify_capture_outcome(exc: Exception) -> str:
+    """Label a failed ``_fetch`` for the per-sport-date timing instrument.
+
+    ``_fetch``'s column-route failure message embeds
+    ``relay_columns.BoardCapture.status`` verbatim (``"... column capture
+    returned {result.status}: {result.reason}"``), so the two board-read
+    outcomes are recoverable from the exception text without a second
+    return channel. Anything else — a network error, a validation error
+    from a route that never reached the column fallback — is ``RAISED``:
+    an exception this collector did not classify, not a quiet gap.
+    """
+    text = str(exc)
+    for status in ("COVERAGE_GAP", "NO_ROWS_FOR_DATE"):
+        if status in text:
+            return status
+    return "RAISED"
+
+
+def _football_json_leg_verdict(body: bytes) -> tuple[bool, str | None]:
+    """Classify one already-fetched football tz=0 JSON body: healthy iff it
+    parses as real Forebet JSON, not a WAF challenge page or anything else
+    unparseable. Shared so relay and direct legs of ``sample_canary`` are
+    judged by the identical rule."""
+    if looks_like_challenge_page(body):
+        return False, f"looked like a challenge page ({len(body)} bytes)"
+    try:
+        validate_football_json_body(body)
+    except Exception as exc:
+        return False, f"failed to parse: {exc}"[:200]
+    return True, None
+
+
+def sample_canary(target_date: str | None = None, *, timeout: int = 20) -> dict[str, Any]:
+    """One standalone, dual-path check of football's tz=0 JSON, BEFORE any
+    per-sport capture has started — the pre-flight the owner asked for
+    after two consecutive relay-path blocks (2026-09-28): "we've been
+    optimising how much we ask, when the binding constraint may be when we
+    ask." Callers: ``forward_shadow_batch.py``'s pre-flight/mid-run abort
+    (do not spend a forward pass's capture budget against a wall), and the
+    probe's ``--canary-only`` mode / staged cron (a few seconds, safe on a
+    tight schedule, versus the full multi-stage sweep). ``_canary_state``
+    below reads a different, free discriminator — whatever an in-progress
+    :meth:`ForebetCollector.capture_selected` call already fetched for
+    football — and is unaffected by this function.
+
+    **Dual-path, 2026-09-28 (second correction, after the direct-vs-relay
+    probe, run 36470920157):** relay is tried first (production's default
+    path). Only when relay fails or looks unhealthy does this ALSO try
+    direct once — mirroring ``fetch_with_fallback``'s now-measured-per-run
+    fallback (see its docstring): a canary that only ever tested relay
+    could abort a forward pass that a real capture, using that same
+    fallback, would actually have completed via direct. ``healthy`` is
+    True iff EITHER leg produced real JSON; ``direct`` is left ``None``
+    when relay already succeeded, since there is then no reason to spend
+    the extra request.
+
+    Deliberately at most ONE attempt per leg (``max_retries=1`` on both):
+    a WAF challenge is a refusal, not congestion, and retrying it harder is
+    how run 36426785929 spent two hours grinding ~70 sport-dates through
+    their full retry budgets against a wall. A canary that itself retried
+    would only be a slower, quieter version of that same mistake.
+
+    Returns ``{"sport": "football", "checked": True, "healthy": bool,
+    "reason": str | None, "relay": {"ok": bool, "reason": str | None},
+    "direct": {"ok": bool, "reason": str | None} | None,
+    "sampled_at": <UTC ISO8601>}``. Never raises. ``reason`` is only set
+    when unhealthy, and names both legs' outcomes explicitly so a
+    ``healthy: False`` reading can never be misread as "the source is
+    down" when in fact only OUR two tested paths were blocked this run.
+    """
+    target_date = target_date or date.today().isoformat()
+    sampled_at = datetime.now(timezone.utc).isoformat()
+    target = source_url(SPORTS["football"], target_date)
+    relay_url = RELAY_BASE + target
+
+    relay_ok = False
+    relay_reason: str | None
+    try:
+        relay_body = relay_get_markdown(relay_url, target, timeout=timeout, max_retries=1)
+    except Exception as exc:
+        relay_reason = f"{type(exc).__name__}: {exc}"[:200]
+    else:
+        relay_ok, relay_reason = _football_json_leg_verdict(relay_body)
+
+    if relay_ok:
+        return {"sport": "football", "checked": True, "healthy": True,
+                "reason": None, "relay": {"ok": True, "reason": None},
+                "direct": None, "sampled_at": sampled_at}
+
+    direct_ok = False
+    direct_reason: str | None
+    try:
+        direct_body = direct_get(target, timeout=timeout, max_retries=1)
+    except Exception as exc:
+        direct_reason = f"{type(exc).__name__}: {exc}"[:200]
+    else:
+        direct_ok, direct_reason = _football_json_leg_verdict(direct_body)
+
+    healthy = direct_ok
+    reason = None
+    if not healthy:
+        reason = (f"football tz=0 JSON via the relay {relay_reason}; via "
+                  f"direct {direct_reason} \u2014 both paths tested this "
+                  f"run were blocked; not proof the source itself is down")
+    return {"sport": "football", "checked": True, "healthy": healthy,
+            "reason": reason,
+            "relay": {"ok": False, "reason": relay_reason},
+            "direct": {"ok": direct_ok, "reason": direct_reason},
+            "sampled_at": sampled_at}
+
+
+def _canary_state(selected: list[str], existing: set[str],
+                  captures: "list[RawCapture]",
+                  failures: list[str]) -> dict[str, Any]:
+    """Football's tz=0 JSON is the cheap, already-fetched discriminator
+    between "this board is not published yet" and "our path is being
+    refused right now" — both currently surface identically as an HTTP
+    422 / ``COVERAGE_GAP`` from any other sport's column route. Whenever a
+    call to :meth:`ForebetCollector.capture_selected` also fetches
+    football (the common case — it is first in ``SPORTS`` and
+    ``sports=None`` requests every sport), football's own result IS that
+    discriminator, for free.
+
+    Owner finding, 2026-09-28 (Priority 1, item iii): a near/far
+    circuit-breaker comparison run while football's own fetch was
+    challenge-blocked could not tell "not published" from "our path
+    refused right now" apart — the one distinction the comparison exists
+    to draw. Every receipt now records whether football (the canary) was
+    healthy for THIS SAME run, so a blocked run can be recognised and
+    discarded instead of misread as a publication-timing finding.
+
+    **Relabelled 2026-09-28, second correction:** this reads football's
+    result from whatever fetched it, i.e. ``fetch_with_fallback`` via
+    ``fetch_football_markets`` — relay first, with a direct attempt now
+    MEASURED every run rather than skipped by a hardcoded
+    ``on_github_runner()`` check (that guard was removed from
+    ``fetch_with_fallback`` the same day this docstring was last
+    corrected). A ``healthy: False`` reading therefore means "both paths
+    tested this run were blocked", not "the source refused us" — a
+    server-side fetch once got a real response direct from
+    ``forebet.com`` at the exact moment the relay returned a challenge
+    page for the identical URL, so either leg succeeding alone is a live
+    possibility, not a foregone conclusion. See ``sample_canary`` (the
+    pre-flight sibling, same dual-path scope) and
+    ``direct_vs_relay_probe`` (the runner-side confirmation, now also
+    dual-path plus status/header capture) for the full finding. Do not
+    read a ``False`` here as proof the site itself is down.
+    """
+    if "football" not in selected:
+        return {"sport": "football", "checked": False, "healthy": None,
+                "reason": "football was not requested in this capture"}
+    if "football" in existing:
+        return {"sport": "football", "checked": False, "healthy": None,
+                "reason": ("football was reused from a prior capture on "
+                          "disk this call; not rechecked")}
+    if any(cap.sport == "football" for cap in captures):
+        return {"sport": "football", "checked": True, "healthy": True,
+                "reason": None}
+    reason = next((f for f in failures if f.startswith("football:")), None)
+    return {"sport": "football", "checked": True, "healthy": False,
+            "reason": reason or
+            "football capture failed with no recorded reason"}
+
+
+#: Prepended to a non-football COVERAGE_GAP failure/outcome when the canary
+#: (football) also failed in the same run — see ``_canary_state``. Leads
+#: with the correction so it is the first thing read, not an appendix to
+#: the breaker's own "not-published signal" wording.
+#:
+#: Relabelled 2026-09-28 from "SITE-WIDE REFUSAL": the owner fetched
+#: football's tz=0 JSON directly (no relay) and via the relay at the same
+#: moment and got a REAL response direct while the relay returned a
+#: challenge page — the canary (relay-only, see ``sample_canary``) may be
+#: measuring OUR PATH, not the source. Calling this "site-wide" asserted a
+#: cause this discriminator was never able to prove; "CANARY PATH BLOCKED"
+#: says only what was actually observed.
+_CANARY_PATH_BLOCKED_PREFIX = (
+    "[CANARY PATH BLOCKED \u2014 football (our canary) also failed this "
+    "run over the same path; NOT evidence the board is unpublished, and "
+    "NOT proof the source itself refused us \u2014 2026-09-28: a direct "
+    "fetch succeeded at the exact moment the relay did not; see "
+    "direct_vs_relay_probe] "
+)
+
+
+def _mark_canary_path_blocked(capture_timing: list[dict],
+                              failures: list[str]) -> None:
+    """When the canary is down, relabel every OTHER sport's ``COVERAGE_GAP``
+    entry so nothing downstream repeats the "board not published" reading a
+    blocked canary produces identically.
+
+    ``NO_ROWS_FOR_DATE`` is never touched: it is only ever returned on
+    positive evidence (the board rendered cleanly and held no match for the
+    date — see ``relay_columns.capture_board``'s docstring), so a sport
+    that reached that status did NOT get refused this run regardless of
+    what happened to football.
+    """
+    for i, text in enumerate(failures):
+        sport = text.split(":", 1)[0]
+        if sport == "football" or "COVERAGE_GAP" not in text:
+            continue
+        failures[i] = _CANARY_PATH_BLOCKED_PREFIX + text
+    for entry in capture_timing:
+        if entry.get("sport") == "football":
+            continue
+        if str(entry.get("outcome", "")).startswith("COVERAGE_GAP"):
+            entry["outcome"] = "COVERAGE_GAP:canary_path_blocked"
+
+
+
 class ForebetCollector:
     def __init__(self, root: Path | str = ".", timeout: int = 35,
-                 workers: int = 4, before_request=None):
+                 workers: int = 4, before_request=None,
+                 circuit_breaker_columns: int = 0,
+                 circuit_breaker_attempts: int = 1):
         self.root = Path(root)
         self.timeout = timeout
         self.workers = max(1, min(int(workers), 6))
@@ -481,6 +862,18 @@ class ForebetCollector:
         # a 110-second budget by a factor of four in run 36409134160.
         # Production passes nothing and is unchanged.
         self.before_request = before_request
+        # Off by default (Priority 1, scoped 2026-09-28): the column-route
+        # circuit breaker (see relay_columns.fetch_board_columns) is only
+        # safe on a stage that expects most of its boards to genuinely not
+        # exist yet (the D+2..D+6 forward pass). Refusals on this source
+        # are intermittent per-column, not per-board, so a stage where the
+        # board usually already exists (event-day, the daily refresh, any
+        # settlement capture) must not enable it — a false trip there
+        # costs a real pick or a real grade, not a wasted probe. Only
+        # forward_shadow_batch.py's run_capture() passes
+        # circuit_breaker_columns=2 explicitly.
+        self.circuit_breaker_columns = circuit_breaker_columns
+        self.circuit_breaker_attempts = circuit_breaker_attempts
 
     def _fetch(self, sport: str, target_date: str) -> RawCapture:
         if self.before_request is not None:
@@ -546,7 +939,9 @@ class ForebetCollector:
                     target, sport, target_date,
                     captured_at=datetime.now(timezone.utc).isoformat(),
                     timeout=self.timeout,
-                    before_request=self.before_request)
+                    before_request=self.before_request,
+                    circuit_breaker_columns=self.circuit_breaker_columns,
+                    circuit_breaker_attempts=self.circuit_breaker_attempts)
                 if result.status != CAPTURED:
                     raise ValueError(
                         f"{sport} {target_date}: html capture rejected and "
@@ -587,8 +982,41 @@ class ForebetCollector:
     def capture_selected(self, target_date: str, sports: list[str] | None = None,
                          *, force: bool = False,
                          receipt_name: str | None = None,
-                         pause_seconds: float = 0.0) -> list[RawCapture]:
+                         pause_seconds: float = 0.0,
+                         on_capture_timing=None,
+                         serial: bool | None = None) -> list[RawCapture]:
+        """``on_capture_timing``, if given, is called once per sport-date on
+        the paced serial path the moment that sport's fetch finishes, with
+        the same dict recorded into the receipt's ``capture_timing`` list
+        (``sport``/``elapsed_seconds``/``requests``/``outcome``). This is a
+        streaming callback, not just a post-hoc receipt field, so a caller
+        can log it to stderr immediately — a run killed mid-batch still
+        leaves that evidence in the job log even though the receipt file
+        for the date in flight never gets written. A raising callback is
+        swallowed; it must never break a capture.
+
+        ``serial`` picks the timed, one-sport-at-a-time path explicitly
+        instead of the untimed thread-pool one. Default ``None`` infers it
+        from ``pause_seconds > 0`` (every production stage already passes a
+        real pause and gets this for free). Pass ``serial=True`` outright
+        for a caller that wants timing on a single sport where a "small
+        but truthy" pause would otherwise be needed only to select the
+        branch and never actually sleep — that was a real trap here once:
+        it worked by accident and nothing marked the accident as load-
+        bearing. ``on_capture_timing`` with ``serial`` false (explicitly or
+        by inference) is refused outright rather than silently producing an
+        empty ``capture_timing`` — the parallel path has no per-sport
+        instrumentation at all, so asking for a callback there is a
+        contradiction, not a valid no-op.
+        """
         date.fromisoformat(target_date)
+        if serial is None:
+            serial = pause_seconds > 0
+        if on_capture_timing is not None and not serial:
+            raise ValueError(
+                "on_capture_timing requires serial=True (or pause_seconds>0"
+                " to infer it): the parallel (workers>1) path has no"
+                " per-sport timing to call it with")
         selected = list(SPORTS) if not sports else sports
         unknown = [sport for sport in selected if sport not in SPORTS]
         if unknown:
@@ -609,18 +1037,66 @@ class ForebetCollector:
         to_fetch = [sport for sport in selected if sport not in existing]
         captures: list[RawCapture] = [cap for cap in self._existing_captures(target_date) if cap.sport in selected]
         failures: list[str] = []
-        if pause_seconds and pause_seconds > 0:
+        # Per-sport-date instrumentation (Priority 1, 2026-09-28): the
+        # forward pass captures D+2..D+6 x 14 sports through this loop with
+        # zero internal timing, which is why Forward Shadow #33 (run
+        # 36426785929) could only be described as ">=1h56m on one
+        # undifferentiated step" — nobody could say which sport-date cost
+        # what. Only the paced serial path gets this (the parallel path
+        # below is used for historical backfill, not the timing-sensitive
+        # forward pass). ``requests`` counts ``before_request`` calls, which
+        # fire once before the initial fetch and once per column-route
+        # attempt (``relay_columns.fetch_column``) — the same seam a request
+        # budget would hook into, so the count is what a budget would see.
+        capture_timing: list[dict] = []
+        if serial:
             # Paced serial path. A same-day stage fetches every sport in one
             # burst; ``pause_seconds`` spaces those requests the same way the
             # settlement capture does, so an extra daily stage does not raise
             # the request rate seen by the source.
+            outer_before_request = self.before_request
             for i, sport in enumerate(to_fetch):
                 if i > 0:
                     time.sleep(pause_seconds)
+                request_count = {"n": 0}
+
+                def _counted_before_request(_outer=outer_before_request,
+                                            _count=request_count):
+                    _count["n"] += 1
+                    if _outer is not None:
+                        _outer()
+
+                self.before_request = _counted_before_request
+                started = time.monotonic()
+                outcome = "CAPTURED"
                 try:
-                    captures.append(self._fetch(sport, target_date))
+                    cap = self._fetch(sport, target_date)
+                    captures.append(cap)
+                    outcome = f"CAPTURED:{cap.route}"
                 except Exception as exc:  # each satellite fails independently
                     failures.append(f"{sport}:{type(exc).__name__}:{exc}")
+                    outcome = _classify_capture_outcome(exc)
+                finally:
+                    self.before_request = outer_before_request
+                    entry = {
+                        "sport": sport,
+                        "elapsed_seconds": round(time.monotonic() - started, 3),
+                        "requests": request_count["n"],
+                        "outcome": outcome,
+                    }
+                    capture_timing.append(entry)
+                    # Fired the moment this sport-date finishes, not after
+                    # the whole capture_selected() call returns: a killed
+                    # run (run 36426785929 was cancelled mid-batch with
+                    # zero stderr output after its last completed stage)
+                    # still leaves this evidence in the job log even if the
+                    # receipt file for the in-flight date never gets
+                    # written. Never allowed to break the capture itself.
+                    if on_capture_timing is not None:
+                        try:
+                            on_capture_timing(entry)
+                        except Exception:
+                            pass
         else:
             with ThreadPoolExecutor(max_workers=self.workers) as executor:
                 futures = {sport: executor.submit(self._fetch, sport, target_date) for sport in to_fetch}
@@ -642,6 +1118,17 @@ class ForebetCollector:
             except Exception as exc:
                 failures.append(f"football-markets:{type(exc).__name__}:{exc}")
 
+        # Priority 1, item (iii) correction (2026-09-28): decide whether
+        # football (the canary) was itself refused THIS run before any
+        # other sport's COVERAGE_GAP is written down as "not published" —
+        # see _canary_state's docstring. Mutates failures/capture_timing
+        # in place so every consumer of this receipt (the forward-pass
+        # annotation rollup included) sees the correction, not just this
+        # function's own return value.
+        canary = _canary_state(selected, existing, captures, failures)
+        if canary["healthy"] is False:
+            _mark_canary_path_blocked(capture_timing, failures)
+
         report_dir = self.root / "data" / "reports"
         report_dir.mkdir(parents=True, exist_ok=True)
         receipt = {
@@ -654,6 +1141,15 @@ class ForebetCollector:
                 str(markets_path.relative_to(self.root))
                 if markets_path is not None else None
             ),
+            # Empty unless serial=True (or pause_seconds>0, which infers
+            # it) — only the paced serial path times individual sports.
+            # See the comment above the serial loop for why.
+            "capture_timing": capture_timing,
+            # Recorded for EVERY run, healthy or not — see _canary_state.
+            # A future analysis over many receipts can filter blocked
+            # runs out instead of re-deriving "was the site down" from
+            # scratch each time.
+            "canary": canary,
         }
         (report_dir / receipt_filename).write_text(
             json.dumps(receipt, indent=2, sort_keys=True)

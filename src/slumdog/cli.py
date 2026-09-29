@@ -4,8 +4,9 @@ import argparse
 import json
 from pathlib import Path
 
-from .analyze import analyze_depth
+from .analyze import analyze_depth, r1_scorecard
 from .backfill import backfill, backfill_sport
+from .backtest import r1_backtest
 from .clock import today_iso
 from .detail_worker import capture_detail_batch, enrich_events_from_details
 from .depth_sweep import run_depth_sweep
@@ -113,6 +114,26 @@ def main() -> int:
     _date_arg(analysis, help_text="YYYY-MM-DD label for the report (default: today)")
     analysis.add_argument("--root", default=".")
 
+    scorecard = sub.add_parser(
+        "r1-scorecard",
+        help=("offline R1 performance scorecard from committed shadow evidence "
+              "only (no network): overall + per-sport + per-probability-band "
+              "hit rates with Wilson intervals, plus always-favourite/always-"
+              "underdog/forebet_pick baselines on the same rows"))
+    _date_arg(scorecard, help_text="YYYY-MM-DD label for the report (default: today)")
+    scorecard.add_argument("--root", default=".")
+
+    backtest = sub.add_parser(
+        "r1-backtest",
+        help=("offline replay of the frozen R1/R2 rule over the committed "
+              "historical corpus (data/reports/history_<sport>.jsonl.gz, no "
+              "network): reconstructs the pick identify_forebet_underdog -> "
+              "build_pre_event_features -> is_r2_eligible -> r1_sort_key and "
+              "grades it against the ledger's own settled winner, split by "
+              "reconstruction provenance (HISTORICAL_PAGE vs pre-event)"))
+    _date_arg(backtest, help_text="YYYY-MM-DD label for the report (default: today)")
+    backtest.add_argument("--root", default=".")
+
     research = sub.add_parser("research", help="model cards + feature ablations from settled ledgers")
     research.add_argument("--root", default=".")
     research.add_argument("--min-rows", type=int, default=100)
@@ -207,6 +228,23 @@ def main() -> int:
     if args.command == "analyze":
         path = analyze_depth(args.root, args.date)
         print(path)
+        return 0
+    if args.command == "r1-scorecard":
+        path = r1_scorecard(args.root, args.date)
+        print(path)
+        return 0
+    if args.command == "r1-backtest":
+        # This step is meant to run unattended inside a CI job that already
+        # built the historical ledgers (see docs/workflow_staging/ for the staged
+        # pipeline.yml step) -- it must never fail that job. r1_backtest()
+        # is already internally defensive per-sport, but this is the
+        # last-resort net: any unexpected error still exits 0 with an
+        # honest error note on stdout, never a non-zero CLI exit.
+        try:
+            path = r1_backtest(args.root, args.date)
+            print(path)
+        except Exception as exc:
+            print(f"r1-backtest failed without producing a report: {type(exc).__name__}: {exc}")
         return 0
     if args.command == "research":
         path = build_research(args.root, args.min_rows, allow_research=args.research_override)

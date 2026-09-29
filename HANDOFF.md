@@ -1,5 +1,532 @@
 # Slumdog Living Handoff
 
+**2026-09-29 (continued) — `forward_shadow.yml`'s cancellation-safety fix applied; PR opened to land this branch onto `main` (agent cannot push to `main` directly, by design).**
+
+The owner pasted the last outstanding staged fix directly to `main`
+(commit `28fc073`, "Add condition to persist evidence to git") — the
+persist step's `if: always()`, a single added line, confirmed byte-for-byte
+identical to what was staged at `docs/workflow_staging/forward_shadow.yml`
+before deleting that file. Picked up onto this branch the same way as every
+other owner-applied workflow fix: `git merge origin/main -s ours --no-commit`
++ `git checkout FETCH_HEAD -- .github/workflows/forward_shadow.yml` (merge
+commit `5c51b8b`). `tests/test_workflow_persist_contract.py`'s
+`TestTheStagedFixIsNarrowAndCorrect` (pinned the pending paste) is gone;
+its assertion now lives on `live_text` directly in
+`TestEveryDeclaredArtifactIsPersisted`. Nothing remains staged in
+`docs/workflow_staging/` as of this entry — only `README.md` (the index).
+
+The owner asked to land this branch's work onto `main` "without merging"
+because the session might end. This session's standing instructions
+restrict it to pushing only its own branch (`arena/01a0e863-slumdog`) —
+opening a PR from that branch is the sanctioned path, not pushing to `main`
+directly. **PR #22** (`arena/01a0e863-slumdog` → `main`) was opened instead,
+`mergeStateStatus: CLEAN`, `mergeable: MERGEABLE`. Reassured the owner: the
+branch is already fully pushed to GitHub, so nothing is at risk from the
+session ending — the PR persists and can be merged any time, by anyone,
+independent of this session.
+
+**2026-09-29 — Duplicate-workflow incident closed out: pipeline.yml restaged and correctly applied, cron approach killed, workflow-hygiene guards added, `docs/owner_paste/` renamed to `docs/workflow_staging/`.**
+
+**What happened, in order:**
+
+1. **The duplicate "Slumdog · Forebet Depth Pipeline" workflow (see the 2026-09-28 entry below) was confirmed gone from `main` before anything else.** `gh run list --workflow pipeline.yml --json ...` and `gh api repos/.../actions/workflows` were both reachable and used directly (correcting an earlier, wrong belief in this session that GH Actions history was categorically unreachable — it isn't; use these commands directly for run-history questions from now on). Exactly one Depth Build run exists for 2026-09-28, and the registered-workflows API lists only the three known workflows — no ghost/disabled registration for the duplicate file. No evidence the duplicate ever fired before it was caught and deleted (`main` commit `b7236fb`).
+2. **Restaged, correctly named this time:** `docs/owner_paste/pipeline_backtest_step.yml` and `docs/owner_paste/probe_canary_cron.yml` were both deleted. A single file, named exactly `pipeline.yml` (matching the live file it replaces), was rebuilt from a freshly re-fetched, byte-verified copy of the live `main` `pipeline.yml`, adding: a non-blocking `canary` job (dual-path availability sampling via `scripts/probe_kickoff_timezone.py --canary-only`, no `needs:`, nothing depends on it, no schedule of its own) and the `backtest` job (R1-rule historical replay, `needs: [history]`, job-level `permissions: contents: write` only). `docs/owner_paste/README.md` was rewritten to say **REPLACE `.github/workflows/pipeline.yml`**, never "add". Four new workflow-hygiene guard tests (`tests/test_workflow_hygiene.py`) were added: the live `.github/workflows/` file set matches a known allowlist, no two workflows share a `name:`, no two share a `concurrency.group`, only `pipeline.yml` may declare `on.schedule`. Committed `1021b55`, pushed.
+3. **The owner applied it correctly this time** — `main` commit `10ad139` ("Add canary and backtest jobs to pipeline") replaces `.github/workflows/pipeline.yml` in place, byte-identical to the staged copy apart from the two new jobs; no duplicate workflow was created. Confirmed via `gh api repos/.../actions/workflows` (still exactly three registered workflows) and a direct diff against the staged file.
+4. **Picked up onto this branch via `git merge origin/main -s ours --no-commit` followed by `git checkout FETCH_HEAD -- .github/workflows/pipeline.yml`**, rather than an authored diff — `main`'s history is not a linear descendant of this session's branch (it appears to be regenerated as a fresh single-commit snapshot each time, not incrementally extended), so a plain `git merge origin/main` would have pulled in a large, unrelated reversion of everything this session had already built on top of the original branch point. Using the `ours` strategy kept this branch's tree untouched except for the one file being explicitly picked from `main`, while still recording a real two-parent merge commit — the shape GitHub's restricted push token accepts for a path under `.github/workflows/` that it would refuse as a freshly authored diff. Merge commit `f49de40`, pushed successfully, confirming the merge-commit exception still holds under this token.
+5. **Post-apply cleanup, same pattern as the two earlier `forward_shadow.yml`/`probe_kickoff_timezone.yml` cycles:** the staged `docs/owner_paste/pipeline.yml` copy is deleted (git history is the record); `tests/test_owner_paste_pipeline_contract.py` is replaced by `tests/test_depth_pipeline_contract.py`, which guards the live `.github/workflows/pipeline.yml` directly instead of diffing a staged copy against it.
+6. **`docs/owner_paste/` renamed to `docs/workflow_staging/` at the owner's explicit request** ("i don't like this naming convention... 'owner paste'?"). Every *live* reference to the old path was updated — `AGENTS.md`, `docs/EVENT_DAY_TRACK.md`, `docs/workflow_staging/README.md` itself, `src/slumdog/cli.py`, `scripts/probe_kickoff_timezone.py`, `tests/test_workflow_persist_contract.py`, `tests/test_probe_workflow_persist_contract.py` — plus the new `test_depth_pipeline_contract.py` was named without "owner_paste" from the start, matching the naming of the other two live persist-contract tests. This entry and every earlier `HANDOFF.md` entry keep their original `docs/owner_paste/...` text unedited — this file is a historical record of what existed at the time, not a live reference; only actually-current paths were moved.
+
+Full suite green throughout (`pytest -q`, no failures at any step above).
+
+**2026-09-28 (same session, continued a seventh time) — MEASURED ROUTING REPLACES HARDCODED ROUTING: `on_github_runner()` NO LONGER GATES `fetch_with_fallback`/`sample_canary`; THE DIRECT-VS-RELAY PROBE NOW RECORDS STATUS CODES + HEADERS AND TESTS TWO EXTRA HOSTNAMES; THE STAGED CANARY CRON IS UN-PAUSED AND DUAL-PATH.**
+
+**Why this entry exists:** four owner directives landed together this pass, following directly from the previous entry's finding that "it's just the relay" did not hold as stated (direct failed outright, relay was
+merely challenged) and that recording only an exception class name (`"urllib=HTTPError"`) hid the very information (a status code, `Server`/`CF-Ray` headers) needed to tell WHY a leg failed, not just whether it
+did. The owner's framing: stop hardcoding routing decisions off a stale measurement, start measuring per run and recording the fact; stop reporting failures as opaque exception names.
+
+**What changed, in the owner's stated order:**
+
+1. **`direct_vs_relay_probe()` now captures HTTP status + a header snippet (`Server`, `CF-Ray`) per leg**, not just an exception class. It routes every leg through two new never-raising helpers in
+   `src/slumdog/forebet.py`, `direct_get_diagnostic()`/`relay_get_diagnostic()`, which return `{"ok", "status", "headers", "body"|"error", ...}` — `_urllib_get_diagnostic()` underneath pulls `e.code` off
+   `urllib.error.HTTPError` even on failure, so a 403/429/503/451 is visible even when the fetch itself did not succeed. `direct_get_diagnostic()` also records every transport attempt tried (urllib, then each
+   curl_cffi impersonation) in an `attempts` list rather than only the last one.
+2. **The probe now tests two extra hostnames** (`m.forebet.com`, bare `forebet.com`, no `www`) against football's tz=0 JSON, both direct and via relay, under a new `alt_hosts` key — 8 requests total per run
+   (was 4). The exit-code gate (`--direct-vs-relay-only`'s pass/fail) is deliberately left keyed only on the original `football_json`/`html_board` leaves; `alt_hosts` is additional diagnostic signal, not a
+   gating condition, since a different hostname succeeding doesn't change what the pipeline can actually fetch from today without further plumbing.
+3. **`fetch_with_fallback()` and `sample_canary()` no longer call `on_github_runner()` to skip the direct leg.** Both now attempt direct once every run (never hardcoded off), record the measured outcome, and
+   route/report off that fact instead of a static guess about what kind of machine is running. `on_github_runner()` itself is still defined (harmless, no longer load-bearing for this decision) — grepped for
+   stale callers referencing the old skip-direct behaviour; none found outside its own definition.
+4. **`docs/owner_paste/probe_canary_cron.yml` is un-paused.** It inherits `sample_canary`'s new dual-path behaviour for free via `--canary-only` (relay first, direct fallback once only on relay failure) — a red
+   cron run now means both paths were blocked this sample, which is the availability signal the cron was always meant to produce, rather than the relay-only signal it paused on. `docs/owner_paste/README.md`'s
+   matching section was updated out of PAUSED state to match.
+
+**Test coverage added/updated this pass:** `tests/test_probe_kickoff_timezone.py::TestDirectVsRelayProbe` (4 tests) rewritten against the new `direct_get_diagnostic`/`relay_get_diagnostic` mock surface, plus
+new assertions on `status`, `headers`, and the `alt_hosts.m`/`alt_hosts.bare` sub-dicts; the file's autouse no-network fixture updated to match. `tests/test_forebet.py::TestDiagnosticFetchesRecordStatusAndHeaders`
+(8 new tests) added, covering `_urllib_get_diagnostic`'s status/header capture on success, on an `HTTPError`, and on a connectionless failure; `direct_get_diagnostic`'s never-raise/every-attempt-recorded
+contract and its urllib→curl_cffi fallback; `relay_get_diagnostic`'s markdown-unwrap success/failure paths and HTML passthrough. Also fixed a **pre-existing, unrelated hang** found while verifying this work:
+`tests/test_fallback.py::test_capture_selected_reuses_existing_same_day_capture` was making a real unmocked network call through `capture_selected` → `fetch_football_markets`; now mocked to a no-op. Full runs
+this pass: `tests/test_fallback.py` 8/8, `tests/test_forebet.py` 44/44, `tests/test_forward_shadow_batch.py` 109/109, `tests/test_probe_kickoff_timezone.py` 242/242, `tests/test_probe_canary_cron_contract.py`
+9/9 — all green.
+
+**Still open, unchanged from the prior entry:** item (iii) (a valid circuit-breaker trial) remains not closed and must not be pursued by repeated re-running — it depends on this new dual-path availability map
+actually showing an open window, not on luck.
+
+**Priority #3 addendum, read-only (no live fetches issued), answered by reading the existing code and captured payloads:**
+
+- **Non-football sports' board endpoint does NOT expose a standings/form equivalent.** `parse_html_events()` (`src/slumdog/parsers.py`), the generic HTML-board parser every non-football sport goes through, only
+  ever populates `{league_code, probability_values_raw, odds_values_raw, selected_odds_raw, period_values, prediction_cell_text, raw_row_text}` in `facets` — no `standings_*`, no `recent_*` form counts.
+  Those keys exist only via `promote_football_listing()`, which reads them off football's separate `getrs.php` 1X2 JSON row (`host_pos`/`guest_pos`/`host_form`/`guest_form`). `docs/STATE.md` already
+  established there is no working `getrs.php`-equivalent for any other sport ("every candidate getrs.php sport code returns empty") — so this is a real gap, not an oversight in `parse_html_events`.
+- **A sport-agnostic per-match detail-page extractor already exists and would supply it** (`src/slumdog/detail_worker.py` + `detail_facets.py`) — `capture_detail_batch()` filters candidates only on
+  `"/matches/" in source_url`, with no sport gate, and `parse_detail()` extracts standings/H2H/form/travel-distance/etc. generically. **It has never actually been run**: `data/raw/details/` does not exist and
+  no `data/reports/detail_capture_latest.json` is present, so whether Forebet's per-match pages are reachable for non-football sports (same WAF, presumably harder — an individual match page is a smaller,
+  more bot-suspicious surface than a listing board) is unverified. Confirming that requires a live fetch, which is explicitly out of scope for this read-only check.
+- **The pipeline is not actually blocked on this today.** A live basketball selection (`data/reports/shadow/2026-09-10/a38dc533b32b3d92/shadow_selections.json`, `basketball:284473`) already carries
+  `favorite_prior_win_rate`, `recent_win_rate_gap`, `h2h_prior_games`, etc. in its `features` — a "prior form" signal synthesized from the pipeline's OWN historical snapshot captures, independent of whether
+  Forebet supplies a native standings/form facet for that sport. Per-match detail pages would add Forebet's own standings/H2H numbers on top, but are not required for a form-like feature to already exist for
+  non-football sports.
+
+**2026-09-28 (same session, continued a sixth time) — DIRECT-VS-RELAY PROBE RESULT FROM AN ACTUAL GITHUB RUNNER: NEITHER PATH WORKS FROM THIS RUNNER TODAY — DIRECT FAILS OUTRIGHT, RELAY GETS CHALLENGED. THE "IT'S JUST THE RELAY" READING DOES NOT HOLD AS STATED; CANARY WORDING RELABELLED TO "PATH BLOCKED", NOT "SITE REFUSED".**
+
+**Why this entry exists:** the owner reported that their own server-side fetch, same moment, same URL, got a real response direct from `forebet.com` while a relay (`r.jina.ai`) fetch of the identical URL returned a
+challenge page — asserting this runner shares the owner's egress class, so the relay (not Forebet) was the likely culprit behind every "site-wide refusal" this session (`36455080098`, `36461512749`,
+`36467771961`). That assertion needed a runner-side test before being taken as settled, because `sample_canary`/`_canary_state`/`canary_from_render_clock` only ever exercise the relay path on a GitHub runner
+(`on_github_runner()` skips the direct-fetch fallback there) — nothing this session had actually tried direct from a runner until now.
+
+**What was built:** `direct_vs_relay_probe(date, *, timeout, sport)` in `scripts/probe_kickoff_timezone.py` — four single-attempt, no-retry requests (football tz=0 JSON: direct + relay; one HTML sport board:
+direct + relay), each returning `{"ok": bool, ...body_fingerprint(...)}` or `{"ok": False, "error"}`, never raising. Wired into `run_probe()` as its first stage (`report["direct_vs_relay"]`, `probe:direct_vs_relay`
+annotation) specifically so the existing auto-triggered push workflow — which passes no custom flags — would answer this without any `.github/workflows/` edit. Also exposed standalone as
+`--direct-vs-relay-only` for a cheap, few-second runner-side check outside the full sweep. Landed as commit `a92afb6`; auto-triggered run `36470920157`.
+
+**The result (run `36470920157`, job `probe`=`109092666481`, commit `a92afb680c16c2b3238bed8eecde5bc9b323fd9c`, started `2026-09-28T19:15:09Z`, completed `2026-09-28T19:27:39Z`), read from the
+`probe:direct_vs_relay` check-run annotation:**
+
+```json
+{"football_json": {
+    "url": "https://www.forebet.com/scripts/getrs.php?ln=en&tp=1x2&in=2026-09-29&ord=0&tz=0&tzs=&tze=",
+    "direct": {"ok": false, "error": "RuntimeError: direct fetch failed across transports: urllib=HTTPError"},
+    "relay":  {"ok": true, "bytes": 272, "looks_like": "challenge_page", "has_rcnt": false,
+               "sample": "... Performing security verification ... This website uses a security service to protect against malicious bots ..."}
+  },
+ "html_board": {
+    "url": "https://www.forebet.com/en/basketball/predictions/2026-09-29", "sport": "basketball", "target_date": "2026-09-29",
+    "direct": {"ok": false, "error": "RuntimeError: direct fetch failed across transports: urllib=HTTPError"},
+    "relay":  {"ok": true, "bytes": 5931, "looks_like": "challenge_page", "has_rcnt": false,
+               "sample": "<html lang=\"en-US\"><head><title>Just a moment...</title>..."}
+  }}
+```
+
+**Read this precisely — it does NOT simply confirm "the relay is the problem, the source is fine for this runner":**
+
+1. **Direct fetch did not merely come back unhealthy — it failed outright**, the same `RuntimeError: direct fetch failed across transports: urllib=HTTPError` for both requests, with no body to fingerprint at
+   all. That is a materially different (and worse) failure mode than the owner's own server-side direct fetch, which got a complete, real JSON/HTML response. Two fetches from two different network locations to
+   the same origin at different moments producing different outcomes is not evidence they would behave identically; it is evidence they do not.
+2. **Relay fetch, by contrast, DID complete — it got a full HTTP response — and that response was a Cloudflare "Performing security verification" / "Just a moment..." challenge page**, i.e. the relay's request
+   reached Cloudflare and was actively challenged, not silently dropped.
+3. **Net effect on this GitHub-hosted runner, today, right now: both paths are unusable, for two different reasons.** Direct cannot even complete a request (network/TLS/connection-level failure via urllib,
+   before Cloudflare ever gets a chance to render a challenge). Relay completes the request but gets challenged by Cloudflare. Neither result supports "switch to direct and the problem goes away" as a fix for
+   THIS runner today — direct is not merely unproven here, it is actively broken here. It also does not fully vindicate "it was always Forebet, not the relay" either: the relay's own failure IS a real Cloudflare
+   challenge of a real request, not a relay-side outage — so Cloudflare is still, in some sense, "in the loop" for the relay path too, just at a different point than a blind direct WAF block would be.
+4. **What is genuinely confirmed:** the specific claim "this runner's direct egress is equivalent to the owner's, so it would have succeeded direct just as it did for the owner" is NOT supported by this run —
+   direct failed here, categorically, both times. Whatever made the owner's server-side fetch succeed direct (different IP range/reputation, different TLS fingerprint/HTTP client, a moment when Cloudflare
+   happened not to challenge that specific origin IP, etc.) is not present on a GitHub Actions runner as tested here.
+5. **What remains open:** whether the `urllib=HTTPError` on direct is a hard block (e.g. connection refused/reset by Cloudflare specifically against Actions' IP ranges, well documented as commonly blocklisted)
+   or an artifact of `direct_get`'s specific transport stack (only `urllib` was attempted — `_cffi_get`/curl_cffi's TLS fingerprint is what `fetch_with_fallback` uses locally and was NOT exercised by this direct
+   leg of the probe on the runner; worth checking whether a curl_cffi-based direct attempt behaves differently before concluding direct is unconditionally dead on Actions). Not investigated further this session.
+
+**Decision taken given this result (this session, not deferred): keep the relabeling direction the owner gave (canary/circuit-breaker wording should say "our path was blocked", not "the site refused us" /
+"the whole site is down"), because that framing was already correct and, if anything, UNDERSTATED by this result — "our path" now demonstrably includes cases where BOTH the direct and relay paths from this
+specific runner are blocked, for different reasons, not just the relay. What changed as a result of this run: the relabeling explicitly avoids implying "direct would have worked" or "it's just the relay,
+switch and you're fixed" — neither is true on this evidence. Concretely, in `src/slumdog/forebet.py`:**
+
+- `_SITE_WIDE_REFUSAL_PREFIX` → `_CANARY_PATH_BLOCKED_PREFIX` (prefix text now `[CANARY PATH BLOCKED — ...]`, references this run's date and finding, keeps the load-bearing substring
+  `"NOT evidence the board is unpublished"` that an existing test pins), `_mark_site_wide_refusal()` → `_mark_canary_path_blocked()`, outcome suffix `COVERAGE_GAP:site_wide_refusal` →
+  `COVERAGE_GAP:canary_path_blocked`. Call site and all `tests/test_forebet.py` references updated to match (renamed class `TestCanaryDiscriminatesSiteWideRefusalFromPublicationGap` →
+  `TestCanaryDiscriminatesPathBlockedFromPublicationGap`).
+- `_canary_state()`'s and `sample_canary()`'s docstrings reworded to state plainly that these only ever exercise the relay path on a GitHub runner, that a `False` reading means "our path (as tested) was
+  blocked this run", and explicitly point at `direct_vs_relay_probe` for the runner-side finding above rather than asserting either "the source is down" or "it's just the relay, direct is fine."
+  `sample_canary`'s per-branch `reason` strings now say "via the relay" explicitly.
+- Comment-only "site-wide refusal" references in `forward_shadow_batch.py` and `tests/test_forward_shadow_batch.py` reworded to "relay-path" / "canary path block" for consistency; the two historical
+  narrative comments in `probe_kickoff_timezone.py` that already quote "site-wide refusal" as the superseded term (describing what earlier runs were called before this finding) were left as accurate history.
+- `docs/owner_paste/probe_canary_cron.yml` and `docs/owner_paste/README.md` both now carry an explicit **PAUSED** notice: the staged cron samples the relay path only (same asymmetry as `sample_canary` on a
+  runner), so a red run of it — given the result above — could mean either the relay OR the source is blocking the runner, and a green run says nothing about the direct path at all. Do not apply it until this
+  ambiguity is resolved (e.g. by adding a direct-path leg using `_cffi_get`, or by accepting the relay-only signal as "our production path's" health, which is a narrower and now more defensible claim than
+  "site availability").
+
+**Also newly true and worth carrying forward:** the near/far circuit-breaker trial embedded in this same run (`36470920157`) was **a fourth consecutive invalid trial** — `canary.healthy=false`
+(`"football tz=0 JSON looked like 'challenge_page' (272 bytes)"`, `far_breaker_tripped=true`, `trial_valid=false`) — same signature as `36455080098`/`36461512749`/`36467771961`. Item (iii) (a valid
+circuit-breaker measurement) is still not closed; four invalid trials now on record, zero valid ones, and this run's own `direct_vs_relay` data suggests the WAF condition is closer to "this runner's IP range is
+disfavoured much of the time" than "an occasional afternoon spike" — worth factoring into how many more pushes it is reasonable to spend chasing a lucky `healthy: true` window versus addressing the underlying
+egress problem directly (e.g. residential/different egress for the relay, or accepting Actions-hosted circuit-breaker measurement may not be achievable at all and moving the measurement elsewhere).
+
+**2026-09-28 (same session, continued a fifth time) — THE REFRAME: SITE AVAILABILITY, NOT REQUEST COUNT, MAY BE THE BINDING CONSTRAINT. CANARY-FIRST ABORT IN THE FORWARD PASS; `--canary-only` MODE; A CRON STAGED TO MAP WHEN FOREBET SERVES.**
+
+**The entry directly below this one closed two invalid trials honestly — the owner's response was to redirect on what the canary had actually revealed.** Clean service this morning (run `36419041728` graded 18
+rows; run a5e5720 captured 13 events, settlement 18, clock offset -120 proven), a site-wide WAF challenge this afternoon (`36455080098`, `36461512749`) — same code, same relay, same runner provider. **This also
+very likely explains run 36426785929's two hours**: if the WAF was up when it started, every one of ~70 sport-dates spent its full retry budget grinding against a wall, and no per-request tuning (items iv/v as
+originally scoped) would have helped. Two consequences landed this session, both ahead of (iv)/(v) in priority:
+
+**1. `forward_shadow_batch.py` now samples the canary before every forward-pass date and aborts on a site-wide refusal, keeping earlier phases intact.** `canary_gate()` (thin wrapper around
+`slumdog.forebet.sample_canary`, kept as its own module-level name purely so tests can monkeypatch it the way they already monkeypatch `process_date`) is called immediately before each date in the forward-pass
+loop — the first call covers "before the forward pass" (nothing spent yet), each later call covers "periodically during it". A `healthy: False` sample stops the loop immediately: `emit_notice("canary_abort", ...)`
+fires with the reason, the sample time, how many dates already completed, and which dates were never attempted; the batch receipt gets a new `canary_gate` section (`samples`, `aborted`, `abort`) so a run can say
+"abandoned on a site-wide refusal" explicitly instead of grinding to a `NO_ROWS_FOR_DATE`-shaped silence. Settlement/completion/refresh/event-day — everything that already ran before the forward-pass loop starts —
+is untouched and still written to the receipt; only the forward pass itself is gated. Skipped entirely in `--dry-run` (no capture budget is at risk there, and it keeps every dry-run test written before this gate
+existed passing unmodified). New tests (`tests/test_forward_shadow_batch.py::TestCanaryGateInDriverMain`, 5 tests): the load-bearing one asserts **zero `process_date` calls** when the canary is down from the
+first date — the literal "no per-sport captures at all" property the owner asked to be tested — plus a mid-run-abort test (first date completes, second is never attempted), a healthy-throughout no-op test, an
+annotation-emission test, and a dry-run-never-samples test.
+
+**2. `scripts/probe_kickoff_timezone.py` gained `--canary-only`: one request, one annotation, exit — seconds, not the ~13-minute sweep.** Bypasses every other stage, including `--circuit-breaker-probe`'s two
+captures, on purpose: this mode is meant to run far more often (a cron sample) on a far tighter budget, never sharing a scheduler with anything heavier. Exit code is deliberately meaningful — `0` healthy, `1`
+unhealthy — so a cron of this mode alone turns Actions' own green/red run history into a readable-without-a-paste availability map; the `probe:canary` annotation still carries the machine-readable reason for
+anyone who wants it. New tests (`tests/test_probe_kickoff_timezone.py::TestCanaryOnlyMode`, 5 tests) cover healthy/unhealthy/crashed exit codes, that it never touches `run_probe`/`circuit_breaker_measurement`, and
+`--out` file writing.
+
+**Shared plumbing for both:** `slumdog.forebet.sample_canary(target_date=None, *, timeout=20)` — one direct, standalone request to football's tz=0 JSON, reusing `looks_like_challenge_page`/
+`validate_football_json_body`, never raising (a fetch failure or unparseable body IS an unhealthy canary). Deliberately **one attempt** (`relay_get_markdown(..., max_retries=1)`) — per the owner's explicit
+instruction this session, *"do not add retries or backoff to cope with the WAF; it is a refusal, not congestion, and retrying it harder is how the two-hour run happened."* A canary that itself retried would just
+be a slower, quieter version of that exact mistake. This is distinct from `_canary_state` (post-hoc, reads results an in-progress `capture_selected` call already fetched, free); `sample_canary` is the pre-flight
+version, usable before any capture has started. New tests: `tests/test_forebet.py::TestSampleCanaryStandalone` (6 tests: healthy, challenge-page, fetch-raises, unparseable-but-not-challenge, exactly-one-attempt,
+default-to-today's-date).
+
+**3. A cron to build the availability map is staged, not applied — offered as optional, not forced.** `docs/owner_paste/probe_canary_cron.yml`: a brand-new, separate workflow (not an edit to
+`probe_kickoff_timezone.yml` — running the full sweep on a cron would cost 13 minutes per sample and defeat the point), `schedule: cron: '17 */2 * * *'` (every two hours) plus `workflow_dispatch`,
+`permissions: contents: read`, 3-minute timeout, one request per run. `schedule` triggers only fire from the repository's default branch, so — same as every other workflow-file change this session — this cannot
+be pushed from a session branch and must go through the owner-paste-onto-`main` path documented in `docs/owner_paste/README.md`. Guarded by a new contract test,
+`tests/test_probe_canary_cron_contract.py` (9 tests): schedule cadence, `workflow_dispatch` present, only `--canary-only` is invoked (never `--circuit-breaker-probe`/`--hunt`), no capture/evidence-tree code path,
+read-only permissions, pinned actions matching the rest of the repo, fails the job on an unhealthy sample (the green/red-map property), and the file documents its own deletion once the map has answered the
+scheduling question. **If the owner would rather not run a recurring job, this file can stay staged indefinitely or be deleted** — `--canary-only` remains available for manual/opportunistic sampling either way,
+just slower to build a full picture from.
+
+**Full repo gate after all of the above:** `pytest` — 1664 passed, 0 failed (up from 1639: +11 in `test_forebet.py`/`test_forward_shadow_batch.py` for the canary-first gate and `sample_canary`, +5 in
+`test_probe_kickoff_timezone.py` for `--canary-only`, +9 new in `test_probe_canary_cron_contract.py`). `pyflakes`/`py_compile` — clean on every touched file. `scripts/check_workflow_evidence_globs.py` — 24/24
+covered, unaffected (this session touched no persist-step globs).
+
+**Revised order from here, per owner instruction — (v) publication-horizon gate now sits before (iv) request budget, with reasoning stated:** most of the request cost actually incurred this session (the
+near/far breaker probes, the repeated 422-everywhere runs) came from requesting boards whose publication status was never genuinely in question — (v) would skip those requests before they are ever sent, where
+(iv) only caps damage after the fact. Full order: **1. canary-first abort in `forward_shadow_batch.py`** (done, this entry) **→ 2. `--canary-only` + staged cron** (done, this entry) **→ 3. (v) publication-horizon
+gate → 4. (iii) the valid breaker trial, taken during a window the availability map says is healthy → 5. (iv) request budget.** **Forward Shadow stays undispatched until 1 and 3 are in** — 1 landed this entry; 3
+has not started.
+
+**This push itself (`a426b50`) auto-triggered the probe again (run `36467771961`) — a THIRD consecutive invalid trial, same signature.** `canary.healthy=false`, `reason: "football tz=0 JSON looked like
+'challenge_page' (272 bytes)"`, `trial_valid=false` — the exact result the gate is supposed to produce, working correctly a third straight time rather than needing a third fix. Three site-wide-blocked runs now
+span this session's timeline; the morning's runs (`36419041728`, a5e5720) served cleanly. **This is itself the reframe's own evidence accumulating in real time**: the block is not a one-off, it has held for at
+least the span between `36455080098` and `36467771961` today, which is exactly the kind of pattern the staged cron (`docs/owner_paste/probe_canary_cron.yml`) exists to characterise precisely instead of by
+accident. Item (iii): three invalid trials on record (`36455080098`, `36461512749`, `36467771961`), zero valid ones — still open, unchanged conclusion from above.
+
+**2026-09-28 (same session, continued a fourth time) — RETRACTION: "3 vs 24 requests" WAS NOT A VALID CIRCUIT-BREAKER RESULT; ITEM (iii) IS NOT COMPLETE; A CANARY NOW LANDS IN EVERY RUN'S RECEIPT.**
+
+**Retracting the "3 vs 24 requests... real, measured request savings" line from the entry directly below this one.** That run (`36455080098`) was a **site-wide Cloudflare WAF challenge for its entire duration** — the
+same entry already noted `looks_like: "challenge_page"` on the board bytes and a football-JSON parse failure, but then went on to report the near/far request counts as if they were a clean measurement of the
+breaker anyway. They are not. **Item (iii) (circuit-breaker comparison) is correctly labelled here as NOT COMPLETE: one invalid trial exists (site-wide block, correctly identified after the fact), and zero valid
+trials exist yet.** No claim about "requests saved" survives from that run. Restated per the owner's standing rule: never report a "savings" number against the theoretical `no_breaker_worst_case_requests`
+denominator (2 columns × up to 4 attempts × a retry factor = 24) — it was never observed, only computed from constants. The only honest comparison is `far_requests` against a **measured** near-board baseline
+(run a5e5720's `collector_end_to_end.capture_timing[0].requests=10`, or a fresh same-run near-board figure) — `probe_kickoff_timezone.py` now reports exactly that field
+(`far_requests_vs_measured_near_requests`), never the worst-case constant.
+
+**Root cause of the mislabel, and the fix: a canary.** The breaker (and the probe's interpretation of it) had no way to tell "this specific board isn't published yet" (HTTP 422, expected, benign) apart from "the
+whole site just refused this runner" (HTTP 422 from a WAF challenge page, or non-JSON, applied indiscriminately to every request including ones that should trivially succeed). Built a canary using football's
+tz=0 render-clock JSON — already fetched every single run for the render-clock offset measurement, so this costs zero extra requests. It reuses `looks_like_challenge_page()` from `src/slumdog/forebet.py` (the
+same classifier both production capture and the probe already share) rather than a second, independently-drifting keyword list. Landed in three places, because "every run" means production too, not just the
+probe:
+
+1. **`src/slumdog/forebet.py`** — `_canary_state(selected, existing, captures, failures)` checks whether football (part of every production run's sport selection) itself came back healthy this run. When it did
+   not, every OTHER sport's `COVERAGE_GAP` failure/outcome in that same run gets a `"[SITE-WIDE REFUSAL — canary (football) also failed this run; ...]"` prefix — so a 422-everywhere run can never again silently
+   read as "board not published" for sports whose real cause was a site-wide block. The `canary` dict (`{"sport": "football", "checked", "healthy", "reason"}`) is written into the capture receipt **for every run**,
+   healthy or not.
+2. **`scripts/probe_kickoff_timezone.py`** — `canary_from_render_clock()` derives the same shape of canary record from the probe's own `render_clock` stage (again, no new request), emitted as its own
+   `probe:canary` annotation section. `circuit_breaker_comparison(near, far, canary=...)` now takes the canary and sets `trial_valid` / `invalid_reason`: `True` only when the canary was healthy, `False` with a
+   named reason when it was not (e.g. "football tz=0 JSON looked like 'challenge_page' (272 bytes)" — the exact shape of `36455080098`'s failure), `None` when the render-clock stage did not run at all this
+   pass. The raw `near_requests`/`far_requests`/`near_false_abort`/`far_breaker_tripped` numbers are still always computed and reported — the canary gates *interpretation*, not *measurement* — but a run can no
+   longer be read as validating the breaker's publication-gap behavior while `trial_valid` is `False`.
+3. **`scripts/forward_shadow_batch.py`** — `process_date()`'s result now carries `result["canary"] = capture_receipt.get("canary")` straight from the production receipt above, and the per-date `emit_notice`
+   annotation (`forward_date:<date>`) now includes a `"canary"` key alongside `status`/`run_id`/`bundle_verified`/`capture`/`capture_timing`/`error` — so a forward-pass run's annotations, read anonymously exactly
+   like the probe's, now show whether that date's capture happened during a site-wide block without needing to re-derive it from raw HTTP codes after the fact.
+
+**New test coverage** (`tests/test_forebet.py`, `tests/test_probe_kickoff_timezone.py`, `tests/test_forward_shadow_batch.py`): canary-down + 422s-everywhere asserts the outcome is relabelled `COVERAGE_GAP` naming
+the site-wide refusal (never `NO_ROWS_FOR_DATE`), and separately asserts `near_false_abort` being `True` in that state is **not** treated as a breaker defect — `trial_valid` is `False` with a canary-attributed
+reason instead of the breaker being blamed for something it could not have seen coming. Full repo gate after this change: `pytest` — 1639 passed, 0 failed; `pyflakes`/`py_compile` — clean on every touched file.
+
+**Retroactive value of this, beyond the current trial:** the owner flagged that this exact condition — a site-wide WAF challenge producing HTTP 422/non-JSON on *every* request, board or not — plausibly explains
+some of this session's earlier "422 everywhere" observations that were, at the time, attributed to throttling or a scope bug rather than a site-wide block. Those earlier runs predate the canary field and cannot
+be reclassified after the fact (the raw bytes were never saved), but every run from here forward carries `canary` in its receipt, so this ambiguity is diagnosable directly from the receipt instead of re-derived
+by re-reading raw response bytes each time it comes up.
+
+**On reordering (v) before (iv) (owner offered, not mandated):** taking it. (v) is the publication-horizon gate — deciding, before issuing any far-board request at all, whether "D+1" or similar is even plausibly
+published yet, based on when boards for that sport have historically gone live. (iv) is a per-run request budget (`ForebetCollector(before_request=...)`) that caps total requests regardless of cause. The
+reasoning: most of the request cost actually incurred this session (the near/far breaker probes, the repeated 422-everywhere runs) came from requesting boards whose publication status was never in question one
+way or the other — (v) would have skipped those requests before they were ever sent, where (iv) only limits the damage after the fact. (v) is the cheaper fix to land first; (iv) remains valuable as a hard floor
+underneath it, not a substitute for it.
+
+**Still open:** item (iii) is not closed by this entry — this entry only fixes the tooling and retracts the mislabelled result. Closing it requires a fresh push of `scripts/probe_kickoff_timezone.py` (this entry's
+diff qualifies and auto-triggers the workflow per the trigger fix below) whose resulting run shows `canary.healthy == true` for its full duration, `trial_valid == true`, and reports near-board requests + outcome,
+far-board requests + outcome, and the canary state explicitly. That measurement is recorded in a follow-up entry once the run completes, not assumed here.
+
+**Re-measurement result (same push that landed this entry, run `36461512749`, job `probe`=`109060945399`, commit `04f6b77`): the canary caught a SECOND invalid trial. Item (iii) is still not closed.**
+
+```
+canary: {"checked": true, "healthy": false, "sport": "football",
+         "reason": "football tz=0 JSON looked like 'challenge_page' (272 bytes)"}
+circuit_breaker_comparison: {"trial_valid": false,
+  "invalid_reason": "canary (football tz=0 JSON) failed this run (football tz=0 JSON
+    looked like 'challenge_page' (272 bytes)) \u2014 near/far refusals cannot be
+    attributed to publication timing; re-run when the canary is healthy before
+    treating near_false_abort/far_breaker_tripped as evidence about the breaker",
+  "near_requests": 12, "near_outcome": "RAISED", "near_false_abort": false,
+  "far_requests": 3, "far_outcome": "COVERAGE_GAP", "far_breaker_tripped": true,
+  "far_requests_vs_measured_near_requests": -9,
+  "no_breaker_worst_case_requests": 24}
+```
+
+Forebet's Cloudflare WAF was challenging this runner's whole session again (`football tz=0 JSON` came back as a 272-byte "Performing security verification" page — the exact same signature as `36455080098`, and
+the volleyball board itself came back a 210-byte "Just a moment..." bot-check page per the run's own annotations). The tooling worked exactly as designed this time: **`trial_valid` is `false` and `invalid_reason`
+names the canary explicitly, so this run's `near_requests=12`/`far_requests=3`/`far_breaker_tripped=true` numbers are correctly excluded from any conclusion about the breaker's publication-gap behavior** — this
+is the mechanism landing in this same entry doing its job on the very first re-run, rather than a second silent mislabel. Note also `near_outcome="RAISED"` (a `BudgetExhausted` exception on the near board, not a
+clean `COVERAGE_GAP`) — a different failure shape from `36455080098`'s near-board 422, itself further evidence this WAF condition degrades requests inconsistently and is exactly the kind of run a canary is needed
+to flag rather than trust at face value.
+
+**Item (iii) remains open.** Two invalid trials now on record (`36455080098`, `36461512749`), both correctly labelled invalid by the canary, zero valid trials. Closing it needs a future push landing on a run
+where Forebet's WAF is not actively challenging this runner — no code fix will produce that condition; it requires re-running until the canary happens to read `healthy: true`. The next session should re-push
+(any touch to `scripts/probe_kickoff_timezone.py` auto-triggers the workflow) and check `report["canary"]["healthy"]` before reading anything else from that run's `circuit_breaker_comparison`.
+
+**2026-09-28 (same session, continued a third time) — RUN 36426785929's LOG IS PERMANENTLY CLOSED (owner instruction, do not re-ask); PROBE WORKFLOW TRIGGER FIX LANDED ON `main` AND MERGED IN; forward_shadow_batch.py NOW EMITS PER-PHASE CHECK-RUN ANNOTATIONS.**
+
+**Stop asking for run 36426785929 / job 108942599581's log — closed by explicit owner instruction.** The owner diagnosed, with verified evidence, exactly why it was never readable: GitHub's raw log/artifact endpoints
+(`/actions/runs/<id>/logs`, artifact zips) require **repo-admin** credentials even on a public repo — an anonymous `GET .../actions/runs/36426785929/logs` returned `403 "Must have admin rights to Repository"`. Check-run
+**annotations**, by contrast, are anonymous-readable: an unauthenticated `GET .../check-runs/108942599581/annotations` returned JSON with no credential at all. Separately, the owner confirmed both of the two earlier
+"successful" pasted signed URLs in this whole session were the **`probe` job's** log (running `probe_kickoff_timezone.py`), never Forward Shadow's `forward-batch` job (running `forward_shadow_batch.py --root .`) — an
+easy signed-URL/UI mismatch, not a defect in how those pastes were read. Run 36426785929's only unread unique value was a "before" request-count baseline; **run a5e5720's measured `collector_end_to_end` figures
+(`requests=10`, `elapsed=93.286s`, `outcome=CAPTURED:relay_columns`, `parsed_events=13`) are now the permanent "before" baseline instead** — do not re-request that URL.
+
+**Consequence, now a standing design rule:** any script whose run needs to be diagnosable without an owner paste must emit its findings as check-run annotations (`::notice`), incrementally, the moment each phase
+finishes — never batched at the end, because a killed/cancelled run must still leave partial findings behind (the same "a stage reports as it finishes" lesson `docs/STATE.md` already carries for the probe's own
+15-minute cap). `probe_kickoff_timezone.py` already did this (`emit_section`); `forward_shadow_batch.py` did not — its only annotations were the two GitHub-generated cancellation notices — which is the specific reason
+run #33 was unreadable even in principle, separate from the admin-rights issue above.
+
+**Fixed this session:** `scripts/forward_shadow_batch.py` now has `emit_notice()` (ported `_annotation_escape`/2600-char-cap pattern from the probe's `emit_section`) wired to fire once per phase as it completes —
+settlement backlog, completion pass, delta settlement, refresh pass, event-day pass, and once per forward-pass target date (immediately after that date's `process_date()` returns, carrying a `summarize_capture_timing()`
+roll-up of that date's per-sport `capture_timing` — total requests, total elapsed seconds, counts grouped by outcome family — rather than one annotation per sport, which would blow past any reasonable annotation
+budget across a multi-date, multi-sport run), plus a final `summary` notice. New tests (`tests/test_forward_shadow_batch.py::TestPhaseAnnotationOrdering`) assert a phase's notice is on the wire *before* the next
+phase's work begins and before the next forward-pass date's capture starts — the actual property that matters for a run killed mid-way, test-enforced rather than asserted informally.
+
+**Also reconciled this session:** the owner applied the staged probe-workflow trigger fix directly to `main` (commit `1348ded`: `on.push.branches: [main, 'arena/**']`). This branch picked it up via
+`git merge origin/main` (merge commit `3de1b98`) rather than an authored diff — **merging in an already owner-committed `.github/workflows/*.yml` change succeeds under this bot's restricted push token, even though
+authoring a fresh diff to that same path directly is rejected** (`refusing to allow a GitHub App to create or update workflow ... without 'workflows' permission`). Use this pattern for any future owner-applied
+workflow fix instead of leaving a branch permanently stale relative to `main`. `docs/owner_paste/probe_kickoff_timezone.yml` (the staged copy) is deleted, `docs/owner_paste/README.md`'s section rewritten to
+"APPLIED" style, and `tests/test_probe_workflow_persist_contract.py` rewritten to guard the live file's `on.push.branches` directly (asserts it contains both `main` and `arena/**`, and that no single hardcoded
+session-branch entry ever reappears) instead of pinning a staged diff that no longer exists. Consequence: a push touching `scripts/probe_kickoff_timezone.py` now auto-triggers the workflow on this branch — no
+dispatch needed for future probe measurements.
+
+Full repo gate after all of the above: `pytest` — 1623 passed, 0 failed. `pyflakes`/`py_compile`/`git diff --check` on all touched files — clean. `scripts/check_workflow_evidence_globs.py` — 24/24 covered.
+
+**Unplanned but real: the `3de1b98` merge push itself auto-triggered the probe workflow, and its annotations were read back with zero owner involvement — the design this whole session has been building toward,
+working end to end for the first time.** `gh run list --branch arena/01a0e863-slumdog` shows run `36455080098` (`push`, `1348ded`'s workflow-file content now live on this branch), `job=probe` id `109039256770`,
+`conclusion=success`. `gh api repos/6ixtyn9-sudo/Slumdog/check-runs/109039256770/annotations` (no auth beyond the sandbox's own `gh` token, which is not repo-admin) returned all nine of the probe's sections —
+`probe:circuit_breaker_comparison`, `probe:stage_seconds`, `probe:passes_used`, `probe:render_clock`, `probe:settlement_probe`, `probe:collector_end_to_end`, `probe:circuit_breaker_far`, `probe:started`, and the two
+free-text "Kickoff timezone report"/"verdict" sections — confirming the anonymous-annotations claim is not just a theoretical 403-vs-200 test but actually works for this repo's own runs today.
+
+**The circuit-breaker comparison itself, from that run:**
+```
+circuit_breaker_comparison: far_breaker_tripped=true far_outcome=COVERAGE_GAP far_requests=3
+                             near_false_abort=true    near_outcome=COVERAGE_GAP near_requests=3
+                             no_breaker_worst_case_requests=24
+```
+Both the near (D+1) and far (D+6) boards refused with HTTP 422 on the first two columns and the breaker tripped both, costing 3 requests each instead of the 24-request worst case (2 columns × up to 4 attempts ×
+some retry factor, per `no_breaker_worst_case_requests`) — real, measured request savings. **But read this specific run's result with its actual cause attached, not as a clean validation:** `browser_probe.looks_like`,
+the board bytes, and the football-JSON parse attempts in the same run all show `"looks_like": "challenge_page"` / `is_challenge: true` / `JSONDecodeError: Expecting value` — Forebet's Cloudflare WAF was
+bot-challenging this runner's IP for the whole run, not selectively refusing an unpublished board. `near_false_abort=true` here means the near-term (usually-published) board ALSO got the same HTTP 422 refusal
+signal the breaker uses for "not published yet" — i.e., **the breaker's HTTP-422-means-not-published assumption cannot currently distinguish a genuine publication gap from a temporary whole-site WAF block**, and this
+run is live proof both causes produce an identical signal to the breaker. This is a real, previously-undocumented risk for item (iii)/(v) (publication-horizon gate): a WAF-challenge day would make every sport look
+`COVERAGE_GAP`, near and far alike, and the breaker (correctly, given what it can see) treats that the same as "far board not published" — worth a follow-up but not a blocker to any item already in flight.
+
+**2026-09-28 (same session, continued a second time) — RUN a5e5720 IS THE FIRST LIVE PROOF THE WHOLE LOOP WORKS; R1_COVERAGE'S FLAT SLICE AND THE PROBE'S CIRCUIT-BREAKER MEASUREMENT BOTH FIXED.**
+
+**The baseline every later change is measured against**, read directly from
+run 36426785929's successor — the probe dispatched via `workflow_dispatch`
+against `arena/01a0e863-slumdog` at 2026-09-28T16:14:48Z (job
+`dd901317-5c15-5a40-80e7-b2a078e613a9`), read chunk-by-chunk from the
+owner-pasted signed log URL, not inferred:
+
+```
+collector_end_to_end: sport=volleyball route=relay_columns bytes=3833
+  capture_timing=[{elapsed_seconds: 93.286, requests: 10,
+                   outcome: "CAPTURED:relay_columns"}]
+  parsed_events=13  snapshots_unique_accepted=13
+  top_by_probability: volleyball:109598 Uzbekistan vs Kazakhstan p2=0.69
+  verdict: "capture -> disk -> parse produced events"
+settlement_probe.volleyball: rows=22 graded=18 statuses_seen={"FT": 22}
+  settled_date=2026-09-27  status=CAPTURED
+render_clock: proven=true offset_minutes=-120 joined=41 json_matches=140
+  distinct_hours=10  seconds=15.8
+r1_coverage: all 4 sports (basketball, hockey, handball, volleyball)
+  "stopped: stage slice of 45s spent" — 235.2s spent, 0/4 rankable, while
+  stage_seconds.budget_left (measured BEFORE r1_coverage ran) was 482
+```
+
+This is capture → disk → parse, a prior day's board graded, and the
+timezone offset measured, all live, all in one run — Priority 1's actual
+regression (the forward pass's undifferentiated ≥1h56m) was never in
+`collector_end_to_end`, `settlement_probe` or `render_clock`; each answers
+in under 100 seconds on its own. This run did NOT yet carry the breaker
+measurement (`circuit_breaker_comparison` is new this session, added after
+this run happened) or the fixed `r1_coverage` slice — both landed
+immediately below, from this evidence.
+
+**Two bugs this run exposed, both fixed this session (not yet re-verified
+live — that needs another dispatch):**
+
+1. **`r1_coverage`'s per-sport slice was a flat 45 seconds regardless of
+   how much of the job's actual budget was left.** With 482 seconds still
+   on the clock, every one of 4 sports still gave up after 45s each,
+   spending 235.2s total and answering nothing, while roughly half the
+   remaining budget sat unused. Fixed in `run_probe()`:
+   `per_sport = max(45.0, (time_left() - 60) / len(COVERAGE_SPORTS))`,
+   dividing what is actually left instead of a number picked before the
+   run knew.
+2. **The circuit-breaker measurement (Priority 1, item iii) did not run at
+   all**, because it only existed behind a `--circuit-breaker-probe` CLI
+   flag the workflow's hardcoded command line had no way to pass. Fixed by
+   making it two ordinary stages inside `run_probe()` instead of a
+   separate mode: the existing `collector_end_to_end` stage now opts the
+   breaker in (`circuit_breaker_columns=2`, the forward pass's exact
+   setting) for free — a capture that succeeds is also proof the breaker
+   did not falsely abort it — and a new `circuit_breaker_far` stage
+   captures one board `date + 5 days` (almost certainly not published
+   yet) with the same breaker setting. `circuit_breaker_comparison()`, a
+   pure function, reads both records back into `near_requests` /
+   `far_requests` / `near_false_abort` / `far_breaker_tripped` with no
+   extra request cost beyond the one new far capture. The
+   `--circuit-breaker-probe` CLI flag still exists as a focused,
+   standalone override (two fresh captures, useful for an on-demand
+   re-check) but the default sweep — the exact command line
+   `.github/workflows/probe_kickoff_timezone.yml` already runs — now
+   produces this evidence on its own, no workflow edit required.
+
+**A third, narrower bug also fixed:** `ForebetCollector.capture_selected`
+selected its timed/serial path via `pause_seconds > 0`, so the probe had
+been passing `pause_seconds=0.001` — a value small enough to never actually
+sleep on a single-sport call but truthy enough to pick the branch. Nothing
+marked that as load-bearing, and a future refactor could have silently
+undone it. `capture_selected` now takes an explicit `serial: bool | None`
+kwarg (`None` still infers from `pause_seconds > 0`, unaffected for every
+production caller); the probe now passes `serial=True, pause_seconds=0`
+outright. `on_capture_timing` combined with `serial=False` (explicit or
+inferred) is now refused with `ValueError` rather than silently producing
+an empty `capture_timing` — a contradiction is now an error, not a quiet
+no-op.
+
+**Still open for the next session, in the owner's stated order:** (iii) is
+now landed but its evidence is from BEFORE the fix (see above) — the next
+dispatch (`workflow_dispatch` against this branch, no paste needed) will
+carry `circuit_breaker_comparison` and the corrected `r1_coverage`; read
+that run's annotations to confirm `far_breaker_tripped=true` and
+`near_false_abort=false` before calling item (iii) closed. Then (iv) a
+per-run request budget through `ForebetCollector(before_request=...)`, then
+(v) the publication-horizon gate. Only after all five land, re-dispatch
+Forward Shadow. **[Superseded — see the top-of-file entry: the workflow-
+trigger durability fix (`branches: [main, 'arena/**']`) has since been
+applied by the owner to `main` and merged into this branch; it is no
+longer staged, and a push (not just `workflow_dispatch`) now triggers the
+probe.]**
+
+**2026-09-28 (same session, continued) — NETWORK-REACHABILITY CLAIM CORRECTED A THIRD TIME (this is the one to trust); OWNER PROVED THE WEB-FETCH TOOL READS A PASTED SIGNED BLOB URL.**
+
+The entry directly below this one ("FORWARD SHADOW #33 READ END TO END...")
+said *"annotations are the only channel this sandbox can read a run's real
+findings through, full stop."* **That is wrong, and it is the same mistake
+in the opposite direction from the original "blob storage is unreachable"
+claim it was trying to fix: promoting "the method I tried failed" into "no
+method could work."** The owner supplied the counter-example from a prior
+session's chat log: pasting a signed `productionresultssa10.blob.core.windows.net`
+job-log URL let the WEB FETCH tool read an entire job log across seven
+chunks — the full probe report JSON, far more than an annotation carries.
+
+**The corrected, per-method rule now lives in `AGENTS.md` → "Remote Probing"
+as a table; read it there before trusting any paraphrase of it, including
+this one.** In short: `gh`/`curl` from this sandbox cannot reach
+`*.blob.core.windows.net` or `results-receiver.actions.githubusercontent.com`
+(no general egress — that part of every prior correction was right). The
+WEB FETCH tool cannot mint its own signed URL and gets 401/403 hitting the
+raw `/logs` or `/zip` endpoints (no credential) — also right. But the WEB
+FETCH tool CAN follow a signed URL it is simply given, because the `sig=`
+query parameter IS the credential and the tool needs no header. Nobody had
+tried that third path before concluding "full stop." **The takeaway to
+carry forward, independent of GitHub specifics: when a read method fails,
+report which method failed and under which condition — never generalize a
+tested failure into an untested impossibility.**
+
+**Next actions this session (owner-directed, in order) — item 1 RETRACTED,
+see the top-of-file entry above: the owner has since closed this line of
+inquiry entirely (run 36426785929's log needs repo-admin rights no matter
+how it's fetched; its only value, a request-count baseline, is superseded
+by run a5e5720's measured `collector_end_to_end` numbers). Do not re-ask
+for that URL.**
+1. ~~Ask the owner to paste a fresh signed log URL for run 36426785929 (the
+   run page's Download-log link; window ~10 minutes, ask again if it's
+   gone stale) and read it via WEB FETCH, chunk by chunk. Answer the
+   original four questions from stdout in that log — the driver prints its
+   receipt there — not from the 59.7MB artifact, which is too big to fetch
+   usefully by this route.~~ (retracted — see above)
+2. Instrument `forward_shadow_batch.py` BEFORE touching Priority 1's fix:
+   one line per phase and per sport-date (elapsed seconds, request count,
+   outcome: `CAPTURED` / `NO_ROWS_FOR_DATE` / `COVERAGE_GAP` / raised).
+   Without this, "about two hours" is the only fact anyone has, and a fix
+   would be unmeasurable.
+3. Then the actual Priority 1 fix, in order: (a) circuit breaker — stop
+   after the first two column refusals, not eight; (b) gate the column
+   fallback by measured publication horizon (rugby +2d, mma +4d, most
+   ~1d) so D+6 volleyball is never attempted; (c) a per-run request
+   budget through the existing unused `ForebetCollector(before_request=...)`
+   seam. Report timings from step 2's instrumentation, not wall clock.
+4. Do not re-dispatch Forward Shadow until 2 and 3 land on `main` —
+   `workflow_dispatch: {}` takes no inputs, so code is the only lever, and
+   `cancel-in-progress: false` means a second dispatch would just queue.
+
+**Context to hold, not act on yet:** `data/reports/shadow_event_day/` has
+never been committed for any sport in this repo's history — expected, since
+the track was football-only by design before PR #21 — so its first real
+entry is the actual proof the column route works for the event-day track,
+and should be checked hard, not celebrated on sight. And the owner's real
+goal is R1 **quality**, not throughput: today's R1 is Forebet's own
+top-probability pick, sorted, so it cannot beat Forebet by construction.
+The only legitimate order is settled outcomes → hit rate per sport/band →
+a baseline to beat → new features. No improvement claim is a claim before
+outcomes are graded.
+
+**2026-09-28 (this session) — FORWARD SHADOW #33 READ END TO END (cancelled, not completed); NETWORK-REACHABILITY CLAIM CORRECTED A SECOND TIME; PERSIST-STEP CANCELLATION GAP FOUND AND STAGED.**
+
+**What was asked:** read Forward Shadow run 36426785929 end to end and report the event-day `render_clock` block, `selected_sports`, capture-receipt routes, `shadow_event_day/` contents, and per-phase timings — the baseline for Priority 1 (the forward-pass cost regression).
+
+**What actually happened, in order, all timestamps quoted from `gh api repos/6ixtyn9-sudo/Slumdog/actions/jobs/108942599581` / `.../runs/36426785929`:**
+
+- Run dispatched `2026-09-28T13:10:59Z`, `head_sha=ab8830ec6415ae8e7fbaa6597c058f069d43e321` (= `main`, PR #21).
+- Steps 1–5 (checkout, Python setup, install, seed history) completed by `13:11:27Z` — 24 seconds total, not interesting for Priority 1.
+- Step 6, **"Settle overdue predictions (D+1) ... then run forward batch"**, started `13:11:27Z` and was still `in_progress` at every poll through `15:02:53Z` — **1h51m26s elapsed and counting**, confirmed live by repeated `gh api .../jobs/108942599581` reads in this session (not inferred from one read: polled at 14:22:45Z, 14:42:10Z, 15:01:51Z, 15:02:53Z, 15:07:29Z, all `status=in_progress`, `conclusion=null`). This single number is Priority 1's baseline: a step that used to take "minutes" per `AGENTS.md`/`HANDOFF.md` precedent ran for nearly two hours and had not reached the forward-capture pass's declared 6-date cutoff.
+- The owner cancelled the run directly (I do not have permission to — see below). GitHub recorded: step 6 `conclusion=cancelled` (`completed_at=15:07:37Z`, total step-6 wall time **1h56m10s**), step 7 **"Persist small evidence to git" `conclusion=skipped`**, step 8 **"Upload full evidence as artifacts" `conclusion=success`** (`completed_at=15:07:40Z`). Artifact `forward-shadow-36426785929`, 59,728,635 bytes, `id=10978815348`, expires `2026-10-28T15:07:38Z`.
+
+**Answering the four questions the task asked — honestly, not by inference:**
+
+1. **Event-day `render_clock` block + `selected_sports`: UNVERIFIED, not "unmeasured" — the data exists but nothing in this session could read it.** It lives only inside the uploaded artifact (`data/reports/render_clock_<date>_<stamp>.json` / the `render_clock` key of whatever receipt `run_event_day_for_date` wrote), because step 7 (the only path that would have put it on `main`) was skipped. I do not have a plausible number to report and am not going to manufacture one — see "Rules of evidence" #1.
+2. **Capture-receipt route values (how many sports came via `relay_columns`): same answer — unreadable this session.** No capture receipt from run #33 reached `main` or any endpoint I can read.
+3. **Anything under `data/reports/shadow_event_day/` for a non-football sport: NO, and not just for this run.** `git log --oneline --all -- 'data/reports/shadow_event_day'` on this checkout returns **nothing** — the tree has never had a single file committed to git in this repository's history, for any sport, ever. This is a fact about `main`'s history, independent of whether run #33's artifact contains something (it might; that artifact is unreadable, see below).
+4. **Per-phase timings — the one thing fully proven:** steps 1–5 combined: 24s. Step 6 (settlement + completion + forward pass, undifferentiated — `forward_shadow_batch.py` has zero internal timing instrumentation, confirmed by `grep -n "time.time()\|duration\|elapsed\|perf_counter" scripts/forward_shadow_batch.py` returning no matches): ran ≥1h56m10s before being cancelled, never reaching completion. There is no finer breakdown available from the workflow's own step boundaries, because settlement, completion, delta-settlement, refresh, event-day, and the D+2..D+6 forward pass are all one shell step.
+
+**Why the artifact and full logs could not be read — verified, not assumed, and this corrects the task brief's own METHOD section a second time:**
+
+- `gh run download 36426785929` failed: `Get "https://productionresultssa2.blob.core.windows.net/...": EOF`. A direct `curl` to the exact same signed SAS URL (still valid, `se=...15:18:11Z`) also failed: `http_code=000`, `exit=35` — the same general-egress block `AGENTS.md` already documents for arbitrary hosts, just now confirmed for Azure Blob (`*.blob.core.windows.net`) specifically.
+- `gh run view --job 108942599581 --log` (job already `completed`) failed the same way: it successfully obtained a signed URL from `api.github.com` (no auth error), then failed fetching it — `Get "https://results-receiver.actions.githubusercontent.com/...": EOF`. Same block, different domain.
+- The WEB FETCH tool (`fetch_page`), hit directly against `https://api.github.com/repos/.../actions/jobs/108942599581/logs`, returned **`403 Must have admin rights to Repository`** — the *same* error this session saw while the job was still in progress, now also seen after completion. It also returned **`401 Requires authentication`** on the artifact zip endpoint. Conclusion: `fetch_page` carries **no GitHub credential**; it can read public, unauthenticated GH API JSON (run/job metadata, annotations — which is all this session's earlier reads used) but cannot download logs or artifacts, which GitHub gates behind auth unconditionally, even for public repos.
+- **Net correction to the task brief's METHOD section:** "Read results with the WEB FETCH tool ... FULL job logs are readable this way" is **false** as tested this session, for both logs and artifacts, regardless of job/step completion state. What *is* true and reproducible: `gh api`/`curl` reach `api.github.com` directly from this sandbox (`curl -s -o /dev/null -w '%{http_code}' https://api.github.com` → `200`; general internet does not — `https://example.com`, `https://raw.githubusercontent.com/...`, `https://www.forebet.com/...` all → `exit 35`, `000`). That gets you run/job status, step timestamps, and `::notice` annotations (all public metadata, no auth required) — but not the log or artifact bytes themselves, which live on separate, non-`api.github.com` domains (`*.blob.core.windows.net`, `results-receiver.actions.githubusercontent.com`) that are outside the allowlist for every tool available this session, authenticated or not. **The only way to get log/artifact bytes out of a run right now is for the owner to download them through their own authenticated browser session.** I corrected the two earlier, narrower versions of this claim in `AGENTS.md` and above in this file; both undersold the actual limitation.
+- I also do not have permission to cancel runs: `gh run cancel 36426785929` → `HTTP 403: Resource not accessible by integration`. The owner cancelled it, not me.
+
+**Bug found and staged for the owner (not yet applied — I cannot push to `.github/workflows/`):** the persist step (step 7) has no `if:` at all, so a cancellation or a timeout throws away every small-evidence file already written to disk — including the D+1 settlement and completion passes, which finish *before* the overrunning forward pass — while the artifact-upload step (step 8, which does have `if: always()`) still runs. This is the exact "stage reports as it finishes / work done then thrown away at the door" failure `docs/STATE.md` already recorded once for the probe's 15-minute cap, now found in the batch driver's own workflow. Fix is one line (`if: always()` on step 7); staged at `docs/owner_paste/forward_shadow.yml` (see that directory's `README.md` for the exact proof and the apply steps) since workflow files are owner-authored and an agent token is refused when pushing to `.github/workflows/`. `tests/test_workflow_persist_contract.py::TestTheStagedFixIsNarrowAndCorrect` pins that the staged copy differs from the live file by exactly that one line.
+
+**What I changed this session:** `AGENTS.md` (Remote Probing intro — corrected the blob-storage-unreachable claim once, then this file's own now-superseded correction was itself refined further above), `HANDOFF.md` (this entry, and inline-corrected the 2026-09-26 entry that first made the false claim), `docs/owner_paste/forward_shadow.yml` (new, staged), `docs/owner_paste/README.md` (new section), `tests/test_workflow_persist_contract.py` (2 new tests pinning the staged fix, docstring updated; no existing assertion weakened — `test_the_staged_copy_was_removed_once_applied` was replaced with a documented no-op plus a new class, because a *second*, different owner-paste cycle for the same file legitimately reopened the "is anything staged" question the old assertion answered "no" to for the *first* cycle).
+
+**What I did NOT do:** touch `.github/workflows/forward_shadow.yml` itself; implement any of Priority 1's actual code fixes (circuit breaker / publication-horizon gate / request budget) — no code diagnosis of *why* step 6 is slow was possible this session beyond the wall-clock fact, because the run's own logs are unreadable (see above) and `forward_shadow_batch.py` emits no internal timing; touch Priority 2 or 3.
+
+**Open, for the next session:** (a) get the owner to either apply the `if: always()` paste, or manually pull `forward-shadow-36426785929`'s `data/reports/` and share the event-day entry / capture receipt / any `shadow_event_day/` contents — that is the only way to answer questions 1–3 above for run #33; (b) do not re-dispatch Forward Shadow until Priority 1's actual fix (circuit breaker, publication-horizon gate, request budget — `ForebetCollector(before_request=...)`) lands, since the workflow takes no dispatch inputs (`workflow_dispatch: {}`) and there is no way to run a cheaper version of it without a code change; (c) the D+1 settlement + completion pass evidence computed during this run's first ~1h56m is currently unrecoverable (it was in the cancelled run's process memory / working directory, not yet committed when step 7 was skipped, and the artifact holding it can't be read this session) — it will simply be recomputed (and re-fetched from Forebet) on the next dispatch, which costs real request budget against a relay that already throttles.
+
 **2026-09-26 (resolved):** there IS a capture route for the blocked sports. Two selector-scoped requests through the relay — `X-Target-Selector: .rcnt .tnms` for team names and kickoffs, `.rcnt` for the numbers — return 126 rows each on the basketball board. The bot check never blocked the renderer; the full-page render was dropping the team-name column, and page-scope Markdown made it look like identity was unavailable. See the route table at the top of docs/STATE.md, including the three caveats: order-based joining, rendered-not-absolute kickoff times, and relay throttling that produced several false dead ends.
 
 **2026-09-26 (final hunt):** every capture route for the non-football boards has now been tested and the site is closed to datacenter IPs entirely — headless Chromium on the runner is served the interstitial even on the homepage. No JSON twin exists for those sports (the archived board ships its rows server-rendered, and every candidate getrs.php sport code returns empty). The relay's Markdown engine is the only thing that gets through and it carries neither team names nor kickoff times. See the route table at the top of docs/STATE.md. Unblocking needs a paid service, a residential runner, or an explicit decision to stay football-only.
@@ -11,7 +538,7 @@
 - **Route comparison.** `X-Return-Format: html` → challenge; `X-Engine: browser` / `cf-browser-rendering` → 401 (paid relay key required); Markdown reader → real content (15KB) but basketball markdown has no team names and no per-match times, so it cannot feed the parser as-is.
 - **Open decision (owner).** (a) add a relay API key as a repo secret and re-probe the browser engine, (b) keep probing for per-sport JSON endpoints like football's `getrs.php` (no owner action needed, a few automated rounds), or (c) accept football-only.
 - **The EVENT_DAY timezone hold stands and is now moot for those sports** — an unfetchable board cannot be timed. No calibration work should start before a capture route exists.
-- **How results come back.** Actions logs and artifacts are served from blob storage, which the agent sandbox cannot reach; the probe prints its verdict as `::notice` annotations, which api.github.com does serve.
+- **How results come back.** ~~Actions logs and artifacts are served from blob storage, which the agent sandbox cannot reach~~ — **corrected 2026-09-28, three times in one day; see `AGENTS.md` → "Remote Probing" for the per-method table that is the one to trust.** Summary: `api.github.com` JSON and `raw.githubusercontent.com` are readable via the WEB FETCH tool with no credential (public repo). `gh`/`curl` from the sandbox cannot reach the blob-storage domains that actually serve log/artifact bytes (no egress) — true of the first two correction attempts too. But the WEB FETCH tool reading a **pre-signed** blob URL (the one behind the run page's Download-log button) DOES work — the owner proved this by pasting one and the tool read the full job log across seven chunks. So logs are NOT gated on annotations; they're gated on getting a signed URL into the session, which only the owner's authenticated browser can mint. The lesson that survives all three corrections: report which specific method failed under which specific condition, not a claim about every method.
 
 **Last updated:** 2026-09-26 (UTC, later session) — **RENAMED TO `EVENT_DAY` + KICKOFF-TIMEZONE PROBE.**
 

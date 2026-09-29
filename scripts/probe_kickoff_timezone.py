@@ -59,7 +59,9 @@ from bs4 import BeautifulSoup  # noqa: E402
 from slumdog.forebet import board_url, looks_like_challenge_page  # noqa: E402
 from slumdog.forebet import (  # noqa: E402
     RELAY_BASE,
+    direct_get_diagnostic,
     fetch_with_fallback,
+    relay_get_diagnostic,
     relay_get_markdown,
     source_url,
 )
@@ -318,18 +320,28 @@ def body_fingerprint(body: bytes | None, *, sample: int = 320) -> dict[str, Any]
     challenge page), a different format (the relay's Markdown instead of
     HTML), or a genuinely empty board. These three need different fixes, so
     the probe must say which one it got.
+
+    The challenge-page check reuses ``forebet.looks_like_challenge_page`` —
+    the same list production validates every capture against — rather than
+    a second, independently-maintained keyword list. Found missing a real
+    hit 2026-09-28 (run 36455080098): this function's own list had no entry
+    for "performing security verification" even though forebet.py's list
+    has carried it since the 2026-09-28 challenge-wording addition, so a
+    272-byte challenge page came back ``looks_like: "unknown"`` here and the
+    canary derived from it (see ``canary_from_render_clock``) would have
+    missed a live site-wide block. One classifier, not two that can drift
+    apart.
     """
     if not body:
         return {"bytes": 0, "sample": "", "has_rcnt": False, "looks_like": "empty"}
     text = body.decode("utf-8", "replace")
     lowered = text.lower()
-    if "rcnt" in lowered:
+    if looks_like_challenge_page(body):
+        looks_like = "challenge_page"
+    elif "rcnt" in lowered:
         looks_like = "board_html"
     elif "markdown content" in lowered or text.lstrip().startswith("Title:"):
         looks_like = "relay_markdown_wrapper"
-    elif any(t in lowered for t in ("just a moment", "cf-browser", "cloudflare",
-                                    "captcha", "attention required")):
-        looks_like = "challenge_page"
     elif "<html" in lowered:
         looks_like = "other_html"
     else:
@@ -340,6 +352,7 @@ def body_fingerprint(body: bytes | None, *, sample: int = 320) -> dict[str, Any]
         "has_rcnt": "rcnt" in lowered,
         "looks_like": looks_like,
     }
+
 
 
 def html_board_rows(body: bytes) -> list[dict[str, str]]:
@@ -1170,7 +1183,9 @@ def relay_get_selector(url: str, selector: str, *, timeout: int) -> bytes:
 
 def collector_end_to_end(date: str, *, timeout: int, pause: float,
                          sport: str = "hockey",
-                         slice_seconds: float = 240.0) -> dict[str, Any]:
+                         slice_seconds: float = 240.0,
+                         circuit_breaker_columns: int = 0,
+                         circuit_breaker_attempts: int = 1) -> dict[str, Any]:
     """Drive the PRODUCTION capture path, not a probe-shaped copy of it.
 
     Everything proven about the column route so far was proven by calling
@@ -1204,11 +1219,20 @@ def collector_end_to_end(date: str, *, timeout: int, pause: float,
         root = Path(tmp)
         receipt = f"capture_probe_{date}.json"
         try:
-            collector = ForebetCollector(root=root, timeout=timeout,
-                                         workers=1, before_request=guard)
+            collector = ForebetCollector(
+                root=root, timeout=timeout, workers=1, before_request=guard,
+                circuit_breaker_columns=circuit_breaker_columns,
+                circuit_breaker_attempts=circuit_breaker_attempts)
+            # serial=True (not a "pause_seconds small but truthy" trick)
+            # selects capture_selected's TIMED one-sport-at-a-time path,
+            # which is what populates the receipt's capture_timing
+            # (elapsed/requests/outcome) this probe needs to report. A
+            # single-sport list never actually sleeps on that path (the
+            # pause only applies between the 2nd+ sport in one call), so
+            # pause=0 here costs nothing.
             collector.capture_selected(date, [sport], force=True,
                                        receipt_name=receipt,
-                                       pause_seconds=0)
+                                       pause_seconds=0, serial=True)
         except Exception as exc:  # noqa: BLE001 - reported, not raised
             record["verdict"] = f"capture failed: {type(exc).__name__}: {exc}"[:240]
             # One coarse request to separate "the renderer refused us" from
@@ -1230,6 +1254,12 @@ def collector_end_to_end(date: str, *, timeout: int, pause: float,
         captured = payload.get("captured") or []
         record["captured"] = len(captured)
         record["failures"] = (payload.get("failures") or [])[:2]
+        # Priority 1 (2026-09-28): the per-sport-date timing this stage's
+        # single sport went through, straight from the production receipt
+        # (elapsed_seconds/requests/outcome) — the same field the forward
+        # pass writes, so this is a live measurement of the actual code
+        # path, not a re-derivation of it.
+        record["capture_timing"] = payload.get("capture_timing") or []
         # 403 and 422 are different animals wearing one failure string:
         # 422 is "your selector matched nothing", 403 is "you are being
         # refused". Counting them per run is how the difference between a
@@ -1284,6 +1314,310 @@ def collector_end_to_end(date: str, *, timeout: int, pause: float,
                 f"capture unreadable: {type(exc).__name__}: {exc}"[:240])
     record["seconds"] = round(time.monotonic() - started, 1)
     return record
+
+
+def canary_from_render_clock(render_clock: dict[str, Any]) -> dict[str, Any]:
+    """Was football's tz=0 JSON itself reachable this run?
+
+    Owner finding, 2026-09-28 (Priority 1, item iii): run 36455080098's
+    near/far circuit-breaker comparison both refused with HTTP 422 while
+    Cloudflare was challenge-blocking the whole site (``render_clock``'s
+    own ``json_body`` showed ``looks_like: "unknown"`` — since fixed, see
+    ``body_fingerprint`` — for a body reading "Performing security
+    verification"). A refusal on a board that has never once failed to
+    publish and a refusal because the source is blocking this run entirely
+    produce the exact same HTTP 422 signal; nothing in the near/far
+    comparison alone can tell them apart.
+
+    Football's tz=0 JSON is the discriminator, and it costs nothing extra
+    here: ``render_clock_probe`` already fetches it every run to measure
+    the renderer's offset. This function only reads that already-computed
+    record — it makes no request of its own.
+
+    ``healthy=True`` when at least one instant was parsed (proof the
+    endpoint served real JSON this run); ``healthy=False`` with a reason
+    when it was attempted and failed; ``healthy=None`` ("not checked")
+    when the render_clock stage never got its turn (time ran out) — a
+    trial with no canary reading is unverified, not assumed healthy.
+    """
+    if not render_clock:
+        return {"sport": "football", "checked": False, "healthy": None,
+                "reason": "render_clock stage did not run this pass"}
+    matches = render_clock.get("json_matches")
+    if matches:
+        return {"sport": "football", "checked": True, "healthy": True,
+                "reason": None}
+    json_body = render_clock.get("json_body")
+    if json_body is not None:
+        return {"sport": "football", "checked": True, "healthy": False,
+                "reason": (f"football tz=0 JSON looked like "
+                          f"{json_body.get('looks_like', 'unknown')!r} "
+                          f"({json_body.get('bytes', 0)} bytes)")}
+    return {"sport": "football", "checked": False, "healthy": None,
+            "reason": "render_clock ran but reported no json_matches or "
+                     "json_body to judge from"}
+
+
+def _direct_leg(url: str, timeout: int) -> dict[str, Any]:
+    """One diagnostic direct leg for ``direct_vs_relay_probe``/its alt-host
+    extension: STATUS CODE + a header snippet, never just an exception
+    class name — see ``direct_get_diagnostic``'s docstring (owner
+    directive, 2026-09-28: "urllib=HTTPError" alone is not a finding).
+    ``direct_get_diagnostic`` never raises by contract, but this stays
+    defensive (belt and suspenders) — a failed leg must be REPORTED, never
+    let it crash the whole probe.
+    """
+    try:
+        diag = direct_get_diagnostic(url, timeout=timeout)
+    except Exception as exc:
+        return {"ok": False, "status": None, "headers": {},
+                "error": f"{type(exc).__name__}: {exc}"[:300]}
+    body = diag.pop("body", None)
+    if diag["ok"]:
+        return {**diag, **body_fingerprint(body)}
+    return diag
+
+
+def _relay_leg(url: str, expected_url: str, timeout: int, *, markdown: bool) -> dict[str, Any]:
+    """Same diagnostic, never-raises contract as ``_direct_leg``, for one
+    relay leg."""
+    try:
+        diag = relay_get_diagnostic(
+            url, markdown=markdown, expected_url=expected_url, timeout=timeout)
+    except Exception as exc:
+        return {"ok": False, "status": None, "headers": {},
+                "error": f"{type(exc).__name__}: {exc}"[:300]}
+    body = diag.pop("body", None)
+    if diag["ok"]:
+        return {**diag, **body_fingerprint(body)}
+    return diag
+
+
+def _direct_vs_relay_pair(direct_url: str, relay_target: str, timeout: int,
+                           *, markdown: bool) -> dict[str, Any]:
+    """One {url, direct, relay} leaf, reused for football's tz=0 JSON on
+    every hostname variant (see ``direct_vs_relay_probe``'s ``alt_hosts``)."""
+    return {
+        "url": direct_url,
+        "direct": _direct_leg(direct_url, timeout),
+        "relay": _relay_leg(RELAY_BASE + relay_target, relay_target, timeout,
+                            markdown=markdown),
+    }
+
+
+def direct_vs_relay_probe(date: str, *, timeout: int, sport: str) -> dict[str, Any]:
+    """Owner finding, 2026-09-28: a server-side fetch on the SAME network
+    class as the relay's own egress got a REAL, full JSON response direct
+    from ``forebet.com`` at the exact moment the relay (``r.jina.ai``)
+    returned a challenge page for the identical URL. Every "site-wide
+    refusal" this session (runs 36455080098 / 36461512749 / 36467771961)
+    may therefore have been the RELAY's egress being challenged, not the
+    source refusing this runner — the opposite of what every canary
+    reading up to this function assumed.
+
+    **2026-09-28 second correction, after run 36470920157's runner-side
+    result:** that result was more nuanced than "it's the relay" — direct
+    failed OUTRIGHT (``urllib=HTTPError``, no response at all) while relay
+    at least got a real HTTP response (a Cloudflare challenge page). Two
+    owner-directed follow-ups landed in this same function as a result:
+
+    1. **Status codes, not exception class names.** Every leg now reports
+       ``status`` and a small ``headers`` snippet (``Server``, ``CF-Ray``,
+       ``CF-Cache-Status``, ``Retry-After``, ``Content-Type`` — see
+       ``direct_get_diagnostic``/``relay_get_diagnostic`` in
+       ``slumdog.forebet``) instead of only an opaque exception name. 403
+       (blocked), 429 (rate-limited), 503 (challenge interstitial) and 451
+       mean different things and imply different fixes.
+    2. **Alternate hostnames.** Different hostnames often sit behind
+       different WAF rules than ``www.forebet.com``. ``alt_hosts`` repeats
+       the football tz=0 JSON check (direct + relay) against
+       ``m.forebet.com`` and bare ``forebet.com`` — both already present in
+       the probe's own endpoint inventory (``m.forebet.com`` is used
+       elsewhere as a mobile-host fallback candidate) — four more requests,
+       one stage, either finding an open door or closing the question with
+       evidence instead of assumption.
+
+    Production's skip-direct-on-runners decision (``on_github_runner()``)
+    predated this finding and has SINCE BEEN REMOVED from
+    ``fetch_with_fallback`` (see its docstring) — direct is now measured
+    every run rather than assumed stale. This function still deliberately
+    bypasses ``fetch_with_fallback`` itself (it wants BOTH legs' results,
+    not the first one that works) and tests both paths from THIS runner,
+    one after another, as close to the same moment as sequential requests
+    allow.
+
+    Fetches, from this runner:
+      1. football's tz=0 JSON: direct and via the relay, on ``www.``,
+         ``m.``, and bare ``forebet.com`` (``alt_hosts``) — six requests
+      2. one HTML board (``sport``): direct and via the relay — two
+         requests
+    Eight requests total, each a SINGLE attempt (``max_retries=1`` — a WAF
+    challenge is a refusal, not congestion; see ``sample_canary``'s same
+    rule). Never raises: a failed fetch on any leg IS the answer, not a
+    probe crash.
+
+    Returns ``{"target_date", "sport", "football_json": {url, direct,
+    relay}, "html_board": {url, direct, relay}, "alt_hosts": {"m":
+    {url, direct, relay}, "bare": {url, direct, relay}}}`` where every
+    leaf is ``{"ok": bool, "status": int | None, "headers": {...},
+    ...body_fingerprint(body) if ok else {"error": str}}``.
+    """
+    result: dict[str, Any] = {"target_date": date, "sport": sport}
+
+    json_url = source_url(SPORTS["football"], date)
+    result["football_json"] = _direct_vs_relay_pair(
+        json_url, json_url, timeout, markdown=True)
+
+    board = board_url(SPORTS[sport], date)
+    result["html_board"] = {
+        "url": board,
+        "direct": _direct_leg(board, timeout),
+        "relay": _relay_leg(RELAY_BASE + board, board, timeout, markdown=False),
+    }
+
+    # Alternate hostnames for the SAME football tz=0 JSON query — different
+    # hostnames often sit behind different WAF rules than www.forebet.com.
+    alt_json_url_m = json_url.replace("https://www.forebet.com", "https://m.forebet.com", 1)
+    alt_json_url_bare = json_url.replace("https://www.forebet.com", "https://forebet.com", 1)
+    result["alt_hosts"] = {
+        "m": _direct_vs_relay_pair(alt_json_url_m, alt_json_url_m, timeout, markdown=True),
+        "bare": _direct_vs_relay_pair(alt_json_url_bare, alt_json_url_bare, timeout, markdown=True),
+    }
+    return result
+
+
+def circuit_breaker_comparison(near: dict[str, Any],
+                               far: dict[str, Any],
+                               canary: dict[str, Any] | None = None
+                               ) -> dict[str, Any]:
+    """Read the breaker's two live questions straight off two already-run
+    ``collector_end_to_end`` records — not inferred, not assumed:
+
+    1. On a board that almost certainly DOES exist (``near``), did turning
+       the breaker on cost a FALSE ABORT — the exact failure mode Section 1
+       of the owner's correction was about?
+    2. On a board that almost certainly does NOT exist yet (``far``,
+       mirroring the forward pass's D+2..D+6 reach), did the breaker abort
+       cheaply, or did the live refusal not look like the clean HTTP 422
+       the breaker is scoped to trip on?
+
+    Pure and I/O-free by design: this never makes a request itself, so it
+    can be called on the SAME near-board record ``run_probe`` already
+    produces for the plain ``collector_end_to_end`` stage instead of paying
+    for a second capture of a board this probe already fetched.
+
+    ``canary`` (see :func:`canary_from_render_clock`) gates whether this
+    trial's refusals mean anything. Owner finding, 2026-09-28: run
+    36455080098 reported ``near_false_abort=True`` while Cloudflare was
+    challenge-blocking the whole site — the near board's refusal was real,
+    but attributing it to the breaker was wrong, because a site-wide block
+    produces the identical signal. When ``canary["healthy"]`` is not
+    ``True``, this function still reports the raw booleans (the
+    measurement itself is not discarded) but marks ``trial_valid`` false
+    and explains why: a run with no healthy canary reading proves nothing
+    about the breaker either way, favourable or not.
+    """
+    near_timing = (near.get("capture_timing") or [{}])[0]
+    far_timing = (far.get("capture_timing") or [{}])[0]
+    near_requests = near_timing.get("requests")
+    far_requests = far_timing.get("requests")
+    out = {
+        "near_requests": near_requests,
+        "near_outcome": near_timing.get("outcome"),
+        "near_false_abort": bool(
+            near_timing.get("outcome", "").startswith("COVERAGE_GAP")
+            and "circuit breaker" in "; ".join(near.get("failures") or [])),
+        "far_requests": far_requests,
+        "far_outcome": far_timing.get("outcome"),
+        "far_breaker_tripped": "circuit breaker" in "; ".join(
+            far.get("failures") or []),
+        # Compared against a MEASURED near-board figure, not a theoretical
+        # denominator — 2026-09-28 correction: a prior write-up compared
+        # far_requests to the line below as if it were an observed
+        # baseline. It never has been observed; production never runs with
+        # the breaker off, so there is no real "off" request count. This
+        # stays for context (how far a total board retry could go) but is
+        # explicitly NOT the savings claim.
+        "no_breaker_worst_case_requests": len(COLUMN_SELECTORS) * 3,
+    }
+    if near_requests is not None and far_requests is not None:
+        out["far_requests_vs_measured_near_requests"] = far_requests - near_requests
+    if canary is None or canary.get("healthy") is None:
+        out["trial_valid"] = None
+        out["invalid_reason"] = "canary not checked this run"
+    elif canary.get("healthy") is False:
+        out["trial_valid"] = False
+        out["invalid_reason"] = (
+            "canary (football tz=0 JSON) failed this run "
+            f"({canary.get('reason')}) \u2014 near/far refusals cannot be "
+            "attributed to publication timing; re-run when the canary is "
+            "healthy before treating near_false_abort/far_breaker_tripped "
+            "as evidence about the breaker")
+    else:
+        out["trial_valid"] = True
+        out["invalid_reason"] = None
+    return out
+
+
+def circuit_breaker_measurement(date: str, *, timeout: int, pause: float,
+                                sport: str = "volleyball",
+                                far_offset_days: int = 5,
+                                slice_seconds: float = 240.0
+                                ) -> dict[str, Any]:
+    """Measure the circuit breaker (Priority 1, scoped 2026-09-28) live,
+    against the real relay, instead of re-dispatching the 350-minute
+    Forward Shadow job to find out.
+
+    Unit tests already prove the retry arithmetic deterministically against
+    a fake opener (tests/test_relay_columns.py::TestCircuitBreaker); what
+    they cannot prove is whether the real source's live refusal behaviour
+    matches the assumptions the breaker is built on. See
+    ``circuit_breaker_comparison`` for the two questions this answers.
+
+    This is the STANDALONE, two-fresh-capture form (both near and far
+    captured here), kept as the ``--circuit-breaker-probe`` CLI override
+    for a focused, on-demand re-check. The default probe sweep in
+    ``run_probe`` does NOT call this function — it gets the near half for
+    free from the plain ``collector_end_to_end`` stage (also run with the
+    breaker on) and only pays for one fresh far capture, then calls
+    ``circuit_breaker_comparison`` directly on both. Calling this function
+    from the sweep too would capture the near board twice for the same
+    answer, which is exactly the request cost Priority 1 is trying to cut.
+
+    Both go through ``collector_end_to_end``, i.e. the real production
+    path (``ForebetCollector.capture_selected`` -> ``capture_board`` ->
+    ``fetch_board_columns``), with ``circuit_breaker_columns=2`` explicitly
+    opted in — exactly as ``forward_shadow_batch.run_capture`` does — so
+    this is a measurement of the shipped code, not a probe-shaped copy of
+    it. Each half's ``capture_timing`` (elapsed/requests/outcome) comes
+    straight from the production receipt.
+    """
+    far_date = (dt.date.fromisoformat(date)
+               + dt.timedelta(days=far_offset_days)).isoformat()
+    out: dict[str, Any] = {"near_date": date, "far_date": far_date,
+                           "sport": sport}
+    half_budget = max(60.0, slice_seconds / 2)
+
+    if time_left() < 90:
+        out["verdict"] = "skipped: out of time budget"
+        return out
+
+    out["near"] = collector_end_to_end(
+        date, timeout=timeout, pause=pause, sport=sport,
+        slice_seconds=min(half_budget, time_left() - 30),
+        circuit_breaker_columns=2, circuit_breaker_attempts=1)
+    pace(min(pause, 5))
+
+    if time_left() < 60:
+        out["far"] = {"verdict": "skipped: out of time budget"}
+    else:
+        out["far"] = collector_end_to_end(
+            far_date, timeout=timeout, pause=pause, sport=sport,
+            slice_seconds=min(half_budget, time_left() - 20),
+            circuit_breaker_columns=2, circuit_breaker_attempts=1)
+
+    out["comparison"] = circuit_breaker_comparison(out["near"], out["far"])
+    return out
 
 
 def settlement_probe(date: str, *, timeout: int, pause: float,
@@ -2161,6 +2495,12 @@ def stage_succeeded(name: str, record: dict[str, Any]) -> bool:
         return bool(record.get("proven"))
     if name == "collector_end_to_end":
         return (record.get("parsed_events") or 0) > 0
+    if name == "circuit_breaker_far":
+        # Unlike the plain collector_end_to_end stage, a COVERAGE_GAP here
+        # (the board not existing yet) is the expected, useful answer, not
+        # a failure to retry — the question is only "did a request happen
+        # and get timed", which capture_timing being non-empty proves.
+        return bool(record.get("capture_timing"))
     if name == "settlement_probe":
         return any((rec.get("graded") or 0) > 0
                    for rec in record.values() if isinstance(rec, dict))
@@ -2168,7 +2508,8 @@ def stage_succeeded(name: str, record: dict[str, Any]) -> bool:
 
 
 def run_open_questions(date: str, *, timeout: int, pause: float,
-                       passes: int = 3) -> dict[str, Any]:
+                       passes: int = 3,
+                       far_offset_days: int = 5) -> dict[str, Any]:
     """Run the unanswered stages in passes, not in one long grind.
 
     Every run so far spent each stage's whole slice retrying a refusal
@@ -2194,16 +2535,35 @@ def run_open_questions(date: str, *, timeout: int, pause: float,
     # hockey's sixty-four, same route, same proof - a smaller page renders
     # faster and is refused less, and what is being tested here is the
     # PATH, not the sport.
+    far_date = (dt.date.fromisoformat(date)
+               + dt.timedelta(days=far_offset_days)).isoformat()
     stages = (
+        # circuit_breaker_columns=2 (the forward pass's exact opt-in, see
+        # forward_shadow_batch.run_capture) rides along on this stage for
+        # free: a capture that succeeds never trips the breaker, so this
+        # is also the "near board, breaker on" half of Priority 1's live
+        # measurement (item iii) — see circuit_breaker_comparison below,
+        # which reads it back out instead of paying for a second capture
+        # of the same board.
         ("collector_end_to_end", lambda budget: collector_end_to_end(
             date, timeout=timeout, pause=pause, sport="volleyball",
-            slice_seconds=budget)),
+            slice_seconds=budget,
+            circuit_breaker_columns=2, circuit_breaker_attempts=1)),
         ("settlement_probe", lambda budget: settlement_probe(
             date, timeout=timeout, pause=pause, sports=("volleyball",),
             slice_seconds=budget, attempts=1)),
         ("render_clock", lambda budget: render_clock_probe(
             date, timeout=timeout, pause=pause,
             slice_seconds=min(budget, 90), attempts=1)),
+        # The far ("almost certainly absent") half of the same measurement.
+        # Deliberately its own stage rather than folded into
+        # circuit_breaker_measurement()'s two-fresh-capture form (see that
+        # function's docstring): the near board is already captured above,
+        # so this is the only additional request cost item (iii) pays.
+        ("circuit_breaker_far", lambda budget: collector_end_to_end(
+            far_date, timeout=timeout, pause=pause, sport="volleyball",
+            slice_seconds=budget,
+            circuit_breaker_columns=2, circuit_breaker_attempts=1)),
     )
     results: dict[str, Any] = {}
     stage_meta: dict[str, dict[str, Any]] = {}
@@ -2271,6 +2631,23 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
         "columns": dict(COLUMN_SELECTORS),
     }
 
+    # Priority change, owner finding 2026-09-28: a server-side fetch got a
+    # REAL response direct from forebet.com at the exact moment the relay
+    # (r.jina.ai) returned a challenge page for the identical URL. Every
+    # "site-wide refusal" reading below (canary, circuit_breaker_comparison)
+    # assumed the SOURCE was refusing this runner; this may instead be the
+    # RELAY's egress being challenged. Runs FIRST, ahead of open_questions,
+    # because it is now the higher-priority question and because it is
+    # cheap (4 single-attempt requests, a few seconds) — see
+    # direct_vs_relay_probe's docstring for the full finding.
+    try:
+        report["direct_vs_relay"] = direct_vs_relay_probe(
+            date, timeout=timeout, sport=sport)
+    except Exception as exc:  # noqa: BLE001 - reported, not raised
+        report["direct_vs_relay"] = {
+            "crashed": f"{type(exc).__name__}: {exc}"[:300]}
+    emit_section("direct_vs_relay", report["direct_vs_relay"])
+
     # Coverage is the question in hand and gets the budget first. The sweep
     # has already answered reachability for every sport, so it only reruns
     # when there is time to spare; row_blocks is retired for the same reason.
@@ -2295,13 +2672,42 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
         name: meta.get("seconds") for name, meta in stage_meta.items()}
     report["stage_seconds"]["budget_left"] = round(time_left())
 
+    # The discriminator between "not published yet" and "the whole site is
+    # refusing us right now" (owner finding, 2026-09-28) — read off
+    # render_clock's already-computed record, no extra request. Emitted
+    # unconditionally, even when render_clock never got its turn, so a
+    # killed run still shows whether the canary was ever checked.
+    report["canary"] = canary_from_render_clock(report.get("render_clock") or {})
+    emit_section("canary", report["canary"])
+
+    # Priority 1, item (iii): the live circuit-breaker measurement, built
+    # from the two records open_questions already produced above (near =
+    # collector_end_to_end, far = circuit_breaker_far) rather than a fresh
+    # pair of captures — see circuit_breaker_comparison's docstring. Only
+    # emitted once both halves exist; a stage that never got its turn
+    # (time ran out) leaves nothing here rather than a misleading partial
+    # comparison built from one real record and one empty one.
+    if report.get("collector_end_to_end") and report.get("circuit_breaker_far"):
+        report["circuit_breaker_comparison"] = circuit_breaker_comparison(
+            report["collector_end_to_end"], report["circuit_breaker_far"],
+            canary=report["canary"])
+        emit_section("circuit_breaker_comparison",
+                     report["circuit_breaker_comparison"])
+
     # Coverage for the proven sports only runs on what is left: those
     # sports have produced rank-1 fields repeatedly, and re-proving them
-    # was costing the stages that have never succeeded.
+    # was costing the stages that have never succeeded. Their slice used
+    # to be a flat 45s each regardless of how much budget remained, so a
+    # run with budget_left in the hundreds still reported every sport
+    # "stopped: stage slice of 45s spent" (run a5e5720, 2026-09-28:
+    # budget_left 482, r1_coverage itself spent only 235.2s and still
+    # produced zero rankable fields). Divide what is actually left instead.
     if time_left() > 200:
         stage_started = time.monotonic()
+        per_sport = max(45.0, (time_left() - 60) / max(1, len(COVERAGE_SPORTS)))
         report["r1_coverage"] = r1_coverage(date, timeout=timeout,
-                                            pause=pause)
+                                            pause=pause,
+                                            slice_seconds=per_sport)
         report["stage_seconds"]["r1_coverage"] = round(
             time.monotonic() - stage_started, 1)
         emit_section("r1_coverage", report["r1_coverage"])
@@ -3016,11 +3422,16 @@ def _annotation_escape(text: str) -> str:
                 .replace("\n", "%0A").replace("::", "%3A%3A"))
 
 
-#: Annotations are the only channel out of a run: logs and artifacts live in
-#: blob storage, which the agent sandbox cannot reach. Run 36343604474
-#: emitted none at all while reporting success, and with the log unreadable
-#: there was no way to tell whether the probe had crashed, been throttled, or
-#: simply said nothing. Everything below exists to make that distinguishable.
+#: Annotations are the channel that needs no human in the loop: they are
+#: served by api.github.com straight to a read of the run/job, no paste
+#: required. Full logs and artifacts (blob storage) ARE also readable from
+#: this sandbox, but only via a signed URL the owner pastes in — see
+#: AGENTS.md's "Remote Probing" table, corrected 2026-09-28 after two
+#: earlier, narrower claims here both got this wrong in opposite
+#: directions. Run 36343604474 emitted no annotations at all while
+#: reporting success, and at the time there was no way to tell whether the
+#: probe had crashed, been throttled, or simply said nothing. Everything
+#: below exists to make that distinguishable without waiting on a paste.
 MAX_SECTION_ANNOTATIONS = 8
 
 
@@ -3039,9 +3450,10 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     """Print the verdict as Actions annotations and return what was printed.
 
     Annotations are served by api.github.com, whereas run logs and build
-    artifacts are served from blob storage. That difference matters: it is
-    what lets the result be read back without a human copying it out of a
-    browser.
+    artifacts are served from blob storage that needs a signed URL (see
+    AGENTS.md). That difference matters: an annotation is what lets the
+    result be read back with no owner action at all, not the only way the
+    result CAN be read back.
     """
     if os.environ.get("GITHUB_ACTIONS") != "true":
         return []
@@ -3057,7 +3469,9 @@ def emit_annotations(report: dict[str, Any], lines: list[str]) -> list[str]:
     # characters and the interesting result is usually last.
     sections = (
         "render_clock", "stage_seconds", "settlement_probe",
-        "collector_end_to_end", "passes_used", "r1_coverage",
+        "collector_end_to_end", "circuit_breaker_far",
+        "circuit_breaker_comparison",
+        "passes_used", "r1_coverage",
         "horizon_coverage",
         "capture_contract",
         "coverage_sweep", "match_json", "columns", "selector_html", "dom_selectors", "harvested_links",
@@ -3099,11 +3513,182 @@ def main(argv: list[str] | None = None) -> int:
                              "the job be killed before it can report")
     parser.add_argument("--out", type=Path, default=None,
                         help="write the full JSON report here")
+    parser.add_argument(
+        "--circuit-breaker-probe", action="store_true",
+        help=("Priority 1 (2026-09-28): measure the column-route circuit "
+              "breaker live instead of running the full diagnostic sweep "
+              "or re-dispatching the 350-minute Forward Shadow job. "
+              "Captures --date (likely published) and --date plus "
+              "--far-offset-days (likely absent), both with the breaker "
+              "opted in, and reports capture_timing for each."))
+    parser.add_argument(
+        "--far-offset-days", type=int, default=5,
+        help="days past --date for the likely-absent half of "
+             "--circuit-breaker-probe (default 5, mirroring the forward "
+             "pass's D+2..D+6 reach)")
+    parser.add_argument(
+        "--canary-only", action="store_true",
+        help=("Measuring HOW MUCH to ask is moot if WHEN to ask is the "
+              "binding constraint, or WHICH PATH is (direct-vs-relay "
+              "probe finding, run 36470920157). Dual-path since "
+              "2026-09-28: football's tz=0 JSON via the relay, falling "
+              "back to direct ONCE (mirroring fetch_with_fallback's "
+              "now-measured-per-run behaviour) only when relay fails — "
+              "healthy iff EITHER path serves, which path served is "
+              "recorded explicitly. One or two requests, one annotation, "
+              "exit — seconds, not the full multi-stage sweep's ~13 "
+              "minutes. Read-only: no capture, no evidence tree, no disk "
+              "writes beyond --out. Folded into the `canary` job in "
+              "docs/workflow_staging/pipeline.yml (2026-09-28, superseding an "
+              "earlier standalone-cron staging that duplicated this "
+              "workflow's own schedule) — it uses this mode on every "
+              "pipeline run to build a which-path-is-open availability "
+              "map without adding a schedule of its own."))
+    parser.add_argument(
+        "--direct-vs-relay-only", action="store_true",
+        help=("PRIORITY, owner directive 2026-09-28, updated after run "
+              "36470920157's runner-side result: direct failed outright "
+              "(HTTPError, no response) while relay got a real response "
+              "that was a Cloudflare challenge page — 'it's just the "
+              "relay' did not hold as stated. This settles it FROM THIS "
+              "RUNNER, with the evidence needed to tell WHY, not just "
+              "whether: fetches football's tz=0 JSON and one HTML board "
+              "(--sport) both direct and via the relay, PLUS the same "
+              "football JSON check on m.forebet.com and bare forebet.com "
+              "(different hostnames often sit behind different WAF rules) "
+              "— 8 requests, one attempt each, no retries — records the "
+              "STATUS CODE and a header snippet (Server/CF-Ray/etc.) for "
+              "every leg, not just an exception class name, fingerprints "
+              "every body, one annotation, exit. fetch_with_fallback no "
+              "longer skips direct on a GitHub runner (that guard was the "
+              "thing in question and has been removed); this flag remains "
+              "useful for the side-by-side comparison itself. Run this "
+              "BEFORE --circuit-breaker-probe or the full sweep."))
     args = parser.parse_args(argv)
 
     dt.date.fromisoformat(args.date)
     set_deadline(args.budget_seconds)
     emit_heartbeat(args.date, args.sport)
+
+    if args.direct_vs_relay_only:
+        # Bypasses EVERY other stage, including --canary-only: this
+        # question ("is the relay the actual bottleneck?") outranks
+        # everything else on the board per the owner's 2026-09-28
+        # priority change, and must not share a budget scheduler with
+        # anything heavier.
+        report = {
+            "probed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "target_date": args.date,
+            "mode": "direct_vs_relay_only",
+        }
+        try:
+            report["direct_vs_relay"] = direct_vs_relay_probe(
+                args.date, timeout=args.timeout,
+                sport=args.sport if args.sport in SPORTS else "basketball")
+        except Exception as exc:  # a crashed probe must still report
+            import traceback
+            report["crashed"] = f"{type(exc).__name__}: {exc}"
+            report["traceback"] = traceback.format_exc()[-1500:]
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(json.dumps(report, indent=2, sort_keys=True))
+        print(json.dumps(report, indent=2, sort_keys=True))
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            # Cap raised from 2600 (2026-09-28, alt_hosts addition): the
+            # payload nearly doubled (8 requests vs 4) once status codes,
+            # header snippets and the m./bare-host legs were added; the
+            # full untruncated report is still always in --out.
+            blob = json.dumps(
+                report.get("direct_vs_relay") or {}, sort_keys=True)[:3800]
+            print(f"::notice title=probe:direct_vs_relay::"
+                  f"{_annotation_escape(blob)}", flush=True)
+        # Exit 0 whenever both endpoints produced a fingerprinted result on
+        # at least one path (a clean "direct works"/"direct fails too"
+        # verdict either way) — a one-sided crash on both paths for the
+        # same endpoint is the only case worth flagging red.
+        dvr = report.get("direct_vs_relay") or {}
+        answered = all(
+            (dvr.get(leaf) or {}).get("direct", {}).get("ok")
+            or (dvr.get(leaf) or {}).get("relay", {}).get("ok")
+            for leaf in ("football_json", "html_board")
+        ) if dvr else False
+        return 0 if answered else 1
+
+    if args.canary_only:
+        # Deliberately bypasses EVERY other stage, including
+        # --circuit-breaker-probe's two captures: this is meant to run
+        # often (a cron sample every couple of hours) and cheaply (one
+        # request), not to share a budget scheduler with anything else.
+        from slumdog.forebet import sample_canary
+        report = {
+            "probed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "target_date": args.date,
+            "mode": "canary_only",
+        }
+        try:
+            report["canary"] = sample_canary(args.date, timeout=args.timeout)
+        except Exception as exc:  # a crashed sample must still report
+            report["canary"] = {
+                "sport": "football", "checked": True, "healthy": False,
+                "reason": f"canary sample crashed: "
+                          f"{type(exc).__name__}: {exc}"[:200],
+                "sampled_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            }
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(json.dumps(report, indent=2, sort_keys=True))
+        print(json.dumps(report, indent=2, sort_keys=True))
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            blob = json.dumps(report["canary"], sort_keys=True)[:2600]
+            print(f"::notice title=probe:canary::{_annotation_escape(blob)}",
+                  flush=True)
+        # Non-zero on an unhealthy sample is deliberate, not incidental:
+        # a run of THIS mode alone turns Actions' own green/red run history
+        # into a free, readable-without-a-paste availability map (see the
+        # `canary` job in docs/workflow_staging/pipeline.yml, which runs this
+        # mode on every pipeline trigger instead of a standalone cron) — a
+        # failed run IS the finding, not a probe defect.
+        return 0 if report["canary"].get("healthy") else 1
+
+    if args.circuit_breaker_probe:
+        # Deliberately bypasses run_probe()'s dozens of legacy stages: this
+        # is a small, targeted, fast measurement (2 real captures), not
+        # another claimant on the multi-stage budget scheduler those
+        # stages already share tightly.
+        report = {
+            "probed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "target_date": args.date,
+            "mode": "circuit_breaker_probe",
+        }
+        try:
+            report["circuit_breaker_measurement"] = circuit_breaker_measurement(
+                args.date, timeout=args.timeout, pause=args.pause,
+                sport=args.sport if args.sport in SPORTS else "volleyball",
+                far_offset_days=args.far_offset_days,
+                slice_seconds=min(args.budget_seconds - 60, 240.0))
+        except Exception as exc:  # a crashed probe must still report
+            import traceback
+            report["crashed"] = f"{type(exc).__name__}: {exc}"
+            report["traceback"] = traceback.format_exc()[-1500:]
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(json.dumps(report, indent=2, sort_keys=True))
+        print(json.dumps(report, indent=2, sort_keys=True))
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            blob = json.dumps(
+                report.get("circuit_breaker_measurement") or {},
+                sort_keys=True)[:2600]
+            print(f"::notice title=probe:circuit_breaker_measurement::"
+                  f"{_annotation_escape(blob)}", flush=True)
+        # Exit 0 whenever both halves produced a receipt-backed verdict
+        # (capture_timing present), whatever that verdict was — a false
+        # abort or a failed trip is itself the answer, not a probe failure.
+        measurement = report.get("circuit_breaker_measurement") or {}
+        answered = bool(
+            (measurement.get("near") or {}).get("capture_timing")
+            and (measurement.get("far") or {}).get("capture_timing"))
+        return 0 if answered else 1
+
     try:
         report = run_probe(args.date, sport=args.sport, timeout=args.timeout,
                               pause=args.pause, run_hunt=args.hunt,

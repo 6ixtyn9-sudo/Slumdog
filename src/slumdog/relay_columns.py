@@ -336,6 +336,27 @@ def fetch_column(board_url: str, selector: str, *, timeout: int = 60,
     raise last or ColumnFetchError(f"{selector}: no attempt was made")
 
 
+#: HTTP statuses this relay answers when a selector matched *nothing* —
+#: which, on a board that has not been published yet, is the expected
+#: shape of "this board does not exist". Deliberately narrow: a status
+#: that instead means "you are being refused right now" (403, 5xx) or "the
+#: request did not complete" (TimeoutError, URLError, ConnectionError) is
+#: NOT in this set, because those are transient and the exact same board
+#: has answered cleanly minutes apart on this source. Evidence: volleyball
+#: settlement on 2026-09-27 returned 22 rows in one run, 422'd on
+#: `.homeTeam`/`.scoreLnk` in the next, then returned rows again minutes
+#: later; hockey captured 64 rows in one run and 422'd on `.tnms` in
+#: another. A breaker that tripped on those runs would have discarded a
+#: capture that was actually good.
+_CIRCUIT_BREAKER_NOT_PUBLISHED_CODES: tuple[str, ...] = ("HTTP 422",)
+
+
+def _is_not_published_failure(exc: ColumnFetchError) -> bool:
+    """Classify a probe failure as "board not published" vs. "refused"."""
+    text = str(exc)
+    return any(code in text for code in _CIRCUIT_BREAKER_NOT_PUBLISHED_CODES)
+
+
 def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
                         timeout: int = 60, opener=None, minimum_rows: int = 1,
                         attempts: int = 3, backoff: float = 8.0,
@@ -343,25 +364,110 @@ def fetch_board_columns(board_url: str, sport: str, target_date: str, *,
                         selectors: dict[str, str] | None = None,
                         required: tuple[str, ...] | None = None,
                         before_request=None,
-                        scope: str = ROW_SCOPE) -> BoardColumns:
+                        scope: str = ROW_SCOPE,
+                        circuit_breaker_columns: int = 0,
+                        circuit_breaker_attempts: int = 1) -> BoardColumns:
     """Fetch every column for a board and validate that they agree.
 
     Raises rather than returning a half-built board: a throttled render can
     hand back a genuine-looking but partial listing, and a short board
     frozen as a complete one is indistinguishable from a quiet fixture day.
+
+    **Circuit breaker (Priority 1, 2026-09-28; scoped 2026-09-28, second
+    pass): OFF BY DEFAULT.** The forward pass captures D+2..D+6 x 14
+    sports, and most sport-dates that far out simply have no board yet —
+    every column then 422s, and paying the full
+    ``len(selectors) * attempts`` requests (8 columns x 3 attempts by
+    default = 24) to learn that is exactly the cost regression Forward
+    Shadow #33 measured (>=1h56m on one undifferentiated step, run
+    36426785929). So the first ``circuit_breaker_columns`` columns (in
+    ``selectors`` order — ``link``, ``home`` by default, both in
+    ``REQUIRED_COLUMNS``) are tried first with only
+    ``circuit_breaker_attempts`` attempt(s) each. If *all* of them refuse
+    with a failure that means "not published" (see
+    ``_CIRCUIT_BREAKER_NOT_PUBLISHED_CODES`` — currently just HTTP 422),
+    the board is treated as not coming and nothing else is fetched — 2-3
+    requests instead of 24.
+
+    This is deliberately opt-in, not a global default: refusals on this
+    source are intermittent and move BETWEEN columns run to run (see the
+    docstring on ``_is_not_published_failure``), which is why the ordinary
+    ``attempts``/``backoff`` retry policy exists in the first place. On a
+    stage where the board usually already exists — event-day (today's
+    board) or the daily refresh (T+1/T+2, near-term and largely fixed) —
+    a false trip costs a real pick or a real grade, not a wasted probe.
+    Only a call site that expects most of its boards to genuinely not
+    exist yet (the D+2..D+6 forward pass) should pass
+    ``circuit_breaker_columns=2`` explicitly. Every other call site keeps
+    the ``0`` default, which reproduces the pre-2026-09-28 behaviour
+    exactly: every column gets the full ``attempts``/``backoff`` policy
+    from its first request.
+
+    If *any* probed column answers, the board is alive (a genuinely dead
+    board does not selectively answer two arbitrary fields), so any probed
+    column that did fail gets retried with the full ``attempts``/
+    ``backoff`` policy — the existing "a throttled column recovers on
+    retry" guarantee (see ``fetch_column``) is not weakened for a board
+    that actually exists. The same applies if the probed columns *all*
+    fail but not with a "not published" signal (e.g. one 422 and one 403,
+    or a 403/TimeoutError on both): that is not unambiguous evidence of
+    absence, so the breaker does not trip and every column gets its normal
+    budget instead.
     """
     selectors = selectors_for(sport, selectors)
     required = required or REQUIRED_COLUMNS
     columns: dict[str, list[str]] = {}
     failures: list[str] = []
-    for name, selector in selectors.items():
+    names = list(selectors)
+    probe_names = names[:max(0, circuit_breaker_columns)]
+    remaining_names = names[len(probe_names):]
+
+    def _attempt(name: str, use_attempts: int) -> ColumnFetchError | None:
+        selector = selectors[name]
         try:
             columns[name] = fetch_column(board_url, scoped(selector, scope),
                                          timeout=timeout, opener=opener,
-                                         column=name, attempts=attempts,
+                                         column=name, attempts=use_attempts,
                                          backoff=backoff, sleep=sleep,
                                          before_request=before_request)
+            return None
         except ColumnFetchError as exc:
+            return exc
+
+    probe_failures: dict[str, ColumnFetchError] = {}
+    for name in probe_names:
+        exc = _attempt(name, circuit_breaker_attempts)
+        if exc is not None:
+            probe_failures[name] = exc
+
+    all_probes_failed = bool(probe_names) and len(probe_failures) == len(probe_names)
+    not_published = all_probes_failed and all(
+        _is_not_published_failure(exc) for exc in probe_failures.values())
+    if not_published:
+        failures.extend(str(exc) for exc in probe_failures.values())
+        raise ColumnFetchError(
+            f"{sport} {target_date}: circuit breaker tripped — the first "
+            f"{len(probe_names)} column(s) ({', '.join(probe_names)}) all "
+            f"refused with a not-published signal "
+            f"({', '.join(_CIRCUIT_BREAKER_NOT_PUBLISHED_CODES)}) on "
+            f"{circuit_breaker_attempts} attempt(s) each; board not "
+            f"attempted further. failures: {'; '.join(failures)}")
+
+    # The board answered at least one probed column, so it is alive: give
+    # any probed column that failed the REST of the full attempts budget —
+    # not another full `attempts` on top of the probe, which would spend
+    # more requests on this one column than a column that was never probed.
+    retry_attempts = max(0, attempts - circuit_breaker_attempts)
+    for name, exc in probe_failures.items():
+        if retry_attempts <= 0:
+            failures.append(str(exc))
+            continue
+        retry_exc = _attempt(name, retry_attempts)
+        if retry_exc is not None:
+            failures.append(str(retry_exc))
+    for name in remaining_names:
+        exc = _attempt(name, attempts)
+        if exc is not None:
             failures.append(str(exc))
 
     missing = [name for name in required if name not in columns]
@@ -653,7 +759,9 @@ def capture_board(board_url: str, sport: str, target_date: str, *,
                   selectors: dict[str, str] | None = None,
                   required: tuple[str, ...] | None = None,
                   before_request=None,
-                  scope: str = ROW_SCOPE) -> BoardCapture:
+                  scope: str = ROW_SCOPE,
+                  circuit_breaker_columns: int = 0,
+                  circuit_breaker_attempts: int = 1) -> BoardCapture:
     """Capture one board, returning an outcome instead of raising.
 
     Policy decisions, and why:
@@ -696,7 +804,9 @@ def capture_board(board_url: str, sport: str, target_date: str, *,
                                     sleep=sleep, selectors=selectors,
                                     required=required,
                                     before_request=before_request,
-                                    scope=scope)
+                                    scope=scope,
+                                    circuit_breaker_columns=circuit_breaker_columns,
+                                    circuit_breaker_attempts=circuit_breaker_attempts)
     except (ColumnFetchError, ColumnAlignmentError) as exc:
         return BoardCapture(status=COVERAGE_GAP, sport=sport,
                             target_date=target_date, source_url=board_url,

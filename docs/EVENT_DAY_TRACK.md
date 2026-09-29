@@ -237,9 +237,9 @@ python scripts/probe_kickoff_timezone.py --date 2026-09-27 --sport basketball --
 No terminal? Run it on a GitHub runner instead — that is also better
 evidence, because a runner is the exact relay and IP combination production
 captures from. An agent token cannot push workflow files, so the job is staged
-as `docs/owner_paste/probe_kickoff_timezone.yml`; copy it to
+as `docs/workflow_staging/probe_kickoff_timezone.yml`; copy it to
 `.github/workflows/` in the GitHub web UI on this branch and the commit
-triggers it (`docs/owner_paste/README.md` has the click-by-click). It is
+triggers it (`docs/workflow_staging/README.md` has the click-by-click). It is
 `permissions: contents: read`, commits nothing, and writes only an artifact.
 
 It exits 0 only when the answer is definite — a machine-readable field exists,
