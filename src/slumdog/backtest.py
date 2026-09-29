@@ -539,6 +539,48 @@ def _draw_space_split(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+HOLDOUT_CUTOFF = "2026-06-30"
+
+
+def _temporal_holdout(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Predeclared temporal split; records effects but changes no rule."""
+    development = [row for row in rows if row["event_date"] <= HOLDOUT_CUTOFF]
+    holdout = [row for row in rows if row["event_date"] > HOLDOUT_CUTOFF]
+
+    def summarize(group: list[dict[str, Any]], draw_capable: bool) -> dict[str, Any]:
+        if not draw_capable:
+            return _surplus_with_shifted_wilson(
+                _calibration_block(group, side="underdog"))
+        return _draw_space_split(group)["draw_capable_sports"]["pooled"]
+
+    sports = sorted({row["sport"] for row in rows})
+    per_sport = {}
+    for sport in sports:
+        draw_capable = SPORTS[sport].draw_settles
+        sport_rows = [row for row in rows if row["sport"] == sport]
+        dev_rows = [row for row in development if row["sport"] == sport]
+        hold_rows = [row for row in holdout if row["sport"] == sport]
+        per_sport[sport] = {
+            "outcome_space": "DRAW_CAPABLE" if draw_capable else "TWO_WAY",
+            "all": summarize(sport_rows, draw_capable),
+            "development_through_cutoff": summarize(dev_rows, draw_capable),
+            "holdout_after_cutoff": summarize(hold_rows, draw_capable),
+            "indicative_only_holdout_n_lt_500": len(hold_rows) < 500,
+        }
+
+    return {
+        "cutoff": HOLDOUT_CUTOFF,
+        "development_contract": f"event_date <= {HOLDOUT_CUTOFF}",
+        "holdout_contract": f"event_date > {HOLDOUT_CUTOFF}",
+        "multiplicity_warning": (
+            "Per-sport effects were inspected across multiple sports. Treat a "
+            "full-period effect as a lead only; it must preserve direction in "
+            "the untouched holdout, and n<500 remains indicative only."
+        ),
+        "per_sport": per_sport,
+    }
+
+
 def _score_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Mirror analyze._track_scorecard's overall/by-sport/by-band/baselines
     shape exactly, so the backtest report reads like the live scorecard."""
@@ -607,6 +649,7 @@ def _score_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "calibration": _calibration(rows),
         "draw_space_split": _draw_space_split(rows),
+        "temporal_holdout": _temporal_holdout(rows),
         "coverage": {
             "distinct_sport_days": len({(row["sport"], row["event_date"]) for row in rows}),
             "distinct_calendar_days": len({row["event_date"] for row in rows}),
@@ -1074,6 +1117,33 @@ def _render_r1_backtest_markdown(analysis: dict[str, Any]) -> str:
                 f"| {sport} | {value:+.2%} | {ci} | {block['n']} | "
                 f"{'yes' if block['indicative_only_n_lt_500'] else 'no'} |"
                 if value is not None else f"| {sport} | - | - | {block['n']} | yes |"
+            )
+
+        holdout = scorecard["temporal_holdout"]
+        lines += [
+            "",
+            f"### Temporal holdout (development <= {holdout['cutoff']}; evaluation after)",
+            "",
+            holdout["multiplicity_warning"],
+            "",
+            "| Sport | Space | Development effect (n) | Holdout effect (n) | Holdout n<500 |",
+            "| --- | --- | ---: | ---: | --- |",
+        ]
+        for sport, periods in holdout["per_sport"].items():
+            key = ("observed_minus_predicted" if periods["outcome_space"] == "TWO_WAY"
+                   else "differential_surplus")
+            dev = periods["development_through_cutoff"]
+            test = periods["holdout_after_cutoff"]
+            dev_effect = dev.get(key)
+            test_effect = test.get(key)
+            lines.append(
+                f"| {sport} | {periods['outcome_space']} | "
+                f"{dev_effect:+.2%} ({dev.get('n', 0)}) | "
+                f"{test_effect:+.2%} ({test.get('n', 0)}) | "
+                f"{'yes' if periods['indicative_only_holdout_n_lt_500'] else 'no'} |"
+                if dev_effect is not None and test_effect is not None else
+                f"| {sport} | {periods['outcome_space']} | - ({dev.get('n', 0)}) | "
+                f"- ({test.get('n', 0)}) | yes |"
             )
 
         lines += [

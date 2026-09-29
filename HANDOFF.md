@@ -1,5 +1,51 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — clean two-way result is no demonstrated edge; temporal holdout added before any gate.**
+
+Correction to the inherited run identifier: the draw-space annotations were read
+from run `36542931199`, job `109322408619`, head `84f84c6`; run `36540808677`
+was the preceding calibration build. Exact clean pooled fields:
+`n=4826`, `mean_predicted_probability=0.4512639867384998`,
+`observed_hit_rate=0.4536`, Wilson `0.4396..0.4677`,
+`observed_minus_predicted=0.0023360132615001805`. Predicted is inside the
+observed interval: the frozen R1 rule has **no demonstrated edge** on the
+cleanest pooled sample.
+
+The same annotations show opposite full-period sport leads: tennis `n=651`,
+predicted `0.4477726574500768`, observed `0.4885`, Wilson `0.4503..0.5268`,
+surplus `0.04072734254992316`; hockey `n=968`, predicted
+`0.4568595041322314`, observed `0.4091`, Wilson `0.3785..0.4404`, surplus
+`-0.0477595041322314`. Both predictions lie outside their observed intervals,
+but seven sports were inspected; these are leads exposed to multiplicity, not
+shipping findings.
+
+Coverage is broad: `distinct_sport_days=6987`, `distinct_calendar_days=1176`,
+`mean_r1_picks_per_sport_day=1.0`, `mean_r1_picks_per_calendar_day=
+5.941326530612245`. Draw-capable R1 fields are `n=2161`, underdog predicted
+`0.3620731142989357` / observed `0.3938`, favourite predicted
+`0.45590467376214716` / observed `0.4577`. **DERIVED** from those exact
+annotation fields (not directly measured as a draw row): implied predicted draw
+`0.1820222119389171`, implied observed draw `0.14850000000000008`, difference
+`-0.033522211938917024`. This points against draws; the whole-corpus explicit
+draw buckets remain the authoritative next measurement.
+
+The backtest now applies the predeclared temporal split `event_date <=
+2026-06-30` versus `event_date > 2026-06-30` before any variant exists. Every
+sport reports development and holdout effects side by side. Two-way sports use
+underdog calibration surplus; draw-capable sports use the draw-immune underdog
+minus favourite differential. n<500 is flagged and the report carries an
+explicit multiple-sports warning. This records whether tennis/hockey preserve
+direction; it does not alter selection.
+
+Annotation priority was corrected after live evidence showed GitHub retained
+only the first ten notices from the step. The bounded sequence now reserves slot
+10 for `canary_abort`: provenance, draw-space headline, compact per-sport groups,
+three holdout chunks, pooled whole-corpus draw buckets, and a draw-bucket finding
+summary. The latter names only n>=500 buckets whose predicted draw probability
+lies outside the observed Wilson interval and explicitly emits
+`backing_draws_supported`. Full home/away/draw maps and raw tables remain in the
+JSON/Markdown artifact and receipt. No frozen rule or selector changed.
+
 **2026-09-29 — draw-space split and three-outcome calibration map implemented; no selector tuned.**
 
 Run `36540808677`, job `109315483001`, calibration annotations were read this

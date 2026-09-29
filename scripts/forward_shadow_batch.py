@@ -210,10 +210,24 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                     "observed_minus_predicted"),
             }
 
+        def compact_differential(block: dict | None) -> dict:
+            block = block or {}
+            return {
+                "n": block.get("n"),
+                "differential_surplus": block.get("differential_surplus"),
+                "differential_surplus_95_lo": block.get(
+                    "differential_surplus_95_lo"),
+                "differential_surplus_95_hi": block.get(
+                    "differential_surplus_95_hi"),
+                "indicative_only_n_lt_500": block.get(
+                    "indicative_only_n_lt_500"),
+            }
+
         calibration_notices = {}
         sport_calibration_notices: list[tuple[str, dict]] = []
         draw_space_notices = {}
         edge_sport_notices: list[tuple[str, dict]] = []
+        holdout_notices: list[tuple[str, dict]] = []
         headline_rates = {}
         for population, scored in (analysis.get("populations") or {}).items():
             calibration = scored.get("calibration") or {}
@@ -257,23 +271,53 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                 },
                 "draw_capable_sports": {
                     "sports": draw_capable.get("sports"),
-                    "pooled": draw_capable.get("pooled"),
+                    "pooled": compact_differential(draw_capable.get("pooled")),
                 },
             }
             two_way_sports = sorted((two_way.get("per_sport") or {}).items())
-            for chunk_index in range(0, len(two_way_sports), 4):
-                chunk = two_way_sports[chunk_index:chunk_index + 4]
+            for chunk_index in range(0, len(two_way_sports), 20):
+                chunk = two_way_sports[chunk_index:chunk_index + 20]
                 edge_sport_notices.append((
-                    f"r1_backtest_two_way_sports_{chunk_index // 4 + 1}",
+                    f"r1_backtest_two_way_sports_{chunk_index // 20 + 1}",
                     {population: {sport: compact_calibration(block)
                                   for sport, block in chunk}},
                 ))
             draw_sports = sorted((draw_capable.get("per_sport") or {}).items())
-            for chunk_index in range(0, len(draw_sports), 3):
-                chunk = draw_sports[chunk_index:chunk_index + 3]
+            for chunk_index in range(0, len(draw_sports), 20):
+                chunk = draw_sports[chunk_index:chunk_index + 20]
                 edge_sport_notices.append((
-                    f"r1_backtest_draw_capable_sports_{chunk_index // 3 + 1}",
-                    {population: {sport: block for sport, block in chunk}},
+                    f"r1_backtest_draw_capable_sports_{chunk_index // 20 + 1}",
+                    {population: {sport: compact_differential(block)
+                                  for sport, block in chunk}},
+                ))
+
+            holdout = scored.get("temporal_holdout") or {}
+            holdout_sports = sorted((holdout.get("per_sport") or {}).items())
+            for chunk_index in range(0, len(holdout_sports), 4):
+                chunk = holdout_sports[chunk_index:chunk_index + 4]
+                compact_periods = {}
+                for sport, periods in chunk:
+                    compact_periods[sport] = {
+                        "outcome_space": periods.get("outcome_space"),
+                        "development": (
+                            compact_calibration(periods.get(
+                                "development_through_cutoff"))
+                            if periods.get("outcome_space") == "TWO_WAY"
+                            else compact_differential(periods.get(
+                                "development_through_cutoff"))),
+                        "holdout": (
+                            compact_calibration(periods.get("holdout_after_cutoff"))
+                            if periods.get("outcome_space") == "TWO_WAY"
+                            else compact_differential(periods.get(
+                                "holdout_after_cutoff"))),
+                        "indicative_only_holdout_n_lt_500": periods.get(
+                            "indicative_only_holdout_n_lt_500"),
+                    }
+                holdout_notices.append((
+                    f"r1_backtest_holdout_{chunk_index // 4 + 1}",
+                    {"cutoff": holdout.get("cutoff"),
+                     "multiplicity_warning": holdout.get("multiplicity_warning"),
+                     population: compact_periods},
                 ))
 
             baselines = scored.get("baselines_same_rows") or {}
@@ -285,35 +329,53 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                 "forebet_pick_same_rows": baselines.get(
                     "forebet_pick_same_rows"),
             }
-        emit_notice("r1_backtest_calibration", calibration_notices)
-        for title, payload in sport_calibration_notices:
-            emit_notice(title, payload)
+        # GitHub publishes at most ten ::notice commands from this step.
+        # Keep the decision-critical sequence below bounded so the final
+        # canary-abort notice remains the tenth rather than being dropped.
         if draw_space_notices:
             emit_notice("r1_backtest_draw_space_split", draw_space_notices)
         for title, payload in edge_sport_notices:
             emit_notice(title, payload)
+        for title, payload in holdout_notices:
+            emit_notice(title, payload)
 
         outcome_map = analysis.get("three_outcome_calibration_map") or {}
         if outcome_map:
-            emit_notice("r1_backtest_three_outcome_scope", {
+            pooled_draw = ((outcome_map.get("pooled") or {}).get("draw") or {})
+            emit_notice("r1_backtest_draw_buckets_pooled", {
                 "scope": outcome_map.get("scope"),
-                "sports": outcome_map.get("sports"),
                 "settled_rows_in_draw_capable_sports": outcome_map.get(
                     "settled_rows_in_draw_capable_sports"),
-                "warning": outcome_map.get("warning"),
+                "buckets": pooled_draw.get("buckets"),
             })
-            for outcome, payload in (outcome_map.get("pooled") or {}).items():
-                emit_notice(f"r1_backtest_three_outcome_pooled_{outcome}", payload)
-            outcome_sports = sorted((outcome_map.get("per_sport") or {}).items())
-            for sport, sport_payload in outcome_sports:
-                for outcome, payload in sport_payload.items():
-                    emit_notice(
-                        f"r1_backtest_three_outcome_{sport}_{outcome}", payload)
-
-        emit_notice("r1_backtest_raw_rates", {
-            "descriptive_not_merit_metric": True,
-            "populations": headline_rates,
-        })
+            significant_draw_buckets = []
+            for sport, sport_map in (outcome_map.get("per_sport") or {}).items():
+                buckets = ((sport_map.get("draw") or {}).get("buckets") or {})
+                for label, block in buckets.items():
+                    n = block.get("n") or 0
+                    predicted = block.get("mean_predicted_probability")
+                    lo = block.get("wilson_95_lo")
+                    hi = block.get("wilson_95_hi")
+                    if n < 500 or predicted is None or lo is None or hi is None:
+                        continue
+                    direction = ("POSITIVE" if predicted < lo else
+                                 "NEGATIVE" if predicted > hi else None)
+                    if direction:
+                        significant_draw_buckets.append({
+                            "sport": sport, "bucket": label, "direction": direction,
+                            "n": n, "mean_predicted_probability": predicted,
+                            "observed_hit_rate": block.get("hit_rate"),
+                            "wilson_95_lo": lo, "wilson_95_hi": hi,
+                            "observed_minus_predicted": block.get(
+                                "observed_minus_predicted"),
+                        })
+            emit_notice("r1_backtest_draw_bucket_findings", {
+                "criterion": "n>=500 and predicted outside observed Wilson 95% interval",
+                "significant_usable_buckets": significant_draw_buckets,
+                "backing_draws_supported": any(
+                    row["direction"] == "POSITIVE"
+                    for row in significant_draw_buckets),
+            })
 
         inventory = analysis.get("corpus_inventory") or {}
         per_sport = {}
@@ -334,7 +396,9 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                 "sports_with_at_least_one_settled_row"),
             "per_sport": per_sport,
         }
-        emit_notice("r1_backtest_inventory", inventory_notice)
+        # Inventory is retained in the receipt/full report. It was already
+        # proven by the provenance-unlock run; reserving notice slot ten for
+        # canary_abort prevents the safety finding from being silently dropped.
         return {
             "status": "COMPLETED",
             "json_path": str(report_path.relative_to(repo_root)),

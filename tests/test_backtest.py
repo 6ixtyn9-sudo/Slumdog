@@ -281,6 +281,26 @@ class TestBaselinesAndBands:
         assert coverage["distinct_sport_days"] == 3
         assert coverage["mean_r1_picks_per_sport_day"] == pytest.approx(1.0)
 
+    def test_temporal_holdout_is_strictly_after_predeclared_cutoff(self, tmp_path):
+        events = _build_eligible_scenario(sport="tennis", winner_index=2)
+        events.append(_ev(
+            "holdout-event", "tennis", "2026-07-15", "TeamB", "TeamA",
+            winner_index=1, probability_1=0.6, probability_2=0.4,
+            forebet_pick=1,
+        ))
+        _write_ledger(tmp_path, "tennis", events)
+        path = r1_backtest(tmp_path, target_date="2026-08-01")
+        holdout = json.loads(path.read_text())["populations"]["HISTORICAL_PAGE"][
+            "temporal_holdout"]
+        assert holdout["cutoff"] == "2026-06-30"
+        tennis = holdout["per_sport"]["tennis"]
+        assert tennis["development_through_cutoff"]["n"] == 1
+        assert tennis["development_through_cutoff"]["observed_minus_predicted"] == pytest.approx(0.6)
+        assert tennis["holdout_after_cutoff"]["n"] == 1
+        assert tennis["holdout_after_cutoff"]["observed_minus_predicted"] == pytest.approx(-0.4)
+        assert tennis["indicative_only_holdout_n_lt_500"] is True
+        assert "multiple sports" in holdout["multiplicity_warning"]
+
     def test_three_outcome_map_uses_all_draw_capable_settled_rows(self, tmp_path):
         event = _ev(
             "draw-1", "football", _date(1), "Home", "Away", winner_index=0,

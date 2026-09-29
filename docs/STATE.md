@@ -1,4 +1,29 @@
 
+### Update 2026-09-29: clean pooled test has no demonstrated edge; holdout is next
+
+Run `36542931199`, job `109322408619` (not the preceding `36540808677`) reports
+two-way pooled `n=4826`, predicted `0.4512639867384998`, observed `0.4536`,
+Wilson `0.4396..0.4677`, surplus `0.0023360132615001805`: prediction is inside
+the interval, so no edge is demonstrated. Tennis is a positive full-period lead
+(`n=651`, surplus `0.04072734254992316`, predicted below Wilson lower bound);
+hockey is an opposite negative lead (`n=968`, surplus
+`-0.0477595041322314`, predicted above Wilson upper bound). Neither is actionable
+before surviving multiplicity-aware temporal holdout.
+
+The report now fixes the split at development `<=2026-06-30` and holdout
+`>2026-06-30`, side by side per sport with n. Two-way uses calibration surplus;
+draw-capable uses underdog-minus-favourite differential. It changes no live
+rule. Coverage proves 6,987 sport-days across 1,176 calendar days, one R1 per
+sport-day and 5.941326530612245 per calendar day.
+
+From measured draw-capable R1 win-side fields, implied draw calibration is
+**DERIVED**: predicted `0.1820222119389171`, observed `0.14850000000000008`,
+surplus `-0.033522211938917024`. Whole-corpus explicit draw buckets remain
+primary. Their summary now surfaces pooled buckets and names only n>=500,
+Wilson-significant per-sport buckets, with `backing_draws_supported` explicit.
+Annotation output is capped below GitHub's observed ten-notice limit so the
+safety-critical canary abort remains visible.
+
 ### Update 2026-09-29: draw-space split and price-free three-outcome map
 
 Measured run `36540808677` shows why pooled surplus is insufficient. In R1 band

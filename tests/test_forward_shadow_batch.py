@@ -1540,7 +1540,13 @@ class TestOfflineBacktestInForwardDriver:
                 "settled_rows_in_draw_capable_sports": 500,
                 "warning": "n<500 indicative",
                 "pooled": {"draw": {"buckets": {"0.30-0.35": {"n": 500}}}},
-                "per_sport": {},
+                "per_sport": {"football": {"draw": {"buckets": {
+                    "0.20-0.25": {
+                        "n": 600, "mean_predicted_probability": 0.22,
+                        "hit_rate": 0.28, "wilson_95_lo": 0.25,
+                        "wilson_95_hi": 0.32,
+                        "observed_minus_predicted": 0.06,
+                    }}}}},
             },
             "corpus_inventory": {
                 "sports_with_a_ledger_in_this_checkout": 1,
@@ -1570,10 +1576,9 @@ class TestOfflineBacktestInForwardDriver:
         result = fsb.run_offline_r1_backtest(tmp_path)
         assert result["status"] == "COMPLETED"
         assert [title for title, _ in notices] == [
-            "r1_backtest_verdict", "r1_backtest_calibration",
-            "r1_backtest_draw_space_split", "r1_backtest_three_outcome_scope",
-            "r1_backtest_three_outcome_pooled_draw",
-            "r1_backtest_raw_rates", "r1_backtest_inventory"]
+            "r1_backtest_verdict", "r1_backtest_draw_space_split",
+            "r1_backtest_draw_buckets_pooled",
+            "r1_backtest_draw_bucket_findings"]
         verdict = notices[0][1]
         assert verdict["provenance_verdict"]["STANDARD"] == {
             "verdict": "IDENTICAL", "matched_pair_count": 62,
@@ -1581,24 +1586,24 @@ class TestOfflineBacktestInForwardDriver:
             "underdog_identity_flipped_count": 0,
             "max_absolute_probability_delta_seen": 0.0,
         }
-        calibration = notices[1][1]["HISTORICAL_PAGE"]["overall"]
-        assert calibration["r1_underdog"] == {
-            "mean_predicted_probability": 0.35,
-            "observed_hit_rate": 0.4, "observed_wins": 400, "n": 1000,
-            "wilson_95_lo": 0.37, "wilson_95_hi": 0.43,
-            "observed_minus_predicted": 0.05,
-        }
-        split = notices[2][1]["HISTORICAL_PAGE"]
+        split = notices[1][1]["HISTORICAL_PAGE"]
         assert split["coverage"]["distinct_sport_days"] == 100
         assert split["two_way_sports"]["sports"] == ["basketball"]
-        assert notices[4][1] == {"buckets": {"0.30-0.35": {"n": 500}}}
-        raw = notices[5][1]
-        assert raw["descriptive_not_merit_metric"] is True
-        assert raw["populations"]["HISTORICAL_PAGE"]["our_r1_pick"] == {
-            "successes": 400, "n": 1000, "hit_rate": 0.4}
-        inventory = notices[6][1]
-        assert inventory["seeded_history_files_on_disk"] == 2
-        assert inventory["per_sport"] == {
+        pooled_draw = notices[2][1]
+        assert pooled_draw["buckets"] == {"0.30-0.35": {"n": 500}}
+        findings = notices[3][1]
+        assert findings["significant_usable_buckets"] == [{
+            "sport": "football", "bucket": "0.20-0.25",
+            "direction": "POSITIVE", "n": 600,
+            "mean_predicted_probability": 0.22,
+            "observed_hit_rate": 0.28, "wilson_95_lo": 0.25,
+            "wilson_95_hi": 0.32, "observed_minus_predicted": 0.06,
+        }]
+        assert findings["backing_draws_supported"] is True
+        assert result["calibration"]["HISTORICAL_PAGE"]["overall"][
+            "r1_underdog"]["observed_minus_predicted"] == 0.05
+        assert result["inventory"]["seeded_history_files_on_disk"] == 2
+        assert result["inventory"]["per_sport"] == {
             "football": {"settled_row_count": 1234,
                          "date_range": ["2024-01-01", "2026-09-28"]}}
 
