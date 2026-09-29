@@ -489,11 +489,22 @@ Handball persistence passed its predeclared test: fixed quarters 2024-Q1 through
 `1.75x..2.78x`. This supports persistence, not breadth or profit. League slices
 remain multiplicity-exposed and `n<500` indicative.
 
-The full handball curve is the stronger mechanism claim: predicted draw rates
-span roughly `2.3%..21.5%` while observed rates move only `4.6%..9.2%`; the model
-is near identity around `6%..8%` and wrong in opposite directions outside it.
-Always accompany “low discrimination” with the measured rank statistic and its
-month-block interval; calibration shape alone is not a discrimination metric.
+The full curves establish a shared **over-dispersion** defect, not a general
+absence of discrimination. Football discriminates but its forecast spread is
+too wide: observed draw rate rises `11.3% -> 28.6%` while predicted rises about
+`7.9% -> 41.1%`; relative calibration falls monotonically `1.43x -> 0.70x`.
+Handball is the degenerate extreme: predicted `2.3% -> 21.5%` while observed
+moves only `4.6% -> 9.2%`. Both under-forecast low bands and over-forecast high
+bands. Always accompany discrimination language with measured Spearman and its
+month-block interval; calibration shape alone is not a ranking metric.
+
+Any recalibration is price-free and parallel to frozen R1. The first allowed
+model is one coefficient per sport, fit development-only by Brier loss:
+`q = base_rate + alpha * (p - base_rate)`, `alpha` clipped `[0,1]`. A real,
+transferable improvement was predeclared before execution: in both football and
+handball, holdout Brier improvement at least `0.001` with month-bootstrap lower
+bound above zero, holdout log loss also improves, and at least 75% of sequential
+quarterly folds improve Brier. Anything less is not demonstrated.
 
 Football remains only an indicative lead: development predicted `0.0348`,
 observed `0.11`, relative `3.16x`, but `n=100` and 1.25 rows/active day; holdout

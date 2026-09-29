@@ -65,8 +65,22 @@ jobs:
           git add -f data/reports/capture_*.json 2>/dev/null || true
           if git diff --cached --quiet; then echo "no new evidence"; exit 0; fi
           git commit -m "chore: shadow evidence (run ${{ github.run_id }})"
+          # Backtest reports are artifact-only and untracked. `--autostash` does
+          # not include untracked files, so a same-name file on main can make the
+          # pull abort. Move only these generated reports aside and restore them
+          # on every exit so artifact upload still receives them.
+          R1_REPORT_TMP=$(mktemp -d)
+          restore_r1_reports() {
+            mkdir -p data/reports
+            { find "$R1_REPORT_TMP" -maxdepth 1 -type f -exec mv -f {} data/reports/ \; 2>/dev/null || true; }
+            rmdir "$R1_REPORT_TMP" 2>/dev/null || true
+          }
+          trap restore_r1_reports EXIT
+          { find data/reports -maxdepth 1 -type f \( -name 'r1_backtest_*.json' -o -name 'r1_backtest_*.md' \) -exec mv -f {} "$R1_REPORT_TMP"/ \; 2>/dev/null || true; }
           git pull --rebase --autostash origin main || { git rebase --abort 2>/dev/null || true; exit 0; }
           git push origin HEAD:main || { git pull --rebase --autostash origin main && git push origin HEAD:main; } || true
+          restore_r1_reports
+          trap - EXIT
       - name: Upload full evidence as artifacts (30d retention)
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

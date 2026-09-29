@@ -1,5 +1,40 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — football confirms shared over-dispersion; one-parameter recalibration implemented.**
+
+Football shows the same monotonic calibration defect with much stronger
+ranking: observed draws rise `11.33% (n=2144) -> 28.62% (n=113765)` while
+predicted rises about `7.9% -> 41.1%`; relative calibration declines `1.43x ->
+0.70x`. The `0.05-0.10` month interval is `[+0.0196,+0.0491]`; `0.35+` is
+`[-0.1290,-0.1199]`. Handball has the same direction but observed rates barely
+move while predictions do. Durable mechanism: Forebet draw probabilities are
+over-dispersed across genuine draw boards; football discriminates, handball is
+the near-flat extreme. This is calibration, not profit.
+
+A development-only, price-free recalibration is now implemented per football
+and handball: `q = base + alpha*(p-base)`, with Brier-optimal `alpha` clipped to
+`[0,1]`. Untouched holdout reports Brier and log loss before/after with
+calendar-month block-bootstrap improvement intervals and a recalibrated curve.
+Sequential quarterly folds refit only on prior data. Frozen success rule: for
+both sports, holdout Brier improves by >=`0.001`, its month lower bound is >0,
+holdout log loss improves, and >=75% of scored sequential quarters improve
+Brier. Results are **UNVERIFIED** until a run is read; no selector changes.
+
+Spearman annotations are now compact and lead with coefficient plus month-block
+interval rather than burying them behind the curve. Full curves remain in JSON
+and Markdown.
+
+The latest run's persist step created evidence commit `567aeaa` but failed before
+main because untracked `r1_backtest_2026-09-29.json/.md` blocked checkout;
+`--autostash` excludes untracked files. Corrected owner replacement is staged at
+`docs/owner_paste/forward_shadow.yml`: **REPLACE
+`.github/workflows/forward_shadow.yml`**. It moves only generated backtest
+reports to a temporary directory before pull, restores them via `trap` on every
+exit (preserving artifact upload), then restores explicitly on success. Final
+local gates: focused tests **159 passed**; full `python -m pytest` **1778
+passed**; tracked-file `py_compile`, changed-file `pyflakes`, staged YAML parsing,
+and `git diff --check` clean.
+
 **2026-09-29 — handball persistence passes; full curve elevated; football comparison implemented.**
 
 The fixed quarterly test passes: 10/10 nonempty folds positive, 9/10 with month

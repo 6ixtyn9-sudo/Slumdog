@@ -101,19 +101,40 @@ class TestEveryDeclaredArtifactIsPersisted:
             "finished evidence again")
 
 
-class TestAppliedPipefailCorrection:
-    def test_owner_applied_staged_replacement_byte_for_byte(self, live_text):
-        # Owner-authored commit cf376e4 applied the grouped-find repair.
-        assert STAGED.read_text() == live_text
+class TestPersistFailureCorrections:
+    def test_staged_copy_only_adds_the_untracked_report_shelter(self, live_text):
+        staged = STAGED.read_text()
+        start = staged.index(
+            "          # Backtest reports are artifact-only and untracked.")
+        end = staged.index(
+            "          git pull --rebase --autostash origin main", start)
+        stripped = staged[:start] + staged[end:]
+        stripped = stripped.replace(
+            "          restore_r1_reports\n          trap - EXIT\n"
+            "      - name: Upload full evidence",
+            "      - name: Upload full evidence",
+            1,
+        )
+        assert stripped == live_text
 
     def test_all_three_optional_finds_neutralize_exit_before_pipefail(self):
         persist = STAGED.read_text().split(PERSIST_STEP_NAME, 1)[1]
         persist = persist.split("      - name: Upload full evidence", 1)[0]
         find_lines = [line.strip() for line in persist.splitlines()
-                      if line.strip().startswith("{ find ")]
+                      if line.strip().startswith("{ find ") and "| xargs" in line]
         assert len(find_lines) == 3
         assert all("2>/dev/null || true; } | xargs -r git add -f" in line
                    for line in find_lines)
+
+    def test_untracked_backtest_reports_are_restored_on_success_and_failure(self):
+        persist = STAGED.read_text().split(PERSIST_STEP_NAME, 1)[1]
+        persist = persist.split("      - name: Upload full evidence", 1)[0]
+        assert "R1_REPORT_TMP=$(mktemp -d)" in persist
+        assert "trap restore_r1_reports EXIT" in persist
+        assert "-name 'r1_backtest_*.json'" in persist
+        assert "-name 'r1_backtest_*.md'" in persist
+        assert persist.count("restore_r1_reports") >= 3  # definition, trap, success
+        assert "trap - EXIT" in persist
 
 
 class TestThePersistStepStaysNarrow:

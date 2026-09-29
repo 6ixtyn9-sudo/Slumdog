@@ -1,5 +1,25 @@
 
-### Update 2026-09-29: handball persistence passes; football curve and discrimination pending
+### Update 2026-09-29: shared draw over-dispersion; recalibration pending evaluation
+
+Football confirms the same directional defect as handball but still
+discriminates: observed rates rise `11.3% -> 28.6%` against predicted roughly
+`7.9% -> 41.1%`, with relative calibration `1.43x -> 0.70x`. Handball is the
+near-flat extreme. The general claim is systematic draw-probability
+over-dispersion across genuine draw boards, not universally absent
+ranking/discrimination. Compact annotations now surface Spearman coefficients
+and month-block intervals directly.
+
+A one-coefficient development-only shrink toward each sport's base rate is
+implemented. Holdout and sequential prior-fit quarterly folds report Brier/log
+loss before/after and block uncertainty. Predeclared transferable success needs
+both sports to improve holdout Brier by >=0.001 with lower bound >0, improve log
+loss, and improve Brier in >=75% of sequential folds. No result has been read.
+
+Persist remains owner-actionable: untracked generated backtest reports blocked
+rebase after evidence commit `567aeaa`. The staged workflow shelters only these
+reports around pull using an EXIT trap, then restores them for artifact upload.
+
+### Superseded 2026-09-29: football discrimination was pending
 
 Ten of ten nonempty handball quarters are positive, nine month-significant;
 final two positive, so the frozen persistence rule passes. The fixed 11-fold

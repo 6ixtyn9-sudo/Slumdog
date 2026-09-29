@@ -15,6 +15,7 @@ from slumdog.backtest import (
     KNOWN_LIMITATIONS,
     _cluster_bootstrap_surplus,
     _draw_model_discrimination,
+    _draw_probability_recalibration,
     _handball_draw_diagnostics,
     _low_draw_tail_analysis,
     r1_backtest,
@@ -532,6 +533,37 @@ class TestBaselinesAndBands:
         assert observed_range == {"minimum": 0.0, "maximum": 1.0, "range": 1.0}
         assert football_result["full_draw_calibration_curve"]["0.15-0.20"][
             "n"] == 1
+
+    def test_one_parameter_recalibration_fits_development_only_and_scores_holdout(self):
+        events = []
+        for sport in ("football", "handball"):
+            for index, (day, probability, draw) in enumerate((
+                ("2025-01-10", 0.05, False),
+                ("2025-04-10", 0.15, False),
+                ("2025-07-10", 0.35, True),
+                ("2026-01-10", 0.45, True),
+                ("2026-07-10", 0.10, False),
+                ("2026-08-10", 0.40, True),
+            )):
+                events.append(_ev(
+                    f"{sport}-{index}", sport, day, "Home", "Away",
+                    winner_index=0 if draw else 1,
+                    probability_1=0.55,
+                    probability_2=0.45 - probability,
+                    draw_probability=probability,
+                    disposition="SETTLED_DRAW" if draw else "SETTLED"))
+        result = _draw_probability_recalibration(events)
+        assert set(result["per_sport"]) == {"football", "handball"}
+        for sport_result in result["per_sport"].values():
+            fit = sport_result["development_fit"]
+            assert fit["n"] == 4
+            assert 0 <= fit["shrink_coefficient"] <= 1
+            holdout = sport_result["holdout_evaluation"]
+            assert holdout["n"] == 2
+            assert "brier_before" in holdout and "log_loss_after" in holdout
+            assert len(sport_result["sequential_quarterly_folds"]) == 11
+            assert "<0.05" in sport_result["holdout_recalibrated_curve"]
+        assert "both sports pass" in result["predeclared_real_improvement_rule"]
 
     def test_baselines_computed_on_the_same_rows(self, tmp_path):
         events = _build_eligible_scenario(winner_index=2)

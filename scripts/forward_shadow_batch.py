@@ -415,7 +415,33 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
         for sport, result in (discrimination.get("per_sport") or {}).items():
             emit_notice(f"r1_backtest_draw_discrimination_{sport}", {
                 "scope": discrimination.get("scope"),
-                **result,
+                "n": result.get("n"),
+                "observed_rate_range": result.get(
+                    "observed_rate_range_across_nonempty_bands"),
+                "spearman": result.get(
+                    "spearman_rank_correlation_predicted_draw_vs_realised_draw"),
+                "spearman_month_95": (
+                    result.get("spearman_calendar_month_bootstrap_95_lo"),
+                    result.get("spearman_calendar_month_bootstrap_95_hi"),
+                ),
+                "spearman_valid_replicates": result.get(
+                    "spearman_valid_replicates"),
+                "curve_in_full_report": True,
+            })
+
+        recalibration = analysis.get("draw_probability_recalibration") or {}
+        for sport, result in (recalibration.get("per_sport") or {}).items():
+            emit_notice(f"r1_backtest_draw_recalibration_{sport}", {
+                "method": recalibration.get("method"),
+                "predeclared_rule": recalibration.get(
+                    "predeclared_real_improvement_rule"),
+                "development_fit": result.get("development_fit"),
+                "holdout_evaluation": result.get("holdout_evaluation"),
+                "quarterly_summary": result.get("quarterly_summary"),
+                "rule_met": result.get("predeclared_improvement_rule_met"),
+                "transferable_result": recalibration.get(
+                    "transferable_recalibration_result"),
+                "folds_and_curve_in_full_report": True,
             })
 
         inventory = analysis.get("corpus_inventory") or {}
