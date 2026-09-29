@@ -45,8 +45,10 @@ rows, see each sport's ``manifest_section`` counts -- and is recorded in
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import math
+import random
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -672,6 +674,109 @@ def _score_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+BOOTSTRAP_REPLICATES = 1000
+BOOTSTRAP_SEED = 20260929
+
+
+def _percentile(values: list[float], q: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * q
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+def _cluster_bootstrap_surplus(
+    records: list[tuple[str, str, str, float, int]],
+    bucket_labels: list[str],
+    *,
+    replicates: int = BOOTSTRAP_REPLICATES,
+    seed: int = BOOTSTRAP_SEED,
+    scheme_names: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    """Deterministic block bootstrap for calibration surplus.
+
+    Records are ``(sport, event_date, bucket, predicted, observed_0_or_1)``.
+    Calendar-day is primary because Forebet's model/regime is shared across
+    sports; sport-day, ISO week and calendar month are sensitivity analyses.
+    Aggregating before resampling keeps the 388k-row draw corpus cheap.
+    """
+    schemes = {
+        "calendar_day_PRIMARY": lambda sport, day: day,
+        "sport_day": lambda sport, day: f"{sport}:{day}",
+        "iso_week": lambda sport, day: (
+            lambda iso: f"{iso.year}-W{iso.week:02d}"
+        )(dt.date.fromisoformat(day).isocalendar()),
+        "calendar_month": lambda sport, day: day[:7],
+    }
+    output: dict[str, Any] = {
+        "replicates": replicates,
+        "seed": seed,
+        "primary_block": "calendar_day_PRIMARY",
+        "primary_block_reason": (
+            "Forebet model/regime errors can be shared across physically "
+            "unrelated sports on the same date; calendar-day blocks preserve "
+            "that cross-sport dependence. Sport-day, week and month are shown "
+            "as sensitivity analyses."
+        ),
+        "schemes": {},
+    }
+    selected_schemes = [
+        (name, fn) for name, fn in schemes.items()
+        if scheme_names is None or name in scheme_names
+    ]
+    for scheme_index, (scheme, key_fn) in enumerate(selected_schemes):
+        blocks: dict[str, dict[str, list[float]]] = defaultdict(
+            lambda: defaultdict(lambda: [0.0, 0.0, 0.0]))
+        for sport, day, bucket, predicted, observed in records:
+            aggregate = blocks[key_fn(sport, day)][bucket]
+            aggregate[0] += 1
+            aggregate[1] += predicted
+            aggregate[2] += observed
+        keys = sorted(blocks)
+        rng = random.Random(seed + scheme_index)
+        draws: dict[str, list[float]] = defaultdict(list)
+        if not keys:
+            output["schemes"][scheme] = {
+                "blocks": 0,
+                "buckets": {
+                    label: {"bootstrap_95_lo": None, "bootstrap_95_hi": None,
+                            "valid_replicates": 0}
+                    for label in bucket_labels
+                },
+            }
+            continue
+        for _ in range(replicates):
+            totals = {label: [0.0, 0.0, 0.0] for label in bucket_labels}
+            for _block in keys:
+                sampled = blocks[keys[rng.randrange(len(keys))]]
+                for label, aggregate in sampled.items():
+                    total = totals[label]
+                    total[0] += aggregate[0]
+                    total[1] += aggregate[1]
+                    total[2] += aggregate[2]
+            for label, (n, predicted_sum, observed_sum) in totals.items():
+                if n:
+                    draws[label].append(observed_sum / n - predicted_sum / n)
+        output["schemes"][scheme] = {
+            "blocks": len(keys),
+            "buckets": {
+                label: {
+                    "bootstrap_95_lo": _percentile(draws[label], 0.025),
+                    "bootstrap_95_hi": _percentile(draws[label], 0.975),
+                    "valid_replicates": len(draws[label]),
+                }
+                for label in bucket_labels
+            },
+        }
+    return output
+
+
 THREE_OUTCOME_PROBABILITY_BANDS: tuple[tuple[str, float, float], ...] = (
     ("<0.20", 0.0, 0.20),
     ("0.20-0.25", 0.20, 0.25),
@@ -726,8 +831,19 @@ def _three_outcome_calibration(events: list[SettledEvent]) -> dict[str, Any]:
         }
 
     by_sport: dict[str, list[SettledEvent]] = defaultdict(list)
+    draw_bootstrap_records: list[tuple[str, str, str, float, int]] = []
     for event in draw_events:
         by_sport[event.sport].append(event)
+        probability = event.draw_probability
+        if isinstance(probability, (int, float)) and not isinstance(probability, bool):
+            label = next((label for label, lo, hi in THREE_OUTCOME_PROBABILITY_BANDS
+                          if lo <= float(probability) < hi), "unknown")
+            if label != "unknown":
+                draw_bootstrap_records.append((
+                    event.sport, event.event_date, label, float(probability),
+                    1 if event.winner_index == 0 else 0,
+                ))
+    labels = [label for label, _lo, _hi in THREE_OUTCOME_PROBABILITY_BANDS]
     return {
         "scope": "all ledger-valid settled rows in draw-capable sports, not only R1 picks",
         "bucket_contract": [label for label, _lo, _hi in THREE_OUTCOME_PROBABILITY_BANDS],
@@ -736,11 +852,92 @@ def _three_outcome_calibration(events: list[SettledEvent]) -> dict[str, Any]:
                       for sport, group in sorted(by_sport.items())},
         "sports": sorted(by_sport),
         "settled_rows_in_draw_capable_sports": len(draw_events),
+        "draw_surplus_cluster_bootstrap": _cluster_bootstrap_surplus(
+            draw_bootstrap_records, labels),
         "warning": (
             "A rare outcome is not a power play by itself. Only positive "
             "held-out observed-minus-predicted surplus with adequate n is "
             "candidate evidence. n<500 buckets are indicative only."
         ),
+    }
+
+
+def _eligible_signal_analysis(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Calibration over every R2-eligible underdog, not only daily R1."""
+    def frequency(group: list[dict[str, Any]]) -> dict[str, Any]:
+        dates = sorted({row["event_date"] for row in group})
+        if not dates:
+            return {
+                "candidate_rows": 0, "active_days": 0, "calendar_span_days": 0,
+                "mean_candidates_per_active_day": None,
+                "mean_candidates_per_calendar_day": None,
+            }
+        span = (dt.date.fromisoformat(dates[-1])
+                - dt.date.fromisoformat(dates[0])).days + 1
+        return {
+            "candidate_rows": len(group),
+            "active_days": len(dates),
+            "calendar_span_days": span,
+            "first_date": dates[0], "last_date": dates[-1],
+            "mean_candidates_per_active_day": len(group) / len(dates),
+            "mean_candidates_per_calendar_day": len(group) / span,
+        }
+
+    def summarize(group: list[dict[str, Any]], seed_offset: int) -> dict[str, Any]:
+        block = _surplus_with_shifted_wilson(
+            _calibration_block(group, side="underdog"))
+        records = [
+            (row["sport"], row["event_date"], "all",
+             float(row["underdog_probability"]),
+             1 if row.get("grade") == "SUCCESS" else 0)
+            for row in group
+            if isinstance(row.get("underdog_probability"), (int, float))
+            and not isinstance(row.get("underdog_probability"), bool)
+            and row.get("grade") in ("SUCCESS", "FAILURE")
+        ]
+        return {
+            "calibration": block,
+            "calendar_day_cluster_bootstrap": _cluster_bootstrap_surplus(
+                records, ["all"], seed=BOOTSTRAP_SEED + seed_offset,
+                scheme_names=("calendar_day_PRIMARY",)),
+            "candidate_frequency": frequency(group),
+        }
+
+    sports = sorted({row["sport"] for row in rows})
+    per_sport = {}
+    for index, sport in enumerate(sports):
+        sport_rows = [row for row in rows if row["sport"] == sport]
+        development = [row for row in sport_rows
+                       if row["event_date"] <= HOLDOUT_CUTOFF]
+        holdout = [row for row in sport_rows
+                   if row["event_date"] > HOLDOUT_CUTOFF]
+        per_sport[sport] = {
+            "all": summarize(sport_rows, index * 10),
+            "development_through_cutoff": summarize(development, index * 10 + 1),
+            "holdout_after_cutoff": summarize(holdout, index * 10 + 2),
+        }
+    return {
+        "scope": "every R2-eligible underdog row before daily R1 rank truncation",
+        "cutoff": HOLDOUT_CUTOFF,
+        "primary_uncertainty_block": "calendar day across all sports",
+        "block_reason": (
+            "Forebet's model/regime is shared across sports, so physically "
+            "unrelated sports on one date may still have correlated errors. "
+            "Calendar-day blocks preserve that dependence; within one sport "
+            "they coincide with sport-day blocks."
+        ),
+        "multiplicity_warning": (
+            "Per-sport signals remain multiple comparisons. Handball's prior "
+            "development/holdout sign reversal is the standing counterexample."
+        ),
+        "overall": {
+            "all": summarize(rows, 1000),
+            "development_through_cutoff": summarize(
+                [row for row in rows if row["event_date"] <= HOLDOUT_CUTOFF], 1001),
+            "holdout_after_cutoff": summarize(
+                [row for row in rows if row["event_date"] > HOLDOUT_CUTOFF], 1002),
+        },
+        "per_sport": per_sport,
     }
 
 
@@ -847,6 +1044,7 @@ def r1_backtest(root: Path | str = ".", target_date: str | None = None) -> Path:
         },
         "corpus_wide_reconstruction_counts": dict(corpus_wide_reconstruction_counts),
         "three_outcome_calibration_map": _three_outcome_calibration(all_settled_events),
+        "eligible_underdog_signal": _eligible_signal_analysis(all_cohort_rows),
         "reconstruction_populations_present": populations,
         "populations": {},
     }
@@ -1033,6 +1231,57 @@ def _render_r1_backtest_markdown(analysis: dict[str, Any]) -> str:
                     f"{'yes' if block['indicative_only_n_lt_500'] else 'no'} |"
                 )
         lines += ["", "Per-sport maps are retained in the JSON report.", ""]
+        bootstrap = outcome_map.get("draw_surplus_cluster_bootstrap") or {}
+        lines += [
+            "### Draw-surplus block-bootstrap sensitivity",
+            "",
+            bootstrap.get("primary_block_reason", ""),
+            "",
+            "| Block | Bucket | Surplus bootstrap 95% CI | Blocks |",
+            "| --- | --- | ---: | ---: |",
+        ]
+        for scheme, scheme_result in (bootstrap.get("schemes") or {}).items():
+            for label, block in scheme_result.get("buckets", {}).items():
+                lo = block.get("bootstrap_95_lo")
+                hi = block.get("bootstrap_95_hi")
+                ci = f"{lo:+.2%}..{hi:+.2%}" if lo is not None and hi is not None else "-"
+                lines.append(
+                    f"| {scheme} | {label} | {ci} | {scheme_result.get('blocks')} |"
+                )
+
+    signal = analysis.get("eligible_underdog_signal") or {}
+    if signal:
+        lines += [
+            "",
+            "## Signal-wide eligible-underdog calibration",
+            "",
+            signal.get("scope", ""),
+            "",
+            signal.get("block_reason", ""),
+            "",
+            signal.get("multiplicity_warning", ""),
+            "",
+            "| Sport | Period | Surplus | Calendar-day bootstrap 95% CI | n | Candidates/calendar day |",
+            "| --- | --- | ---: | ---: | ---: | ---: |",
+        ]
+        for sport, periods in (signal.get("per_sport") or {}).items():
+            for period in ("development_through_cutoff", "holdout_after_cutoff"):
+                result = periods[period]
+                calibration = result["calibration"]
+                bucket = (result["calendar_day_cluster_bootstrap"].get("schemes", {})
+                          .get("calendar_day_PRIMARY", {}).get("buckets", {})
+                          .get("all", {}))
+                lo = bucket.get("bootstrap_95_lo")
+                hi = bucket.get("bootstrap_95_hi")
+                ci = f"{lo:+.2%}..{hi:+.2%}" if lo is not None and hi is not None else "-"
+                surplus = calibration.get("observed_minus_predicted")
+                surplus_text = f"{surplus:+.2%}" if surplus is not None else "-"
+                freq = result["candidate_frequency"].get("mean_candidates_per_calendar_day")
+                freq_text = f"{freq:.3f}" if freq is not None else "-"
+                lines.append(
+                    f"| {sport} | {period} | {surplus_text} | {ci} | "
+                    f"{calibration.get('n', 0)} | {freq_text} |"
+                )
 
     for population, scorecard in analysis.get("populations", {}).items():
         lines += [

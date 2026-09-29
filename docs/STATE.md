@@ -1,8 +1,28 @@
 
+### Update 2026-09-29: cluster-aware draw sensitivity and eligible-signal analysis
+
+Before any selector, draw surplus is now re-estimated with deterministic block
+bootstrap under calendar-day (primary), sport-day, ISO-week and calendar-month
+blocks (`1000` replicates, seed `20260929`). Calendar day is primary because a
+shared Forebet model regime can correlate errors across unrelated sports on the
+same date; week/month test longer regime dependence. This retroactively audits
+the fragile `<0.20` +1-point lead while retaining the structural `0.35+`
+negative bucket as sensitivity control.
+
+The next instrument analyzes every R2-eligible underdog before R1 truncation,
+strictly split at `2026-06-30`, with calendar-day clustered intervals and
+candidate frequency per active/calendar day. It addresses signal power without
+pretending same-board rows are independent. No selector or frozen-rule change;
+walk-forward R1 remains later product validation. Final local gates: focused
+suite 143 passed; full `python -m pytest` 1770 passed; tracked-file `py_compile`,
+changed-file `pyflakes`, and `git diff --check` clean.
+
 ### Update 2026-09-29: draw map lead; single holdout rejects sport gating
 
-Owner-read run output supplied this session reports 388,121 settled rows in
-whole-corpus draw-capable sports. Draw calibration is monotonic after a low-end
+Direct job-log evidence read by the owner from the run at commit `0239140`
+reports 388,121 settled rows in whole-corpus draw-capable sports. The Actions
+API no longer returns that run and its signed log URL has expired; the durable
+record preserves the direct fields. Draw calibration is monotonic after a low-end
 inversion: `<0.20` is under-predicted (`n=80668`, predicted 9.62%, observed
 10.62%, surplus +1.00 points, interval [+0.79,+1.21]); `0.35+` is severely
 over-predicted (`n=114300`, predicted 41.09%, observed 28.66%, surplus -12.43,

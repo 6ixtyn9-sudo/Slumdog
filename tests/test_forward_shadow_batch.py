@@ -1576,9 +1576,7 @@ class TestOfflineBacktestInForwardDriver:
         result = fsb.run_offline_r1_backtest(tmp_path)
         assert result["status"] == "COMPLETED"
         assert [title for title, _ in notices] == [
-            "r1_backtest_verdict", "r1_backtest_draw_space_split",
-            "r1_backtest_draw_buckets_pooled",
-            "r1_backtest_draw_bucket_findings"]
+            "r1_backtest_verdict", "r1_backtest_draw_cluster_sensitivity"]
         verdict = notices[0][1]
         assert verdict["provenance_verdict"]["STANDARD"] == {
             "verdict": "IDENTICAL", "matched_pair_count": 62,
@@ -1586,20 +1584,11 @@ class TestOfflineBacktestInForwardDriver:
             "underdog_identity_flipped_count": 0,
             "max_absolute_probability_delta_seen": 0.0,
         }
-        split = notices[1][1]["HISTORICAL_PAGE"]
-        assert split["coverage"]["distinct_sport_days"] == 100
-        assert split["two_way_sports"]["sports"] == ["basketball"]
-        pooled_draw = notices[2][1]
-        assert pooled_draw["buckets"] == {"0.30-0.35": {"n": 500}}
-        findings = notices[3][1]
-        assert findings["significant_usable_buckets"] == [{
-            "sport": "football", "bucket": "0.20-0.25",
-            "direction": "POSITIVE", "n": 600,
-            "mean_predicted_probability": 0.22,
-            "observed_hit_rate": 0.28, "wilson_95_lo": 0.25,
-            "wilson_95_hi": 0.32, "observed_minus_predicted": 0.06,
-        }]
-        assert findings["backing_draws_supported"] is True
+        draw = notices[1][1]
+        assert draw["point_estimates"]["0.30-0.35"] == {
+            "n": 500, "mean_predicted_probability": None,
+            "observed_hit_rate": None, "observed_minus_predicted": None}
+        assert draw["low_draw_surplus_survives_primary_cluster_interval"] is False
         assert result["calibration"]["HISTORICAL_PAGE"]["overall"][
             "r1_underdog"]["observed_minus_predicted"] == 0.05
         assert result["inventory"]["seeded_history_files_on_disk"] == 2

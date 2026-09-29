@@ -11,7 +11,11 @@ from dataclasses import asdict
 
 import pytest
 
-from slumdog.backtest import r1_backtest, KNOWN_LIMITATIONS
+from slumdog.backtest import (
+    KNOWN_LIMITATIONS,
+    _cluster_bootstrap_surplus,
+    r1_backtest,
+)
 from slumdog.contracts import SettledEvent
 
 
@@ -209,6 +213,31 @@ class TestReconstructionAndGrading:
         assert analysis["reconstruction_populations_present"] == []
 
 
+class TestClusterBootstrap:
+    def test_calendar_day_primary_and_block_sensitivity_are_deterministic(self):
+        records = []
+        for day in range(1, 11):
+            date = f"2026-01-{day:02d}"
+            for sport in ("football", "handball"):
+                # Identical same-day errors across sports: exactly the
+                # cross-sport dependence calendar-day blocks preserve.
+                records.append((sport, date, "<0.20", 0.10,
+                                1 if day % 2 == 0 else 0))
+        first = _cluster_bootstrap_surplus(
+            records, ["<0.20"], replicates=200, seed=7)
+        second = _cluster_bootstrap_surplus(
+            records, ["<0.20"], replicates=200, seed=7)
+        assert first == second
+        assert first["primary_block"] == "calendar_day_PRIMARY"
+        schemes = first["schemes"]
+        assert schemes["calendar_day_PRIMARY"]["blocks"] == 10
+        assert schemes["sport_day"]["blocks"] == 20
+        assert schemes["calendar_month"]["blocks"] == 1
+        assert schemes["calendar_day_PRIMARY"]["buckets"]["<0.20"][
+            "valid_replicates"] == 200
+        assert "cross-sport dependence" in first["primary_block_reason"]
+
+
 class TestBaselinesAndBands:
     def test_calibration_compares_observed_to_assigned_probability_same_rows(
             self, tmp_path):
@@ -300,6 +329,31 @@ class TestBaselinesAndBands:
         assert tennis["holdout_after_cutoff"]["observed_minus_predicted"] == pytest.approx(-0.4)
         assert tennis["indicative_only_holdout_n_lt_500"] is True
         assert "multiple sports" in holdout["multiplicity_warning"]
+
+    def test_signal_wide_analysis_uses_every_eligible_row_and_clusters_by_day(
+            self, tmp_path):
+        events = _build_eligible_scenario(sport="tennis", winner_index=2)
+        events.append(_ev(
+            "second-eligible", "tennis", _date(100), "TeamB", "TeamA",
+            winner_index=2, probability_1=0.58, probability_2=0.42,
+            forebet_pick=1,
+        ))
+        _write_ledger(tmp_path, "tennis", events)
+        path = r1_backtest(tmp_path, target_date="2026-01-01")
+        analysis = json.loads(path.read_text())
+        # Only one row is daily R1, but both eligible rows enter the signal.
+        assert analysis["populations"]["HISTORICAL_PAGE"]["overall"]["n"] == 1
+        signal = analysis["eligible_underdog_signal"]
+        tennis = signal["per_sport"]["tennis"]["all"]
+        assert tennis["calibration"]["n"] == 2
+        assert tennis["candidate_frequency"]["candidate_rows"] == 2
+        assert tennis["candidate_frequency"]["active_days"] == 1
+        assert tennis["candidate_frequency"]["mean_candidates_per_active_day"] == 2
+        bootstrap = tennis["calendar_day_cluster_bootstrap"]
+        assert bootstrap["primary_block"] == "calendar_day_PRIMARY"
+        assert bootstrap["schemes"]["calendar_day_PRIMARY"]["blocks"] == 1
+        assert signal["cutoff"] == "2026-06-30"
+        assert "shared across sports" in signal["block_reason"]
 
     def test_three_outcome_map_uses_all_draw_capable_settled_rows(self, tmp_path):
         event = _ev(

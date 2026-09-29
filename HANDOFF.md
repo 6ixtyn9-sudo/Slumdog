@@ -1,11 +1,43 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — cluster-aware re-estimation and signal-wide instrument implemented before any selector.**
+
+The whole-corpus draw map now re-estimates surplus with a deterministic block
+bootstrap (`replicates=1000`, `seed=20260929`) under four dependence contracts:
+calendar day across all sports (**PRIMARY**), sport-day, ISO week across all
+sports, and calendar month across all sports. Calendar day is primary because
+Forebet's model/version/regime is shared: football and handball on one date share
+no physical process but can share forecast error. Week/month sensitivity tests
+whether the fragile `<0.20` +1-point surplus survives longer model regimes. The
+point estimate remains unchanged; only uncertainty is corrected. The report
+surfaces `<0.20` and `0.35+` across all four schemes and states whether the low
+bucket's primary cluster interval remains above zero.
+
+The chosen signal-wide analysis is also implemented over every R2-eligible
+underdog row before daily rank-1 truncation. It preserves the fixed temporal
+split (`<=2026-06-30` / `>2026-06-30`), reports overall and per sport, uses
+calendar-day block-bootstrap intervals, and reports candidate rows, active days,
+calendar span, candidates per active day and candidates per calendar day. This
+is an analysis instrument only: no candidate selector, draw track, sport gate,
+threshold, or frozen R1 behavior changed. Walk-forward R1 remains the later
+product-level validation if a signal survives.
+
+Annotation output remains under the observed ten-notice ceiling: provenance;
+draw cluster sensitivity; eligible-signal overall; three bounded per-sport
+chunks; then `canary_abort`. Full sensitivity matrices and home/away/draw maps
+remain in JSON/Markdown. Tests pin deterministic resampling, block counts,
+calendar-day reasoning, strict temporal scope, all-eligible-vs-R1 width, and
+candidate frequency. Local verification on the final tree: focused suite **143
+passed**; full `python -m pytest` **1770 passed**; `py_compile` over every tracked
+Python file, changed-file `pyflakes`, and `git diff --check` all exited clean.
+
 **2026-09-29 — owner-supplied run result: low-predicted draws are the strongest lead; holdout sport gates are null.**
 
-The owner supplied the completed run's exact draw-map and holdout fields this
-session. The Actions runs API no longer returned that recent run when queried,
-so these values are recorded as **OWNER-READ RUN OUTPUT**, not independently
-re-fetched annotations.
+Provenance upgrade: the owner read these fields directly from the job log for
+the run at commit `0239140`; they are **DIRECT JOB-LOG EVIDENCE**, not an
+owner-calculated paraphrase. The Actions runs API no longer returned that recent
+run when this session queried it, and the signed log URL has expired, so the log
+was the only available channel and cannot now be re-fetched here.
 
 Whole-corpus draw-capable scope: `settled_rows=388121`. Pooled draw buckets:
 

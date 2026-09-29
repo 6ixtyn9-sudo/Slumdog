@@ -332,50 +332,84 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
         # GitHub publishes at most ten ::notice commands from this step.
         # Keep the decision-critical sequence below bounded so the final
         # canary-abort notice remains the tenth rather than being dropped.
-        if draw_space_notices:
-            emit_notice("r1_backtest_draw_space_split", draw_space_notices)
-        for title, payload in edge_sport_notices:
-            emit_notice(title, payload)
-        for title, payload in holdout_notices:
-            emit_notice(title, payload)
-
         outcome_map = analysis.get("three_outcome_calibration_map") or {}
         if outcome_map:
             pooled_draw = ((outcome_map.get("pooled") or {}).get("draw") or {})
-            emit_notice("r1_backtest_draw_buckets_pooled", {
-                "scope": outcome_map.get("scope"),
-                "settled_rows_in_draw_capable_sports": outcome_map.get(
-                    "settled_rows_in_draw_capable_sports"),
-                "buckets": pooled_draw.get("buckets"),
+            point_buckets = pooled_draw.get("buckets") or {}
+            bootstrap = outcome_map.get("draw_surplus_cluster_bootstrap") or {}
+            sensitivity = {}
+            for scheme, scheme_result in (bootstrap.get("schemes") or {}).items():
+                sensitivity[scheme] = {
+                    label: (scheme_result.get("buckets") or {}).get(label)
+                    for label in ("<0.20", "0.35+")
+                }
+            primary_low = (sensitivity.get("calendar_day_PRIMARY", {})
+                           .get("<0.20") or {})
+            emit_notice("r1_backtest_draw_cluster_sensitivity", {
+                "point_estimates": {
+                    label: {
+                        "n": block.get("n"),
+                        "mean_predicted_probability": block.get(
+                            "mean_predicted_probability"),
+                        "observed_hit_rate": block.get("hit_rate"),
+                        "observed_minus_predicted": block.get(
+                            "observed_minus_predicted"),
+                    }
+                    for label, block in point_buckets.items()
+                },
+                "bootstrap_replicates": bootstrap.get("replicates"),
+                "bootstrap_seed": bootstrap.get("seed"),
+                "primary_block": bootstrap.get("primary_block"),
+                "primary_block_reason": bootstrap.get("primary_block_reason"),
+                "sensitivity_for_fragile_low_and_structural_high_buckets": sensitivity,
+                "low_draw_surplus_survives_primary_cluster_interval": (
+                    primary_low.get("bootstrap_95_lo") is not None
+                    and primary_low["bootstrap_95_lo"] > 0),
             })
-            significant_draw_buckets = []
-            for sport, sport_map in (outcome_map.get("per_sport") or {}).items():
-                buckets = ((sport_map.get("draw") or {}).get("buckets") or {})
-                for label, block in buckets.items():
-                    n = block.get("n") or 0
-                    predicted = block.get("mean_predicted_probability")
-                    lo = block.get("wilson_95_lo")
-                    hi = block.get("wilson_95_hi")
-                    if n < 500 or predicted is None or lo is None or hi is None:
-                        continue
-                    direction = ("POSITIVE" if predicted < lo else
-                                 "NEGATIVE" if predicted > hi else None)
-                    if direction:
-                        significant_draw_buckets.append({
-                            "sport": sport, "bucket": label, "direction": direction,
-                            "n": n, "mean_predicted_probability": predicted,
-                            "observed_hit_rate": block.get("hit_rate"),
-                            "wilson_95_lo": lo, "wilson_95_hi": hi,
-                            "observed_minus_predicted": block.get(
-                                "observed_minus_predicted"),
-                        })
-            emit_notice("r1_backtest_draw_bucket_findings", {
-                "criterion": "n>=500 and predicted outside observed Wilson 95% interval",
-                "significant_usable_buckets": significant_draw_buckets,
-                "backing_draws_supported": any(
-                    row["direction"] == "POSITIVE"
-                    for row in significant_draw_buckets),
+
+        signal = analysis.get("eligible_underdog_signal") or {}
+        if signal:
+            def compact_signal_period(period: dict) -> dict:
+                calibration = period.get("calibration") or {}
+                bucket = (((period.get("calendar_day_cluster_bootstrap") or {})
+                           .get("schemes") or {}).get("calendar_day_PRIMARY", {})
+                          .get("buckets", {}).get("all", {}))
+                return {
+                    "n": calibration.get("n"),
+                    "mean_predicted_probability": calibration.get(
+                        "mean_predicted_probability"),
+                    "observed_hit_rate": calibration.get("hit_rate"),
+                    "observed_minus_predicted": calibration.get(
+                        "observed_minus_predicted"),
+                    "cluster_bootstrap_95_lo": bucket.get("bootstrap_95_lo"),
+                    "cluster_bootstrap_95_hi": bucket.get("bootstrap_95_hi"),
+                    "candidate_frequency": period.get("candidate_frequency"),
+                }
+
+            emit_notice("r1_backtest_eligible_signal_overall", {
+                "scope": signal.get("scope"), "cutoff": signal.get("cutoff"),
+                "primary_uncertainty_block": signal.get(
+                    "primary_uncertainty_block"),
+                "block_reason": signal.get("block_reason"),
+                "multiplicity_warning": signal.get("multiplicity_warning"),
+                "development": compact_signal_period(
+                    (signal.get("overall") or {}).get(
+                        "development_through_cutoff") or {}),
+                "holdout": compact_signal_period(
+                    (signal.get("overall") or {}).get("holdout_after_cutoff") or {}),
             })
+            signal_sports = sorted((signal.get("per_sport") or {}).items())
+            for chunk_index in range(0, len(signal_sports), 4):
+                chunk = signal_sports[chunk_index:chunk_index + 4]
+                emit_notice(f"r1_backtest_eligible_signal_sports_{chunk_index // 4 + 1}", {
+                    sport: {
+                        "development": compact_signal_period(
+                            periods.get("development_through_cutoff") or {}),
+                        "holdout": compact_signal_period(
+                            periods.get("holdout_after_cutoff") or {}),
+                    }
+                    for sport, periods in chunk
+                })
 
         inventory = analysis.get("corpus_inventory") or {}
         per_sport = {}
