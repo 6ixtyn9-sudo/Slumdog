@@ -161,6 +161,62 @@ def canary_gate(*, timeout: int = 45) -> dict:
     return sample_canary(timeout=timeout)
 
 
+def _write_preflight_abort_receipt(repo_root: Path, targets: list[str],
+                                   sample: dict) -> Path:
+    """Persist the fail-closed receipt for a source-blocked whole run.
+
+    This path runs before settlement or any other capture-capable phase, so
+    every phase array is necessarily empty.  Keep that explicit: absence here
+    means "not attempted after a measured dual-path block", never "quiet day".
+    """
+    abort = {
+        "aborted_before_phase": "settlement",
+        "dates_completed": 0,
+        "dates_skipped": targets,
+        "phases_skipped": [
+            "settlement", "completion", "delta_settlement", "refresh",
+            "event_day_settlement", "event_day", "forward_pass",
+        ],
+        "canary": sample,
+    }
+    receipt = {
+        "batch_schema": "forward_shadow_batch",
+        "generated_at": dt.datetime.now(dt.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"),
+        "target_dates": targets,
+        "results": [],
+        "settlement_backlog": [],
+        "settlement_completion": [],
+        "delta_settlement": [],
+        "refresh": [],
+        "event_day": [],
+        "event_day_settlement": [],
+        "canary_gate": {"samples": [sample], "aborted": True, "abort": abort},
+        "summary": {
+            "total": 0, "completed": 0, "skipped_existing": 0,
+            "failed": 0, "bundle_verified": 0,
+            "settlement_backlog_total": 0, "settlement_backlog_settled": 0,
+            "settlement_backlog_failed": 0, "settlement_completion_runs": 0,
+            "settlement_completion_supplements": 0,
+            "settlement_completion_resolved_successes": 0,
+            "settlement_completion_resolved_failures": 0,
+            "settlement_completion_terminal_unresolved": 0,
+            "settlement_completion_failed": 0, "delta_settlement_graded": 0,
+            "refresh_runs": 0, "refresh_deltas_written": 0,
+            "refresh_new_events": 0, "refresh_failed": 0,
+            "event_day_runs": 0, "event_day_r1_sports": 0,
+            "event_day_selections": 0, "event_day_failed": 0,
+            "event_day_settled": 0, "canary_samples": 1,
+            "canary_aborted": True,
+        },
+    }
+    path = (repo_root / "data" / "reports" / "shadow" /
+            "forward_batch_receipt.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(receipt, indent=2, sort_keys=True))
+    return path
+
+
 def summarize_capture_timing(entries: list[dict] | None) -> dict:
     """Roll up one date's per-sport ``capture_timing`` into one small dict.
 
@@ -1515,6 +1571,34 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     repo_root = args.root.resolve()
+    targets = compute_target_dates(args.dates)
+
+    # Whole-run pre-flight comes before settlement, completion, refresh,
+    # EVENT_DAY and the forward pass.  Every one of those phases can reach
+    # Forebet; gating only the final loop allowed a blocked run to spend hours
+    # before it ever reached that gate (run 36521832033).
+    preflight_sample: dict | None = None
+    if not args.dry_run:
+        preflight_sample = canary_gate(timeout=args.capture_timeout)
+        if preflight_sample.get("healthy") is False:
+            abort = {
+                "aborted_before_phase": "settlement",
+                "dates_completed": 0,
+                "dates_skipped": targets,
+                "phases_skipped": [
+                    "settlement", "completion", "delta_settlement", "refresh",
+                    "event_day_settlement", "event_day", "forward_pass",
+                ],
+                "canary": preflight_sample,
+            }
+            emit_notice("canary_abort", abort)
+            receipt_path = _write_preflight_abort_receipt(
+                repo_root, targets, preflight_sample)
+            print(
+                "Forward Shadow ABORTED before every capture-capable phase: "
+                f"{preflight_sample.get('reason')}", file=sys.stderr, flush=True)
+            print(f"Batch receipt: {receipt_path}", file=sys.stderr, flush=True)
+            return 0
 
     # Settlement pass first: grade any overdue (D+1) prediction runs
     # before capturing/ranking new ones. Isolated per date and fully
@@ -1708,7 +1792,6 @@ def main(argv: list[str] | None = None) -> int:
             "error": entry.get("error"),
         })
 
-    targets = compute_target_dates(args.dates)
     print(f"Forward shadow batch: {len(targets)} dates starting from {targets[0]}", file=sys.stderr)
     print(f"Repository root: {repo_root}", file=sys.stderr)
 
@@ -1722,7 +1805,10 @@ def main(argv: list[str] | None = None) -> int:
     # a wall) is now four minutes and an annotation instead. Skipped in
     # --dry-run: no capture budget is at risk there, and every existing
     # dry-run test predates this gate.
-    canary_samples: list[dict] = []
+    # The whole-run preflight is receipt evidence too. Per-date samples below
+    # remain as mid-run re-checks; they are not replaced by the initial gate.
+    canary_samples: list[dict] = (
+        [preflight_sample] if preflight_sample is not None else [])
     canary_abort: dict | None = None
     results = []
     for i, target_date in enumerate(targets):
@@ -1800,9 +1886,10 @@ def main(argv: list[str] | None = None) -> int:
         # dates normally, the abort record itself — the "was abandoned on
         # a canary path block" statement the owner asked every run to be
         # able to make, with sample times attached. NOTE (2026-09-28): the
-        # canary is relay-only on a GitHub runner (direct fallback is
-        # skipped there); a block here means our path was refused, not
-        # necessarily the source.
+        # canary tests the relay first and direct once when the relay is
+        # unhealthy. A block means both paths available to THIS runner were
+        # refused, not that the source endpoint itself was down; an ordinary
+        # IP may still receive real JSON direct at the same moment.
         "canary_gate": {
             "samples": canary_samples,
             "aborted": canary_abort is not None,

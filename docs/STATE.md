@@ -1,4 +1,25 @@
 
+### Update 2026-09-29: Forward Shadow whole-run canary preflight
+
+Run `36521832033` proved the existing gate was too late: it guarded only the
+D+2..D+6 loop, after standard settlement, completion, delta settlement,
+refresh, EVENT_DAY settlement and EVENT_DAY capture had all had an opportunity
+to make network requests. `emit_notice()` was not buffering annotations: its
+source already uses `print(..., flush=True)`, now pinned by a test. Therefore
+`annotations=[]` after at least 2h53m51s supports an unfinished first phase,
+not hidden completed-phase notices; the exact in-flight request remains unknown.
+
+The driver now samples the dual-path canary before every capture-capable phase.
+An unhealthy sample emits `forward_shadow:canary_abort`, writes a receipt with
+`aborted_before_phase="settlement"` and every skipped phase, performs zero
+captures, and exits 0. A healthy whole-run sample is retained in the receipt;
+per-forward-date samples remain as mid-run re-checks. "Blocked" means relay and
+direct from the GitHub runner both failed; it does not mean the endpoint was
+down for ordinary IPs. Offline proof: `tests/test_forward_shadow_batch.py` →
+109 passed. Live proof is OPEN and requires an owner-triggered Forward Shadow
+run after this change lands; while the paths remain blocked it must finish in
+under one minute with the abort annotation.
+
 ### Update 2026-09-29: blocked-window probe short-circuit
 
 The full kickoff/timezone probe now samples the existing dual-path canary as

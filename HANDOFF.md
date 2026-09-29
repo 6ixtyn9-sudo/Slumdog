@@ -1,5 +1,46 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — Forward Shadow run `36521832033` exposed a misplaced gate; whole-run preflight added.**
+
+Cancellation was attempted first and failed exactly with `HTTP 403: Resource
+not accessible by integration`; the owner must cancel this run. This is the
+second multi-hour Forward Shadow dispatch against a blocked relay, so the
+workflow is unsafe to trigger until a live blocked-window dispatch proves an
+under-one-minute abort.
+
+Two hypotheses were checked before changing code:
+
+- **Annotation buffering is disproved in source.** `emit_notice()` already calls
+  `print(..., flush=True)` (`scripts/forward_shadow_batch.py`, the print in
+  `emit_notice`). A new test monkeypatches `print` and asserts the actual
+  `flush` keyword is `True`. Thus zero annotations cannot be explained by this
+  process retaining completed-phase notices in its stdout buffer.
+- **The gate was in the wrong place.** Before this fix, `canary_gate()` existed
+  only inside the D+2..D+6 forward loop. The actual order before that call was:
+  standard D+1 settlement (network: yes; gated: no), completion (yes/no), delta
+  settlement (yes/no), refresh (yes/no), EVENT_DAY settlement (yes/no), and
+  EVENT_DAY clock/capture (yes/no); only then did the gated forward pass begin.
+  Therefore run `36521832033`'s `2h53m51s` with `annotations=[]` supports being
+  stuck in the first standard-settlement phase. It does not prove which request
+  or date was in flight, because that phase never completed and emitted its
+  notice.
+
+`main()` now samples the existing dual-path canary immediately after argument
+parsing/root resolution and before every capture-capable phase. If unhealthy,
+it emits `forward_shadow:canary_abort`, writes
+`forward_batch_receipt.json` with `aborted_before_phase="settlement"`, the
+sample, and all seven skipped phases, then exits 0. All phase/result arrays are
+explicitly empty. A healthy preflight is retained in the receipt, and the
+existing per-date samples remain as mid-run re-checks. Wording preserves the
+network distinction: both paths available to the GitHub runner were blocked;
+this is not evidence that Forebet's endpoint was down for ordinary IPs.
+
+Regression coverage runs the driver with every phase enabled, makes the
+preflight unhealthy, replaces every capture-capable phase entry point with a
+function that raises if called, and proves exactly one `canary_abort` notice,
+zero phase calls, and the explicit abort receipt. Targeted verification:
+`tests/test_forward_shadow_batch.py` → `109 passed in 62.72s`.
+
 **2026-09-29 — full probe now exits green immediately when its first dual-path canary is blocked.**
 
 `scripts/probe_kickoff_timezone.py::run_probe` now calls the existing

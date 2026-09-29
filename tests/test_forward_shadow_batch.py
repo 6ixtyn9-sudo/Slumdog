@@ -1400,6 +1400,19 @@ class TestEmitNotice:
         assert '"count": 3' in out
         assert '"settled": 2' in out
 
+    def test_notice_explicitly_flushes_stdout(self, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        calls = []
+
+        def _print(*args, **kwargs):
+            calls.append((args, kwargs))
+
+        monkeypatch.setattr("builtins.print", _print)
+        fsb.emit_notice("settlement", {"count": 1})
+        assert len(calls) == 1
+        assert calls[0][1].get("flush") is True
+
     def test_empty_payload_emits_nothing(self, monkeypatch, capsys):
         import scripts.forward_shadow_batch as fsb
         monkeypatch.setenv("GITHUB_ACTIONS", "true")
@@ -1639,6 +1652,48 @@ class TestCanaryGateInDriverMain:
         return {"sport": "football", "checked": True, "healthy": True,
                 "reason": None, "sampled_at": "2026-09-28T12:00:00+00:00"}
 
+    def test_blocked_preflight_skips_every_capture_capable_phase_and_notices(
+            self, tmp_path, monkeypatch):
+        """Regression for run 36521832033: gating only the forward loop left
+        five earlier network phases free to grind for hours."""
+        import scripts.forward_shadow_batch as fsb
+
+        def _must_not_run(*args, **kwargs):
+            raise AssertionError("blocked whole-run preflight must skip this phase")
+
+        for name in (
+            "run_settlement_backlog", "run_completion_backlog",
+            "run_refresh_backlog", "run_event_day_for_date", "process_date",
+        ):
+            monkeypatch.setattr(fsb, name, _must_not_run)
+        monkeypatch.setattr(fsb, "canary_gate",
+                           lambda **k: self._unhealthy_sample())
+        notices = []
+        monkeypatch.setattr(
+            fsb, "emit_notice", lambda title, payload: notices.append(title))
+
+        rc = fsb.main([
+            "--root", str(tmp_path), "--dates", "3", "--pause-seconds", "0",
+        ])
+        assert rc == 0
+        assert notices == ["canary_abort"]
+        receipt = json.loads(
+            (tmp_path / "data/reports/shadow/forward_batch_receipt.json")
+            .read_text())
+        assert receipt["canary_gate"]["aborted"] is True
+        assert receipt["canary_gate"]["abort"]["aborted_before_phase"] == "settlement"
+        assert receipt["canary_gate"]["abort"]["phases_skipped"] == [
+            "settlement", "completion", "delta_settlement", "refresh",
+            "event_day_settlement", "event_day", "forward_pass",
+        ]
+        assert receipt["settlement_backlog"] == []
+        assert receipt["settlement_completion"] == []
+        assert receipt["delta_settlement"] == []
+        assert receipt["refresh"] == []
+        assert receipt["event_day"] == []
+        assert receipt["event_day_settlement"] == []
+        assert receipt["results"] == []
+
     def test_a_canary_down_from_the_start_performs_no_per_sport_captures(
             self, tmp_path, monkeypatch):
         import scripts.forward_shadow_batch as fsb
@@ -1676,15 +1731,18 @@ class TestCanaryGateInDriverMain:
         import scripts.forward_shadow_batch as fsb
 
         calls = []
-        samples = [self._healthy_sample(), self._unhealthy_sample()]
+        # Whole-run preflight, first-date re-check, then second-date block.
+        samples = [self._healthy_sample(), self._healthy_sample(),
+                   self._unhealthy_sample()]
 
         def _fake_process_date(target_date, repo_root, **kwargs):
             calls.append(target_date)
             return {"target_date": target_date, "status": "COMPLETED"}
 
         monkeypatch.setattr(fsb, "process_date", _fake_process_date)
+        sample_iter = iter(samples)
         monkeypatch.setattr(
-            fsb, "canary_gate", lambda **k: samples[len(calls)])
+            fsb, "canary_gate", lambda **k: next(sample_iter))
 
         rc = fsb.main([
             "--root", str(tmp_path), "--dates", "3", "--pause-seconds", "0",
@@ -1701,7 +1759,7 @@ class TestCanaryGateInDriverMain:
         assert receipt["canary_gate"]["aborted"] is True
         assert receipt["canary_gate"]["abort"]["dates_completed"] == 1
         assert len(receipt["canary_gate"]["abort"]["dates_skipped"]) == 2
-        assert len(receipt["canary_gate"]["samples"]) == 2
+        assert len(receipt["canary_gate"]["samples"]) == 3
 
     def test_a_healthy_canary_throughout_never_aborts(
             self, tmp_path, monkeypatch):
@@ -1728,7 +1786,8 @@ class TestCanaryGateInDriverMain:
             .read_text())
         assert receipt["canary_gate"]["aborted"] is False
         assert receipt["canary_gate"]["abort"] is None
-        assert len(receipt["canary_gate"]["samples"]) == 3
+        # One whole-run preflight plus one re-check before each of 3 dates.
+        assert len(receipt["canary_gate"]["samples"]) == 4
         assert receipt["summary"]["canary_aborted"] is False
 
     def test_a_canary_abort_emits_its_own_annotation(
