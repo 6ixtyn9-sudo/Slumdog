@@ -161,8 +161,92 @@ def canary_gate(*, timeout: int = 45) -> dict:
     return sample_canary(timeout=timeout)
 
 
+def run_offline_r1_backtest(repo_root: Path) -> dict:
+    """Run and annotate the already-seeded historical backtest, never raising.
+
+    Forward Shadow's workflow downloads the latest history artifacts before
+    this driver starts.  The backtest reads only those local bytes, so source
+    availability must not gate the provenance verdict.  The complete JSON/MD
+    remain under ``data/reports`` for the run artifact; annotations carry only
+    the decision-critical verdict/rates and corpus inventory.
+    """
+    try:
+        from slumdog.backtest import r1_backtest
+
+        report_path = r1_backtest(repo_root)
+        analysis = json.loads(report_path.read_text())
+        provenance = analysis.get("provenance_verdict") or {}
+        compact_verdict = {}
+        if isinstance(provenance, dict):
+            for track, check in provenance.items():
+                if not isinstance(check, dict):
+                    continue
+                compact_verdict[track] = {
+                    "verdict": check.get("verdict"),
+                    "matched_pair_count": check.get("matched_to_historical_ledger"),
+                    "pre_event_picks_available": check.get("pre_event_picks_available"),
+                    "differing_count": check.get("differing_count"),
+                    "underdog_identity_flipped_count": check.get(
+                        "underdog_identity_flipped_count"),
+                    "max_absolute_probability_delta_seen": check.get(
+                        "max_absolute_probability_delta_seen"),
+                }
+
+        headline_rates = {}
+        for population, scored in (analysis.get("populations") or {}).items():
+            baselines = scored.get("baselines_same_rows") or {}
+            headline_rates[population] = {
+                "our_r1_pick": baselines.get("our_r1_pick"),
+                "always_favourite_same_rows": baselines.get(
+                    "always_favourite_same_rows"),
+                "forebet_pick_same_rows": baselines.get(
+                    "forebet_pick_same_rows"),
+            }
+        verdict_notice = {
+            "provenance_verdict": compact_verdict,
+            "headline_rates": headline_rates,
+        }
+        emit_notice("r1_backtest_verdict", verdict_notice)
+
+        inventory = analysis.get("corpus_inventory") or {}
+        per_sport = {}
+        for sport, info in (inventory.get("per_sport") or {}).items():
+            if isinstance(info, dict) and info.get("available"):
+                per_sport[sport] = {
+                    "settled_row_count": info.get("settled_row_count"),
+                    "date_range": info.get("date_range"),
+                }
+        history_files = sorted(
+            p.name for p in (repo_root / "data" / "reports").glob("history_*")
+            if p.is_file())
+        inventory_notice = {
+            "seeded_history_files_on_disk": len(history_files),
+            "sports_with_a_ledger_in_this_checkout": inventory.get(
+                "sports_with_a_ledger_in_this_checkout"),
+            "sports_with_at_least_one_settled_row": inventory.get(
+                "sports_with_at_least_one_settled_row"),
+            "per_sport": per_sport,
+        }
+        emit_notice("r1_backtest_inventory", inventory_notice)
+        return {
+            "status": "COMPLETED",
+            "json_path": str(report_path.relative_to(repo_root)),
+            "markdown_path": str(report_path.with_suffix(".md").relative_to(repo_root)),
+            "verdict": compact_verdict,
+            "headline_rates": headline_rates,
+            "inventory": inventory_notice,
+        }
+    except Exception as exc:  # offline analysis must never fail the batch
+        failure = {
+            "status": "FAILED",
+            "error": f"{type(exc).__name__}: {exc}"[:500],
+        }
+        emit_notice("r1_backtest_verdict", failure)
+        return failure
+
+
 def _write_preflight_abort_receipt(repo_root: Path, targets: list[str],
-                                   sample: dict) -> Path:
+                                   sample: dict, backtest: dict) -> Path:
     """Persist the fail-closed receipt for a source-blocked whole run.
 
     This path runs before settlement or any other capture-capable phase, so
@@ -191,6 +275,7 @@ def _write_preflight_abort_receipt(repo_root: Path, targets: list[str],
         "refresh": [],
         "event_day": [],
         "event_day_settlement": [],
+        "r1_backtest": backtest,
         "canary_gate": {"samples": [sample], "aborted": True, "abort": abort},
         "summary": {
             "total": 0, "completed": 0, "skipped_existing": 0,
@@ -1578,8 +1663,13 @@ def main(argv: list[str] | None = None) -> int:
     # Forebet; gating only the final loop allowed a blocked run to spend hours
     # before it ever reached that gate (run 36521832033).
     preflight_sample: dict | None = None
+    backtest_result: dict = {"status": "SKIPPED_DRY_RUN"}
     if not args.dry_run:
         preflight_sample = canary_gate(timeout=args.capture_timeout)
+        # History ledgers were seeded by the workflow before this process
+        # started. Run the pure-offline provenance test after the availability
+        # decision but regardless of whether that decision aborts network work.
+        backtest_result = run_offline_r1_backtest(repo_root)
         if preflight_sample.get("healthy") is False:
             abort = {
                 "aborted_before_phase": "settlement",
@@ -1593,7 +1683,7 @@ def main(argv: list[str] | None = None) -> int:
             }
             emit_notice("canary_abort", abort)
             receipt_path = _write_preflight_abort_receipt(
-                repo_root, targets, preflight_sample)
+                repo_root, targets, preflight_sample, backtest_result)
             print(
                 "Forward Shadow ABORTED before every capture-capable phase: "
                 f"{preflight_sample.get('reason')}", file=sys.stderr, flush=True)
@@ -1880,6 +1970,7 @@ def main(argv: list[str] | None = None) -> int:
         "refresh": refresh_results,
         "event_day": event_day_results,
         "event_day_settlement": event_day_settlement,
+        "r1_backtest": backtest_result,
         # Canary samples taken before every forward-pass date (see
         # canary_gate() above) plus, when the pass was abandoned on a
         # canary path block rather than completing/exhausting its target

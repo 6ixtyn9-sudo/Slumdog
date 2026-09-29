@@ -1,4 +1,27 @@
 
+### Update 2026-09-29: offline provenance verdict now runs on every Forward Shadow dispatch
+
+Run `36538082614` proved the whole-run gate live: owner-read log timestamps show
+driver start `07:41:21.6`, sample `07:41:21.7`, and abort notice `07:41:27.8`
+(**6.1 seconds**), with `aborted_before_phase="settlement"`,
+`dates_completed=0`, all seven phases named in `phases_skipped`, and driver exit
+0. The runner-specific canary wording correctly says both tested paths were
+blocked, not that the source endpoint was down. The same job reports the driver
+step `conclusion="success"`; its overall `conclusion="failure"` came from the
+later persist step.
+
+The same log says `Seeding history from pipeline run 36396799126` and
+`Seeded 22 history files`. The driver now runs the pure-offline
+`r1_backtest` immediately after its canary decision on every non-dry dispatch,
+including blocked aborts. It emits separate compact verdict/rate and inventory
+notices, while retaining the complete JSON/Markdown under `data/reports` for the
+full-evidence artifact. Inventory gives exact per-sport settled-row counts and
+date ranges from the ledgers on that runner. Failures are annotated and cannot
+fail the driver. The workflow persist list was not edited and still does not
+commit `r1_backtest_*`; the compact result is also recorded in the batch receipt.
+The next owner dispatch is the provenance measurement. Ranking changes and a
+Depth Build remain barred until its verdict is read.
+
 ### Update 2026-09-29: Forward Shadow whole-run canary preflight
 
 Run `36521832033` proved the existing gate was too late: it guarded only the
@@ -22,9 +45,8 @@ captures, and exits 0. A healthy whole-run sample is retained in the receipt;
 per-forward-date samples remain as mid-run re-checks. "Blocked" means relay and
 direct from the GitHub runner both failed; it does not mean the endpoint was
 down for ordinary IPs. Offline proof: `tests/test_forward_shadow_batch.py` →
-109 passed. Live proof is OPEN and requires an owner-triggered Forward Shadow
-run after this change lands; while the paths remain blocked it must finish in
-under one minute with the abort annotation.
+109 tests passed at implementation. Live proof is now CLOSED by run
+`36538082614` as recorded in the update above.
 
 ### Update 2026-09-29: blocked-window probe short-circuit
 

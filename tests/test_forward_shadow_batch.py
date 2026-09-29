@@ -1453,6 +1453,110 @@ class TestEmitNotice:
             "\ntitle=forward_shadow:forward_date::")
 
 
+class TestOfflineBacktestInForwardDriver:
+    def test_emits_compact_verdict_then_inventory_from_full_report(
+            self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+        import slumdog.backtest as backtest
+
+        reports = tmp_path / "data/reports"
+        reports.mkdir(parents=True)
+        (reports / "history_football.jsonl.gz").write_bytes(b"ledger")
+        (reports / "history_football.json").write_text("{}")
+        payload = {
+            "provenance_verdict": {
+                "STANDARD": {
+                    "verdict": "IDENTICAL",
+                    "matched_to_historical_ledger": 62,
+                    "pre_event_picks_available": 62,
+                    "differing_count": 0,
+                    "underdog_identity_flipped_count": 0,
+                    "max_absolute_probability_delta_seen": 0.0,
+                },
+                "EVENT_DAY": {
+                    "verdict": "INSUFFICIENT_DATA",
+                    "matched_to_historical_ledger": 0,
+                    "pre_event_picks_available": 0,
+                    "differing_count": 0,
+                    "underdog_identity_flipped_count": 0,
+                    "max_absolute_probability_delta_seen": None,
+                },
+            },
+            "populations": {
+                "HISTORICAL_PAGE": {
+                    "baselines_same_rows": {
+                        "our_r1_pick": {"successes": 400, "n": 1000,
+                                        "hit_rate": 0.4},
+                        "always_favourite_same_rows": {
+                            "successes": 600, "n": 1000, "hit_rate": 0.6},
+                        "forebet_pick_same_rows": {
+                            "successes": 550, "n": 900,
+                            "hit_rate": 0.6111111111},
+                    },
+                },
+            },
+            "corpus_inventory": {
+                "sports_with_a_ledger_in_this_checkout": 1,
+                "sports_with_at_least_one_settled_row": 1,
+                "per_sport": {
+                    "football": {"available": True,
+                                 "settled_row_count": 1234,
+                                 "date_range": ["2024-01-01", "2026-09-28"]},
+                    "rugby": {"available": False,
+                              "note": "ledger missing"},
+                },
+            },
+        }
+        report_path = reports / "r1_backtest_2026-09-29.json"
+
+        def _backtest(root):
+            report_path.write_text(json.dumps(payload))
+            report_path.with_suffix(".md").write_text("full report")
+            return report_path
+
+        monkeypatch.setattr(backtest, "r1_backtest", _backtest)
+        notices = []
+        monkeypatch.setattr(
+            fsb, "emit_notice",
+            lambda title, body: notices.append((title, body)))
+
+        result = fsb.run_offline_r1_backtest(tmp_path)
+        assert result["status"] == "COMPLETED"
+        assert [title for title, _ in notices] == [
+            "r1_backtest_verdict", "r1_backtest_inventory"]
+        verdict = notices[0][1]
+        assert verdict["provenance_verdict"]["STANDARD"] == {
+            "verdict": "IDENTICAL", "matched_pair_count": 62,
+            "pre_event_picks_available": 62, "differing_count": 0,
+            "underdog_identity_flipped_count": 0,
+            "max_absolute_probability_delta_seen": 0.0,
+        }
+        assert verdict["headline_rates"]["HISTORICAL_PAGE"]["our_r1_pick"] == {
+            "successes": 400, "n": 1000, "hit_rate": 0.4}
+        inventory = notices[1][1]
+        assert inventory["seeded_history_files_on_disk"] == 2
+        assert inventory["per_sport"] == {
+            "football": {"settled_row_count": 1234,
+                         "date_range": ["2024-01-01", "2026-09-28"]}}
+
+    def test_failure_is_annotated_and_never_raises(self, tmp_path, monkeypatch):
+        import scripts.forward_shadow_batch as fsb
+        import slumdog.backtest as backtest
+
+        def _boom(root):
+            raise RuntimeError("bad ledger")
+
+        monkeypatch.setattr(backtest, "r1_backtest", _boom)
+        notices = []
+        monkeypatch.setattr(
+            fsb, "emit_notice",
+            lambda title, body: notices.append((title, body)))
+        result = fsb.run_offline_r1_backtest(tmp_path)
+        assert result["status"] == "FAILED"
+        assert "RuntimeError: bad ledger" in result["error"]
+        assert notices == [("r1_backtest_verdict", result)]
+
+
 class TestSummarizeCaptureTiming:
     def test_empty_input(self):
         import scripts.forward_shadow_batch as fsb
@@ -1668,6 +1772,10 @@ class TestCanaryGateInDriverMain:
             monkeypatch.setattr(fsb, name, _must_not_run)
         monkeypatch.setattr(fsb, "canary_gate",
                            lambda **k: self._unhealthy_sample())
+        backtests = []
+        monkeypatch.setattr(
+            fsb, "run_offline_r1_backtest",
+            lambda root: backtests.append(root) or {"status": "COMPLETED"})
         notices = []
         monkeypatch.setattr(
             fsb, "emit_notice", lambda title, payload: notices.append(title))
@@ -1676,6 +1784,7 @@ class TestCanaryGateInDriverMain:
             "--root", str(tmp_path), "--dates", "3", "--pause-seconds", "0",
         ])
         assert rc == 0
+        assert backtests == [tmp_path.resolve()]
         assert notices == ["canary_abort"]
         receipt = json.loads(
             (tmp_path / "data/reports/shadow/forward_batch_receipt.json")

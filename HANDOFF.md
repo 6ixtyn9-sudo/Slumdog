@@ -1,13 +1,51 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — whole-run abort proven live; seeded ledgers now drive the offline provenance verdict on every dispatch.**
+
+Run `36538082614`, job `109306705966`, proved the preflight gate. The owner-read
+log records driver start `07:41:21.6`, canary sampled `07:41:21.7`, and the
+abort notice at `07:41:27.8`: **6.1 seconds**. Exact notice fields:
+`aborted_before_phase="settlement"`, `dates_completed=0`, and
+`phases_skipped=["settlement","completion","delta_settlement","refresh",
+"event_day_settlement","event_day","forward_pass"]`; the driver step exited
+0. The canary reason says both paths tested by this runner were blocked and
+explicitly says this is not proof the source itself is down. This replaces the
+prior 2h53m51s blocked run as the live behavior baseline and satisfies the
+under-one-minute requirement. API metadata separately shows the driver step
+`conclusion="success"` (07:41:21Z→07:41:27Z); the overall job was
+`conclusion="failure"` because the subsequent persist step failed, not because
+the gate failed.
+
+The same log proves the workflow had already printed
+`Seeding history from pipeline run 36396799126` and `Seeded 22 history files`
+before starting the driver. Because `slumdog.backtest.r1_backtest` is pure
+offline computation, `forward_shadow_batch.py` now runs it immediately after
+the whole-run canary decision, whether that decision is healthy or blocked.
+It emits two compact notices in order:
+
+1. `forward_shadow:r1_backtest_verdict`: STANDARD/EVENT_DAY verdict, matched-pair
+   count, differing/identity-flip counts and max probability delta, followed by
+   our R1 / always-favourite / Forebet headline rate blocks with exact n;
+2. `forward_shadow:r1_backtest_inventory`: number of seeded `history_*` files on
+   disk and, for every available sport ledger, `settled_row_count` and
+   `date_range`.
+
+The complete `r1_backtest_<date>.json` and `.md` remain in `data/reports` for the
+existing full-evidence artifact. The Forward Shadow persist find does not name
+those report paths and was deliberately not edited; the compact backtest result
+also enters `forward_batch_receipt.json`. Any backtest exception emits a FAILED
+verdict notice and cannot fail the driver. Offline tests prove annotation order,
+exact verdict/rate/inventory fields, failure containment, and execution on the
+blocked-abort path. No ranking rule changed and no Depth Build was requested.
+
 **2026-09-29 — Forward Shadow run `36521832033` exposed a misplaced gate; whole-run preflight added.**
 
 Cancellation was attempted first and failed exactly with `HTTP 403: Resource
 not accessible by integration`; the owner then cancelled it. The run API now
 reports `status="completed"`, `conclusion="cancelled"`,
 `updated_at="2026-09-29T07:29:36Z"`. This is the second multi-hour Forward
-Shadow dispatch against a blocked relay, so the workflow is unsafe to trigger
-until a live blocked-window dispatch proves an under-one-minute abort.
+Shadow dispatch against a blocked relay. **Superseded by run `36538082614`
+above:** the under-one-minute live abort is now proven.
 
 Two hypotheses were checked before changing code:
 
