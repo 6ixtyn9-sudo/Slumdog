@@ -382,96 +382,10 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                 ),
             })
 
-        tail = analysis.get("low_draw_tail_analysis") or {}
-        if tail:
-            def compact_tail_period(period: dict) -> dict:
-                bootstrap = period.get("cluster_bootstrap") or {}
-                schemes = bootstrap.get("schemes") or {}
-                return {
-                    "population": period.get("population"),
-                    "forecast_exclusion_audit": period.get("forecast_exclusion_audit"),
-                    "parent_lt_0_20_n": period.get("parent_lt_0_20_n"),
-                    "frozen_shape_verdict": period.get("frozen_shape_verdict"),
-                    "buckets": {
-                    label: {
-                        **(period.get("buckets", {}).get(label) or {}),
-                        "calendar_day_95": (
-                            (schemes.get("calendar_day_PRIMARY", {}).get("buckets", {})
-                             .get(label, {}).get("bootstrap_95_lo")),
-                            (schemes.get("calendar_day_PRIMARY", {}).get("buckets", {})
-                             .get(label, {}).get("bootstrap_95_hi")),
-                        ),
-                        "calendar_month_95": (
-                            (schemes.get("calendar_month", {}).get("buckets", {})
-                             .get(label, {}).get("bootstrap_95_lo")),
-                            (schemes.get("calendar_month", {}).get("buckets", {})
-                             .get(label, {}).get("bootstrap_95_hi")),
-                        ),
-                    }
-                    for label in tail.get("bucket_contract", [])
-                    },
-                }
+        # Tail decomposition and composition remain in the full report; their
+        # conclusions are established. Reserve notices for sequential handball
+        # persistence and cross-sport discrimination.
 
-            emit_notice("r1_backtest_low_draw_tail_all_rows", {
-                "predeclared_shape_interpretation": tail.get(
-                    "predeclared_shape_interpretation"),
-                "result": compact_tail_period(
-                    (tail.get("pooled") or {}).get("all") or {}),
-                "per_sport_in_full_report": True,
-            })
-            emit_notice("r1_backtest_low_draw_tail_development", {
-                "predeclared_shape_interpretation": tail.get(
-                    "predeclared_shape_interpretation"),
-                "validated_shape_verdict": (tail.get("pooled") or {}).get(
-                    "validated_shape_verdict"),
-                "validation_rule_application": (tail.get("pooled") or {}).get(
-                    "validation_rule_application"),
-                "result": compact_tail_period(
-                    (tail.get("pooled") or {}).get(
-                        "development_through_cutoff") or {}),
-                "per_sport_in_full_report": True,
-            })
-            emit_notice("r1_backtest_low_draw_tail_holdout", {
-                "result": compact_tail_period(
-                    (tail.get("pooled") or {}).get("holdout_after_cutoff") or {}),
-                "per_sport_in_full_report": True,
-            })
-
-            composition = tail.get("retained_lt_0_05_composition") or {}
-            for period, title_suffix in (
-                ("development_through_cutoff", "development"),
-                ("holdout_after_cutoff", "holdout"),
-            ):
-                block = composition.get(period) or {}
-                emit_notice(f"r1_backtest_low_draw_composition_{title_suffix}", {
-                    "pooled_retained_lt_0_05_n": block.get(
-                        "pooled_retained_lt_0_05_n"),
-                    "sports": {
-                        sport: {
-                            "n": values.get("n"),
-                            "share": values.get(
-                                "share_of_pooled_retained_lt_0_05"),
-                            "predicted": values.get(
-                                "mean_predicted_probability"),
-                            "observed": values.get("observed_hit_rate"),
-                            "relative": values.get(
-                                "relative_surplus_observed_divided_by_predicted"),
-                            "month_95": (
-                                values.get("calendar_month_95_lo"),
-                                values.get("calendar_month_95_hi"),
-                            ),
-                            "rows_per_active_day": values.get(
-                                "candidate_rows_per_active_day"),
-                            "exclusions": (values.get(
-                                "forecast_exclusion_audit") or {}).get("excluded"),
-                        }
-                        for sport, values in (block.get("sports") or {}).items()
-                    },
-                    "reconciliation": block.get("reconciliation"),
-                })
-
-        # Provenance remains in the receipt/full report. Reserve the finite
-        # notice budget for the same-population tail decomposition and canary.
         handball = analysis.get("handball_draw_diagnostics") or {}
         if handball:
             folds = handball.get("walk_forward_folds") or []
@@ -495,6 +409,13 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                 "league_warning": (handball.get("league_concentration") or {}).get(
                     "warning"),
                 "all_leagues_in_full_report": True,
+            })
+
+        discrimination = analysis.get("draw_model_discrimination") or {}
+        for sport, result in (discrimination.get("per_sport") or {}).items():
+            emit_notice(f"r1_backtest_draw_discrimination_{sport}", {
+                "scope": discrimination.get("scope"),
+                **result,
             })
 
         inventory = analysis.get("corpus_inventory") or {}

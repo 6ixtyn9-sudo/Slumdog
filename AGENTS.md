@@ -483,10 +483,17 @@ standing sport whose underdog effect reversed from `+8.96` points in development
 to `-30.20` in holdout. That does not prove another reversal, but forbids
 promoting the pooled development estimate without sequential persistence.
 
-Handball persistence is predeclared before execution: fixed calendar quarters
-2024-Q1 through 2026-Q3; at least 75% of nonempty folds positive, at least 50%
-with month-block lower bound above zero, and the final two nonempty folds both
-positive. League slices are multiplicity-exposed and `n<500` indicative.
+Handball persistence passed its predeclared test: fixed quarters 2024-Q1 through
+2026-Q3 yielded 10 nonempty folds (2025-Q2 is explicitly empty), all 10 positive,
+9/10 month-block lower bounds above zero, and the final two positive. Ratios were
+`1.75x..2.78x`. This supports persistence, not breadth or profit. League slices
+remain multiplicity-exposed and `n<500` indicative.
+
+The full handball curve is the stronger mechanism claim: predicted draw rates
+span roughly `2.3%..21.5%` while observed rates move only `4.6%..9.2%`; the model
+is near identity around `6%..8%` and wrong in opposite directions outside it.
+Always accompany “low discrimination” with the measured rank statistic and its
+month-block interval; calibration shape alone is not a discrimination metric.
 
 Football remains only an indicative lead: development predicted `0.0348`,
 observed `0.11`, relative `3.16x`, but `n=100` and 1.25 rows/active day; holdout

@@ -1289,7 +1289,9 @@ def _handball_draw_diagnostics(events: list[SettledEvent]) -> dict[str, Any]:
         ),
         "walk_forward_folds": folds,
         "persistence_summary": {
+            "total_fixed_folds": len(folds),
             "nonempty_folds": len(nonempty),
+            "empty_folds": [fold["fold"] for fold in folds if fold["n"] == 0],
             "positive_sign_folds": positive,
             "month_interval_excludes_zero_positive_folds": significant_positive,
             "final_two_nonempty_positive": (
@@ -1302,6 +1304,146 @@ def _handball_draw_diagnostics(events: list[SettledEvent]) -> dict[str, Any]:
             "leagues": league_rows,
         },
         "full_draw_calibration_curve": curve,
+    }
+
+
+def _draw_model_discrimination(events: list[SettledEvent]) -> dict[str, Any]:
+    """Full-curve calibration and rank discrimination by genuine draw board."""
+    curve_bands = (
+        ("<0.05", 0.005, 0.05), ("0.05-0.10", 0.05, 0.10),
+        ("0.10-0.15", 0.10, 0.15), ("0.15-0.20", 0.15, 0.20),
+        ("0.20-0.25", 0.20, 0.25), ("0.25-0.30", 0.25, 0.30),
+        ("0.30-0.35", 0.30, 0.35), ("0.35+", 0.35, 1.0000001),
+    )
+
+    def average_ranks(values: list[float]) -> list[float]:
+        order = sorted(range(len(values)), key=lambda index: values[index])
+        ranks = [0.0] * len(values)
+        start = 0
+        while start < len(order):
+            end = start + 1
+            while end < len(order) and values[order[end]] == values[order[start]]:
+                end += 1
+            rank = ((start + 1) + end) / 2
+            for position in range(start, end):
+                ranks[order[position]] = rank
+            start = end
+        return ranks
+
+    def correlation_from_totals(n: float, sx: float, sy: float, sxx: float,
+                                syy: float, sxy: float) -> float | None:
+        if n <= 1:
+            return None
+        covariance = sxy - sx * sy / n
+        var_x = sxx - sx * sx / n
+        var_y = syy - sy * sy / n
+        if var_x <= 0 or var_y <= 0:
+            return None
+        return covariance / math.sqrt(var_x * var_y)
+
+    per_sport = {}
+    sports = sorted({event.sport for event in events
+                     if SPORTS[event.sport].draw_settles
+                     and SPORTS[event.sport].draw_possible})
+    for sport_index, sport in enumerate(sports):
+        rows = [
+            event for event in events
+            if event.sport == sport
+            and isinstance(event.draw_probability, (int, float))
+            and not isinstance(event.draw_probability, bool)
+            and float(event.draw_probability) >= GENUINE_DRAW_FORECAST_FLOOR
+        ]
+        curve = {}
+        observed_rates = []
+        for band_index, (label, lo, hi) in enumerate(curve_bands):
+            group = [event for event in rows
+                     if lo <= float(event.draw_probability) < hi]
+            predicted = (sum(float(event.draw_probability) for event in group) / len(group)
+                         if group else None)
+            observed = (sum(event.winner_index == 0 for event in group) / len(group)
+                        if group else None)
+            records = [(sport, event.event_date, label,
+                        float(event.draw_probability),
+                        1.0 if event.winner_index == 0 else 0.0) for event in group]
+            boot = _cluster_bootstrap_surplus(
+                records, [label], seed=BOOTSTRAP_SEED + 5000
+                + sport_index * 20 + band_index,
+                scheme_names=("calendar_month",))
+            interval = (boot.get("schemes", {}).get("calendar_month", {})
+                        .get("buckets", {}).get(label, {}))
+            if observed is not None:
+                observed_rates.append(observed)
+            curve[label] = {
+                "n": len(group), "mean_predicted_probability": predicted,
+                "observed_hit_rate": observed,
+                "absolute_surplus": (observed - predicted
+                                     if observed is not None and predicted is not None else None),
+                "relative_observed_divided_by_predicted": (
+                    observed / predicted
+                    if observed is not None and predicted not in (None, 0) else None),
+                "calendar_month_95_lo": interval.get("bootstrap_95_lo"),
+                "calendar_month_95_hi": interval.get("bootstrap_95_hi"),
+                "indicative_only_n_lt_500": len(group) < 500,
+            }
+
+        probabilities = [float(event.draw_probability) for event in rows]
+        outcomes = [1.0 if event.winner_index == 0 else 0.0 for event in rows]
+        ranks = average_ranks(probabilities)
+        blocks: dict[str, list[float]] = defaultdict(
+            lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        for event, rank, outcome in zip(rows, ranks, outcomes):
+            total = blocks[event.event_date[:7]]
+            total[0] += 1
+            total[1] += rank
+            total[2] += outcome
+            total[3] += rank * rank
+            total[4] += outcome * outcome
+            total[5] += rank * outcome
+        overall = [sum(block[index] for block in blocks.values()) for index in range(6)]
+        point = correlation_from_totals(*overall)
+        keys = sorted(blocks)
+        rng = random.Random(BOOTSTRAP_SEED + 5500 + sport_index)
+        draws = []
+        if keys:
+            for _ in range(BOOTSTRAP_REPLICATES):
+                totals = [0.0] * 6
+                for _block in keys:
+                    sampled = blocks[keys[rng.randrange(len(keys))]]
+                    for index, value in enumerate(sampled):
+                        totals[index] += value
+                value = correlation_from_totals(*totals)
+                if value is not None:
+                    draws.append(value)
+        per_sport[sport] = {
+            "n": len(rows),
+            "full_draw_calibration_curve": curve,
+            "observed_rate_range_across_nonempty_bands": {
+                "minimum": min(observed_rates) if observed_rates else None,
+                "maximum": max(observed_rates) if observed_rates else None,
+                "range": (max(observed_rates) - min(observed_rates)
+                          if observed_rates else None),
+            },
+            "spearman_rank_correlation_predicted_draw_vs_realised_draw": point,
+            "spearman_calendar_month_bootstrap_95_lo": _percentile(draws, 0.025),
+            "spearman_calendar_month_bootstrap_95_hi": _percentile(draws, 0.975),
+            "spearman_valid_replicates": len(draws),
+            "spearman_method": (
+                "Pearson correlation of global average ranks of predicted probability "
+                "with binary realised-draw outcome (binary ranks are an affine transform); "
+                "month bootstrap resamples month blocks and reweights those fixed ranks."
+            ),
+            "interpretation": (
+                "Spearman correlation measures discrimination/ranking, not calibration "
+                "or profit; zero means predicted draw probability does not rank realised "
+                "draws better than chance in a monotonic sense."
+            ),
+        }
+    return {
+        "scope": (
+            "ledger-valid settled rows with genuine published draw forecast >=0.005; "
+            "MMA excluded because its board is two-outcome"
+        ),
+        "per_sport": per_sport,
     }
 
 
@@ -1638,6 +1780,7 @@ def r1_backtest(root: Path | str = ".", target_date: str | None = None) -> Path:
         "three_outcome_calibration_map": _three_outcome_calibration(all_settled_events),
         "low_draw_tail_analysis": _low_draw_tail_analysis(all_settled_events),
         "handball_draw_diagnostics": _handball_draw_diagnostics(all_settled_events),
+        "draw_model_discrimination": _draw_model_discrimination(all_settled_events),
         "eligible_underdog_signal": eligible_signal,
         "negative_sport_gate_variant": _negative_sport_gate_variant(
             eligible_signal, all_r1_rows),
@@ -1951,6 +2094,51 @@ def _render_r1_backtest_markdown(analysis: dict[str, Any]) -> str:
                     f"| {label} | {bucket.get('n')} | {predicted:.2%} | "
                     f"{observed:.2%} | {surplus:+.2%} | {relative:.3f} | "
                     f"{lo:+.2%}..{hi:+.2%} |"
+                )
+
+    discrimination = analysis.get("draw_model_discrimination") or {}
+    if discrimination:
+        lines += [
+            "", "## Draw-model discrimination by sport", "",
+            discrimination.get("scope", ""), "",
+            "| Sport | n | Observed-rate min | max | range | Spearman | Month-bootstrap 95% |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+        for sport, result in (discrimination.get("per_sport") or {}).items():
+            observed_range = result.get(
+                "observed_rate_range_across_nonempty_bands") or {}
+            correlation = result.get(
+                "spearman_rank_correlation_predicted_draw_vs_realised_draw")
+            lo = result.get("spearman_calendar_month_bootstrap_95_lo")
+            hi = result.get("spearman_calendar_month_bootstrap_95_hi")
+            def pct(value: float | None) -> str:
+                return f"{value:.2%}" if value is not None else "-"
+            corr_text = f"{correlation:.4f}" if correlation is not None else "-"
+            ci_text = (f"{lo:.4f}..{hi:.4f}"
+                       if lo is not None and hi is not None else "-")
+            lines.append(
+                f"| {sport} | {result.get('n')} | "
+                f"{pct(observed_range.get('minimum'))} | "
+                f"{pct(observed_range.get('maximum'))} | "
+                f"{pct(observed_range.get('range'))} | {corr_text} | {ci_text} |"
+            )
+            lines += [
+                "", f"### {sport} full draw curve", "",
+                "| Bucket | n | Predicted | Observed | Surplus | Relative | Month 95% |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+            for label, bucket in result.get("full_draw_calibration_curve", {}).items():
+                predicted = bucket.get("mean_predicted_probability")
+                observed = bucket.get("observed_hit_rate")
+                if predicted is None:
+                    lines.append(f"| {label} | 0 | - | - | - | - | - |")
+                    continue
+                lines.append(
+                    f"| {label} | {bucket.get('n')} | {predicted:.2%} | "
+                    f"{observed:.2%} | {bucket.get('absolute_surplus'):+.2%} | "
+                    f"{bucket.get('relative_observed_divided_by_predicted'):.3f} | "
+                    f"{bucket.get('calendar_month_95_lo'):+.2%}.."
+                    f"{bucket.get('calendar_month_95_hi'):+.2%} |"
                 )
 
     signal = analysis.get("eligible_underdog_signal") or {}

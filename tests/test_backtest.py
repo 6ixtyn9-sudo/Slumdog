@@ -14,6 +14,7 @@ import pytest
 from slumdog.backtest import (
     KNOWN_LIMITATIONS,
     _cluster_bootstrap_surplus,
+    _draw_model_discrimination,
     _handball_draw_diagnostics,
     _low_draw_tail_analysis,
     r1_backtest,
@@ -492,7 +493,9 @@ class TestBaselinesAndBands:
         assert result["walk_forward_folds"][0]["fold"] == "2024-Q1"
         assert result["walk_forward_folds"][-1]["fold"] == "2026-Q3"
         assert result["persistence_summary"] == {
+            "total_fixed_folds": 11,
             "nonempty_folds": 11,
+            "empty_folds": [],
             "positive_sign_folds": 11,
             "month_interval_excludes_zero_positive_folds": 11,
             "final_two_nonempty_positive": True,
@@ -503,6 +506,32 @@ class TestBaselinesAndBands:
         assert league["share_of_handball_tail"] == pytest.approx(1.0)
         assert result["full_draw_calibration_curve"]["<0.05"]["n"] == 11
         assert "75%" in result["predeclared_persistence_rule"]
+
+    def test_draw_discrimination_reports_curve_range_and_month_bootstrap(self):
+        football = [
+            _ev(f"f-{index}", "football", f"2026-01-{index + 1:02d}",
+                "Home", "Away", winner_index=(0 if index >= 2 else 1),
+                probability_1=0.60, probability_2=0.39 - probability,
+                draw_probability=probability,
+                disposition=("SETTLED_DRAW" if index >= 2 else "SETTLED"))
+            for index, probability in enumerate((0.01, 0.08, 0.18, 0.28))
+        ]
+        mma = [_ev(
+            "mma", "mma", "2026-01-01", "A", "B", winner_index=0,
+            probability_1=0.6, probability_2=0.37, draw_probability=0.03,
+            disposition="SETTLED_DRAW")]
+        result = _draw_model_discrimination(football + mma)
+        assert set(result["per_sport"]) == {"football"}
+        football_result = result["per_sport"]["football"]
+        assert football_result["n"] == 4
+        assert football_result[
+            "spearman_rank_correlation_predicted_draw_vs_realised_draw"] > 0
+        assert football_result["spearman_valid_replicates"] == 1000
+        observed_range = football_result[
+            "observed_rate_range_across_nonempty_bands"]
+        assert observed_range == {"minimum": 0.0, "maximum": 1.0, "range": 1.0}
+        assert football_result["full_draw_calibration_curve"]["0.15-0.20"][
+            "n"] == 1
 
     def test_baselines_computed_on_the_same_rows(self, tmp_path):
         events = _build_eligible_scenario(winner_index=2)

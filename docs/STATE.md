@@ -1,5 +1,20 @@
 
-### Update 2026-09-29: low-draw finding is handball-only; quarterly persistence pending
+### Update 2026-09-29: handball persistence passes; football curve and discrimination pending
+
+Ten of ten nonempty handball quarters are positive, nine month-significant;
+final two positive, so the frozen persistence rule passes. The fixed 11-fold
+contract identifies 2025-Q2 as empty rather than dropping it. Ratios span
+`1.75x..2.78x` across 2024-Q1..2026-Q3.
+
+The broader mechanism is a flat handball curve: predicted draw rates span about
+`2.3%..21.5%` while observed rates span only `4.6%..9.2%`, crossing calibration
+near `6%..8%` and missing in opposite directions outside it. The next report now
+computes the identical full curve for football and every genuine draw board,
+observed-rate range, and predicted-vs-realised Spearman rank correlation with a
+calendar-month bootstrap interval. These discrimination results are unverified;
+no parallel selector is authorized.
+
+### Superseded 2026-09-29: handball persistence was pending
 
 Handball supplies 99.0% of retained development `<0.05` rows (`14473/14614`)
 and 97.1% of holdout (`639/658`). Development is `2.19x`, month

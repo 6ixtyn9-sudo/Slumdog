@@ -1,5 +1,37 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — handball persistence passes; full curve elevated; football comparison implemented.**
+
+The fixed quarterly test passes: 10/10 nonempty folds positive, 9/10 with month
+lower bound above zero, final two positive; relative ratios `1.75x..2.78x`.
+There are 11 fixed folds and **2025-Q2 is the empty fold** (derived from the
+fixed fold list plus the supplied 10 nonempty rows; new output names empty folds
+explicitly). The fold table supplied by the owner is preserved as direct result:
+2024-Q1 `n=2082`, `2.01x`, `[+0.0137,+0.0347]`; Q2 `n=1226`, `2.03x`,
+`[+0.0057,+0.0290]`; Q3 `n=953`, `2.01x`, `[+0.0029,+0.0432]`; Q4
+`n=1929`, `2.78x`, `[+0.0376,+0.0424]`; 2025-Q1 `n=1892`, `2.22x`,
+`[+0.0188,+0.0388]`; Q3 `n=762`, `1.97x`, `[+0.0029,+0.0274]`; Q4
+`n=1853`, `2.42x`, `[+0.0281,+0.0374]`; 2026-Q1 `n=1799`, `2.00x`,
+`[+0.0128,+0.0296]`; Q2 `n=1002`, `1.75x`, `[+0.0152,+0.0175]`; Q3
+`n=639`, `1.76x`, `[-0.0199,+0.0351]`.
+
+The full curve is elevated above the tail: handball predicted draw probability
+moves about `2.3% -> 21.5%`, observed only `4.6% -> 9.2%`; reported ratios are
+`2.19, 0.93, 0.69, 0.51, 0.43`, with large negative upper-band intervals. This
+is a systematic flattening/misspecification claim, not merely a tail anomaly.
+It remains one sport, calibration not profit, and carries the handball reversal
+warning.
+
+Cross-sport diagnostics now calculate the same full curve for every genuine
+draw board, especially football, plus observed-rate range and Spearman rank
+correlation between predicted draw probability and realised draw. Spearman gets
+a deterministic calendar-month block-bootstrap interval. This separates
+calibration from discrimination numerically; results are **UNVERIFIED** until a
+run is read. No selector is built, and facet timing provenance remains blocked.
+Final local gates: focused tests **157 passed**; full `python -m pytest` **1776
+passed**; tracked-file `py_compile`, changed-file `pyflakes`, and
+`git diff --check` clean.
+
 **2026-09-29 — filtered tail is 99% handball; quarterly persistence test implemented.**
 
 Composition answers breadth decisively. Development retained `<0.05` is handball
