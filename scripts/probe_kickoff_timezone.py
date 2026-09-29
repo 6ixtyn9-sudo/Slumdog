@@ -2620,6 +2620,39 @@ def run_probe(date: str, *, sport: str, timeout: int, pause: float,
         "extra_sport": sport,
     }
 
+    # The dual-path canary is the first work this full probe performs.  A
+    # blocked relay leg alone is not enough to stop: sample_canary also tries
+    # direct once.  When both paths are blocked, running any board/detail
+    # stage can only spend the job budget against the same refusal.  Report
+    # that condition immediately and return a successful, deliberately
+    # short-circuited diagnostic (not a broken/incomplete probe).
+    from slumdog.forebet import sample_canary
+    try:
+        availability_canary = sample_canary(date, timeout=timeout)
+    except Exception as exc:  # fail closed even if the never-raise seam regresses
+        availability_canary = {
+            "sport": "football", "checked": True, "healthy": False,
+            "reason": f"canary sample crashed: {type(exc).__name__}: {exc}"[:200],
+            "sampled_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+    report["availability_canary"] = availability_canary
+    if not availability_canary.get("healthy"):
+        report["canary"] = availability_canary
+        report["short_circuit"] = {
+            "active": True,
+            "reason": "dual-path canary blocked; every remaining probe stage was skipped",
+            "skipped": "all_remaining_stages",
+            "exit_code": 0,
+        }
+        # Keep the reason and the fact that the short run is intentional in
+        # one durable annotation; a ~30-second run must not look truncated.
+        emit_section("canary", {
+            **availability_canary,
+            "probe_short_circuit": report["short_circuit"],
+        })
+        return report
+    emit_section("availability_canary", availability_canary)
+
     # Coverage runs first: it is the question the project is actually
     # blocked on, and a later stage overrunning must not cost its answer.
     # The capture contract in force for this run. Annotations are read long
@@ -2929,6 +2962,14 @@ def verdict(report: dict[str, Any]) -> tuple[bool, list[str]]:
     """Turn the report into a decision, erring toward 'not proven'."""
     lines: list[str] = []
     resolved = False
+
+    if (report.get("short_circuit") or {}).get("active"):
+        canary = report.get("availability_canary") or report.get("canary") or {}
+        return True, [
+            "PROBE SHORT-CIRCUITED INTENTIONALLY: dual-path canary was blocked; "
+            "every remaining stage was skipped and exit 0 is expected.",
+            f"Canary reason: {canary.get('reason')}",
+        ]
 
     if report.get("crashed"):
         lines.append(f"PROBE CRASHED: {report['crashed']}")

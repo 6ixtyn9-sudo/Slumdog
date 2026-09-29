@@ -403,6 +403,115 @@ whose answer cannot be used is not worth making. The stage records the
 outcome in `entry["render_clock"]`, so "why is basketball missing today" is
 answerable from the receipt.
 
+## Multiplicity And Temporal Holdout Warning
+
+A per-sport effect discovered on the same period used to inspect every sport is
+a lead, not a gate. The standing counterexample is handball calibration from the
+2026-09-29 offline backtest: development surplus **+8.96 percentage points**
+with a 95% interval **[+1.82, +16.09]**, followed by holdout surplus **-30.20
+points** with **[-56.38, -4.01]** — statistically separated from zero in opposite
+directions. Had the development period been used to authorize a sport gate, the
+system would have shipped a confident mistake.
+
+Rules:
+
+- Never mutate the frozen R1 rule from a full-period or development-only sport,
+  band, facet, or outcome effect.
+- Multiple sports/bands/facets inspected together require explicit multiplicity
+  treatment; an isolated 95% interval is not sufficient.
+- Preserve a genuinely later holdout, report its n, and label n<500 indicative.
+- When many rows share a sport-day, row-wise Wilson intervals alone may
+  overstate effective information; use sport-day-cluster-aware uncertainty for
+  signal-wide analyses.
+- A parallel selector remains a research track until its direction and useful
+  firing frequency survive out-of-sample evaluation. Rare alone is never a
+  "power play"; positive held-out calibration surplus with adequate evidence is.
+- Tennis is the second worked warning: its earlier R1-level positive lead did
+  not survive signal-wide calendar-day clustering in run `36550899550`
+  (development and holdout intervals both included zero). Treat it as retired,
+  not as a gate. Together with handball's sign reversal, this demonstrates why
+  inspected sport leads need clustered temporal validation and multiplicity
+  discipline before product use.
+- Football is the third worked warning. Run `36550899550` gave an apparently
+  decisive held-out underdog surplus of **+3.751 points**
+  **[+2.979,+4.507]**, but the same-row favourite control was **+3.368**
+  **[+2.505,+4.204]** and the underdog-minus-favourite differential was only
+  **+0.383** **[-1.091,+1.787]**. Development differential was likewise null:
+  **-0.386** **[-0.869,+0.100]**. Both win sides rose because draws were
+  over-predicted; football has no demonstrated underdog edge.
+- Pattern rule: on this corpus, assume every positive underdog surplus in a
+  draw-capable sport is draw miscalibration until its same-row
+  underdog-minus-favourite differential survives cluster-aware temporal
+  evaluation. Never headline the underdog leg by itself.
+- The negative-sport gate supplies the fourth and fifth worked warnings.
+  First, excluding basketball, hockey and volleyball (two-way) plus handball
+  (draw-capable) changed the outcome-space mix; its pooled holdout raw surplus
+  rose to +7.83 points partly because the remainder became more draw-capable and
+  therefore more exposed to draw over-prediction. Second, after correcting that
+  mix, the gate failed on the development period that selected it: two-way
+  interval `[-0.0152,+0.0328]`; draw-capable differential
+  `[-0.0535,+0.0483]`, with point estimate moving from `+0.0290` frozen to
+  `-0.0040` gated. The `n=184` holdout two-way result cannot rescue a gate that
+  failed development. The gate is retired. Never compare pooled raw surplus
+  across a changed outcome-space mixture; two-way merit is underdog surplus and
+  draw-capable merit is the same-row underdog-minus-favourite differential.
+
+## Retracted Pooled Low-Draw Shape — Sixth Worked Warning
+
+The pooled `<0.05` shape passed its predeclared statistical criterion and was
+then **retracted as mostly an encoding artifact** when the required per-sport
+audit exposed that the criterion never asked whether a forecast existed.
+Cricket development had `n=4995`, mean predicted `0.000146`, observed `0.005205`
+and an artificial `35.6x` ratio; holdout was `80x` on `n=854`. Forebet was
+functionally not modelling that draw outcome. MMA can settle fight draws but has
+a two-outcome board, so it likewise cannot supply a genuine draw forecast.
+
+This is the sixth worked warning and the most important: predeclaration prevents
+post-hoc storytelling but cannot repair a misspecified population contract.
+Before calibration, require that the sport's board publishes draw probability
+and apply the predeclared `0.005` plausibility floor; report exclusions per
+sport. The **unfiltered** pooled claim remains retracted.
+
+The filtered population subsequently revalidated the shape, but composition
+made it narrow: handball was `14473/14614` development rows (99.0%) and
+`639/658` holdout rows (97.1%). Required wording is: **Forebet under-forecasts
+low-probability handball draws** — development `2.19x`, `n=14473`, month
+`[+0.0233,+0.0308]`; holdout `1.76x`, `n=639`, month
+`[-0.0199,+0.0351]`, which includes zero. Never call this a general property of
+Forebet's draw model. The evidentiary bar is higher because handball is also the
+standing sport whose underdog effect reversed from `+8.96` points in development
+to `-30.20` in holdout. That does not prove another reversal, but forbids
+promoting the pooled development estimate without sequential persistence.
+
+Handball persistence passed its predeclared test: fixed quarters 2024-Q1 through
+2026-Q3 yielded 10 nonempty folds (2025-Q2 is explicitly empty), all 10 positive,
+9/10 month-block lower bounds above zero, and the final two positive. Ratios were
+`1.75x..2.78x`. This supports persistence, not breadth or profit. League slices
+remain multiplicity-exposed and `n<500` indicative.
+
+The full curves establish a shared **over-dispersion** defect, not a general
+absence of discrimination. Football discriminates but its forecast spread is
+too wide: observed draw rate rises `11.3% -> 28.6%` while predicted rises about
+`7.9% -> 41.1%`; relative calibration falls monotonically `1.43x -> 0.70x`.
+Handball is the degenerate extreme: predicted `2.3% -> 21.5%` while observed
+moves only `4.6% -> 9.2%`. Both under-forecast low bands and over-forecast high
+bands. Always accompany discrimination language with measured Spearman and its
+month-block interval; calibration shape alone is not a ranking metric.
+
+Any recalibration is price-free and parallel to frozen R1. The first allowed
+model is one coefficient per sport, fit development-only by Brier loss:
+`q = base_rate + alpha * (p - base_rate)`, `alpha` clipped `[0,1]`. A real,
+transferable improvement was predeclared before execution: in both football and
+handball, holdout Brier improvement at least `0.001` with month-bootstrap lower
+bound above zero, holdout log loss also improves, and at least 75% of sequential
+quarterly folds improve Brier. Anything less is not demonstrated.
+
+Football remains only an indicative lead: development predicted `0.0348`,
+observed `0.11`, relative `3.16x`, but `n=100` and 1.25 rows/active day; holdout
+`n=13`. Under the standing evidence rule it needs at least `n=500` graded rows
+(and enough independent calendar days for clustered uncertainty) before it can
+advance beyond indicative. No selector exists; frozen R1 is unchanged.
+
 ## Documentation Governance
 
 - `docs/STATE.md` is canonical current truth, not append-only diary. Git history is history.

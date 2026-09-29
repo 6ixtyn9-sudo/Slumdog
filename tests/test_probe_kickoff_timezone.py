@@ -47,6 +47,15 @@ def _no_network_direct_vs_relay(monkeypatch):
     monkeypatch.setattr(probe, "direct_get_diagnostic", _stub)
     monkeypatch.setattr(probe, "relay_get_diagnostic", _stub)
     monkeypatch.setattr(probe, "relay_get_markdown", _stub)
+    monkeypatch.setattr(
+        "slumdog.forebet.sample_canary",
+        lambda *a, **k: {
+            "sport": "football", "checked": True, "healthy": True,
+            "reason": None, "relay": {"ok": True, "reason": None},
+            "direct": None,
+            "sampled_at": "2026-09-29T00:00:00+00:00",
+        },
+    )
 
 
 def _boom(message: str):
@@ -3391,14 +3400,19 @@ class TestCircuitBreakerFarStageInRunProbe:
         assert "canary" in \
             report["circuit_breaker_comparison"]["invalid_reason"].lower()
 
-    def test_run_probe_wires_direct_vs_relay_in_as_its_first_stage(
+    def test_run_probe_samples_canary_then_direct_vs_relay_before_open_questions(
             self, monkeypatch):
-        """Priority change, owner finding 2026-09-28: this must run before
-        open_questions, unconditionally, and must not crash the whole
-        probe if it raises."""
+        """The cheap canary must be first; in an open window the detailed
+        path comparison still precedes the full open-questions sweep."""
         import scripts.probe_kickoff_timezone as probe
 
         order = []
+
+        def _canary(*a, **k):
+            order.append("canary")
+            return {"sport": "football", "checked": True, "healthy": True,
+                    "reason": None, "relay": {"ok": True, "reason": None},
+                    "direct": None, "sampled_at": "2026-09-29T00:00:00+00:00"}
 
         def _dvr(*a, **k):
             order.append("direct_vs_relay")
@@ -3412,6 +3426,7 @@ class TestCircuitBreakerFarStageInRunProbe:
             order.append("open_questions")
             return {"passes_used": {}, "stage_meta": {}}
 
+        monkeypatch.setattr("slumdog.forebet.sample_canary", _canary)
         monkeypatch.setattr(probe, "direct_vs_relay_probe", _dvr)
         monkeypatch.setattr(probe, "run_open_questions", _oq)
         monkeypatch.setattr(probe, "fetch", lambda *a, **k: b"")
@@ -3420,8 +3435,43 @@ class TestCircuitBreakerFarStageInRunProbe:
 
         report = probe.run_probe("2026-09-29", sport="basketball",
                                  timeout=1, pause=0)
-        assert order == ["direct_vs_relay", "open_questions"]
+        assert order == ["canary", "direct_vs_relay", "open_questions"]
         assert report["direct_vs_relay"]["football_json"]["direct"]["ok"]
+
+    def test_blocked_dual_path_canary_short_circuits_every_stage_and_resolves(
+            self, monkeypatch):
+        """The full workflow's blocked-window path is an intentional, green
+        availability sample, not a truncated probe or an invitation to retry."""
+        import scripts.probe_kickoff_timezone as probe
+
+        blocked = {
+            "sport": "football", "checked": True, "healthy": False,
+            "reason": "relay challenge_page; direct HTTPError 403 — both paths tested",
+            "relay": {"ok": False, "reason": "challenge_page"},
+            "direct": {"ok": False, "reason": "HTTPError 403"},
+            "sampled_at": "2026-09-29T00:00:00+00:00",
+        }
+        monkeypatch.setattr("slumdog.forebet.sample_canary", lambda *a, **k: blocked)
+
+        def _must_not_run(*a, **k):
+            raise AssertionError("blocked canary must skip every remaining stage")
+
+        monkeypatch.setattr(probe, "direct_vs_relay_probe", _must_not_run)
+        monkeypatch.setattr(probe, "run_open_questions", _must_not_run)
+        monkeypatch.setattr(probe, "fetch", _must_not_run)
+
+        report = probe.run_probe("2026-09-29", sport="basketball",
+                                 timeout=1, pause=0)
+        assert report["canary"] == blocked
+        assert report["short_circuit"] == {
+            "active": True,
+            "reason": "dual-path canary blocked; every remaining probe stage was skipped",
+            "skipped": "all_remaining_stages",
+            "exit_code": 0,
+        }
+        resolved, lines = probe.verdict(report)
+        assert resolved is True
+        assert "SHORT-CIRCUITED INTENTIONALLY" in lines[0]
 
     def test_a_crash_in_direct_vs_relay_does_not_crash_the_whole_probe(
             self, monkeypatch):

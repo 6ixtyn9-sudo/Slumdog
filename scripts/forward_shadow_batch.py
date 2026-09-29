@@ -161,6 +161,422 @@ def canary_gate(*, timeout: int = 45) -> dict:
     return sample_canary(timeout=timeout)
 
 
+def run_offline_r1_backtest(repo_root: Path) -> dict:
+    """Run and annotate the already-seeded historical backtest, never raising.
+
+    Forward Shadow's workflow downloads the latest history artifacts before
+    this driver starts.  The backtest reads only those local bytes, so source
+    availability must not gate the provenance verdict.  The complete JSON/MD
+    remain under ``data/reports`` for the run artifact; annotations carry only
+    the decision-critical verdict/rates and corpus inventory.
+    """
+    try:
+        from slumdog.backtest import r1_backtest
+
+        report_path = r1_backtest(repo_root)
+        analysis = json.loads(report_path.read_text())
+        provenance = analysis.get("provenance_verdict") or {}
+        compact_verdict = {}
+        if isinstance(provenance, dict):
+            for track, check in provenance.items():
+                if not isinstance(check, dict):
+                    continue
+                compact_verdict[track] = {
+                    "verdict": check.get("verdict"),
+                    "matched_pair_count": check.get("matched_to_historical_ledger"),
+                    "pre_event_picks_available": check.get("pre_event_picks_available"),
+                    "differing_count": check.get("differing_count"),
+                    "underdog_identity_flipped_count": check.get(
+                        "underdog_identity_flipped_count"),
+                    "max_absolute_probability_delta_seen": check.get(
+                        "max_absolute_probability_delta_seen"),
+                }
+
+        # Emit the unresolved draw result before lower-value sections. GitHub
+        # has previously hidden notices beyond its display cap; this question
+        # must remain visible even when the later canary aborts the network run.
+
+        def compact_calibration(block: dict | None) -> dict:
+            block = block or {}
+            return {
+                "mean_predicted_probability": block.get(
+                    "mean_predicted_probability"),
+                "observed_hit_rate": block.get("hit_rate"),
+                "observed_wins": block.get("successes"),
+                "n": block.get("n"),
+                "wilson_95_lo": block.get("wilson_95_lo"),
+                "wilson_95_hi": block.get("wilson_95_hi"),
+                "observed_minus_predicted": block.get(
+                    "observed_minus_predicted"),
+            }
+
+        def compact_differential(block: dict | None) -> dict:
+            block = block or {}
+            return {
+                "n": block.get("n"),
+                "differential_surplus": block.get("differential_surplus"),
+                "differential_surplus_95_lo": block.get(
+                    "differential_surplus_95_lo"),
+                "differential_surplus_95_hi": block.get(
+                    "differential_surplus_95_hi"),
+                "indicative_only_n_lt_500": block.get(
+                    "indicative_only_n_lt_500"),
+            }
+
+        calibration_notices = {}
+        sport_calibration_notices: list[tuple[str, dict]] = []
+        draw_space_notices = {}
+        edge_sport_notices: list[tuple[str, dict]] = []
+        holdout_notices: list[tuple[str, dict]] = []
+        headline_rates = {}
+        for population, scored in (analysis.get("populations") or {}).items():
+            calibration = scored.get("calibration") or {}
+            overall = calibration.get("overall") or {}
+            bands = calibration.get("by_underdog_probability_band") or {}
+            calibration_notices[population] = {
+                "interpretation": calibration.get("interpretation"),
+                "overall": {
+                    side: compact_calibration(block)
+                    for side, block in overall.items()
+                },
+                "by_underdog_probability_band": {
+                    label: {side: compact_calibration(block)
+                            for side, block in pair.items()}
+                    for label, pair in bands.items()
+                    if label != "unknown" or any(
+                        (block or {}).get("n") for block in pair.values())
+                },
+            }
+            sports = sorted((calibration.get("by_sport") or {}).items())
+            for chunk_index in range(0, len(sports), 4):
+                chunk = sports[chunk_index:chunk_index + 4]
+                sport_calibration_notices.append((
+                    f"r1_backtest_calibration_sports_{chunk_index // 4 + 1}",
+                    {population: {
+                        sport: {side: compact_calibration(block)
+                                for side, block in pair.items()}
+                        for sport, pair in chunk
+                    }},
+                ))
+
+            split = scored.get("draw_space_split") or {}
+            two_way = split.get("two_way_sports") or {}
+            draw_capable = split.get("draw_capable_sports") or {}
+            if split:
+                draw_space_notices[population] = {
+                "coverage": scored.get("coverage"),
+                "two_way_sports": {
+                    "sports": two_way.get("sports"),
+                    "pooled": compact_calibration(two_way.get("pooled")),
+                },
+                "draw_capable_sports": {
+                    "sports": draw_capable.get("sports"),
+                    "pooled": compact_differential(draw_capable.get("pooled")),
+                },
+            }
+            two_way_sports = sorted((two_way.get("per_sport") or {}).items())
+            for chunk_index in range(0, len(two_way_sports), 20):
+                chunk = two_way_sports[chunk_index:chunk_index + 20]
+                edge_sport_notices.append((
+                    f"r1_backtest_two_way_sports_{chunk_index // 20 + 1}",
+                    {population: {sport: compact_calibration(block)
+                                  for sport, block in chunk}},
+                ))
+            draw_sports = sorted((draw_capable.get("per_sport") or {}).items())
+            for chunk_index in range(0, len(draw_sports), 20):
+                chunk = draw_sports[chunk_index:chunk_index + 20]
+                edge_sport_notices.append((
+                    f"r1_backtest_draw_capable_sports_{chunk_index // 20 + 1}",
+                    {population: {sport: compact_differential(block)
+                                  for sport, block in chunk}},
+                ))
+
+            holdout = scored.get("temporal_holdout") or {}
+            holdout_sports = sorted((holdout.get("per_sport") or {}).items())
+            for chunk_index in range(0, len(holdout_sports), 4):
+                chunk = holdout_sports[chunk_index:chunk_index + 4]
+                compact_periods = {}
+                for sport, periods in chunk:
+                    compact_periods[sport] = {
+                        "outcome_space": periods.get("outcome_space"),
+                        "development": (
+                            compact_calibration(periods.get(
+                                "development_through_cutoff"))
+                            if periods.get("outcome_space") == "TWO_WAY"
+                            else compact_differential(periods.get(
+                                "development_through_cutoff"))),
+                        "holdout": (
+                            compact_calibration(periods.get("holdout_after_cutoff"))
+                            if periods.get("outcome_space") == "TWO_WAY"
+                            else compact_differential(periods.get(
+                                "holdout_after_cutoff"))),
+                        "indicative_only_holdout_n_lt_500": periods.get(
+                            "indicative_only_holdout_n_lt_500"),
+                    }
+                holdout_notices.append((
+                    f"r1_backtest_holdout_{chunk_index // 4 + 1}",
+                    {"cutoff": holdout.get("cutoff"),
+                     "multiplicity_warning": holdout.get("multiplicity_warning"),
+                     population: compact_periods},
+                ))
+
+            baselines = scored.get("baselines_same_rows") or {}
+            headline_rates[population] = {
+                "note": scored.get("raw_hit_rate_note"),
+                "our_r1_pick": baselines.get("our_r1_pick"),
+                "always_favourite_same_rows": baselines.get(
+                    "always_favourite_same_rows"),
+                "forebet_pick_same_rows": baselines.get(
+                    "forebet_pick_same_rows"),
+            }
+        # GitHub publishes at most ten ::notice commands from this step.
+        # Keep the decision-critical sequence below bounded so the final
+        # canary-abort notice remains the tenth rather than being dropped.
+        outcome_map = analysis.get("three_outcome_calibration_map") or {}
+        if outcome_map:
+            pooled_draw = ((outcome_map.get("pooled") or {}).get("draw") or {})
+            point_buckets = pooled_draw.get("buckets") or {}
+            bootstrap = outcome_map.get("draw_surplus_cluster_bootstrap") or {}
+            sensitivity = {}
+            for scheme, scheme_result in (bootstrap.get("schemes") or {}).items():
+                sensitivity[scheme] = {
+                    label: (scheme_result.get("buckets") or {}).get(label)
+                    for label in ("<0.20", "0.35+")
+                }
+            primary_low = (sensitivity.get("calendar_day_PRIMARY", {})
+                           .get("<0.20") or {})
+            emit_notice("r1_backtest_draw_cluster_sensitivity", {
+                "point_estimates": {
+                    label: {
+                        "n": block.get("n"),
+                        "mean_predicted_probability": block.get(
+                            "mean_predicted_probability"),
+                        "observed_hit_rate": block.get("hit_rate"),
+                        "observed_minus_predicted": block.get(
+                            "observed_minus_predicted"),
+                    }
+                    for label, block in point_buckets.items()
+                },
+                "bootstrap_replicates": bootstrap.get("replicates"),
+                "bootstrap_seed": bootstrap.get("seed"),
+                "primary_block": bootstrap.get("primary_block"),
+                "primary_block_reason": bootstrap.get("primary_block_reason"),
+                "sensitivity_for_fragile_low_and_structural_high_buckets": sensitivity,
+                "low_draw_surplus_survives_primary_cluster_interval": (
+                    primary_low.get("bootstrap_95_lo") is not None
+                    and primary_low["bootstrap_95_lo"] > 0),
+                "low_draw_surplus_survives_week_blocks": (
+                    (sensitivity.get("iso_week", {}).get("<0.20") or {}).get(
+                        "bootstrap_95_lo") is not None
+                    and (sensitivity["iso_week"]["<0.20"]["bootstrap_95_lo"] > 0)
+                ),
+                "low_draw_surplus_survives_month_blocks": (
+                    (sensitivity.get("calendar_month", {}).get("<0.20") or {}).get(
+                        "bootstrap_95_lo") is not None
+                    and (sensitivity["calendar_month"]["<0.20"][
+                        "bootstrap_95_lo"] > 0)
+                ),
+                "decision_rule": (
+                    "Month lower bound >0: robust/bankable calibration lead. "
+                    "Week lower bound <=0: the lead is gone."
+                ),
+            })
+
+        # Tail decomposition and composition remain in the full report; their
+        # conclusions are established. Reserve notices for sequential handball
+        # persistence and cross-sport discrimination.
+
+        handball = analysis.get("handball_draw_diagnostics") or {}
+        if handball:
+            folds = handball.get("walk_forward_folds") or []
+            for chunk_index in range(0, len(folds), 6):
+                emit_notice(
+                    f"r1_backtest_handball_walk_forward_{chunk_index // 6 + 1}",
+                    {
+                        "fold_contract": handball.get("fold_contract"),
+                        "predeclared_persistence_rule": handball.get(
+                            "predeclared_persistence_rule"),
+                        "folds": folds[chunk_index:chunk_index + 6],
+                    },
+                )
+            leagues = (handball.get("league_concentration") or {}).get(
+                "leagues", [])
+            emit_notice("r1_backtest_handball_diagnostic_summary", {
+                "persistence_summary": handball.get("persistence_summary"),
+                "full_draw_calibration_curve": handball.get(
+                    "full_draw_calibration_curve"),
+                "top_leagues_by_tail_n": leagues[:8],
+                "league_warning": (handball.get("league_concentration") or {}).get(
+                    "warning"),
+                "all_leagues_in_full_report": True,
+            })
+
+        discrimination = analysis.get("draw_model_discrimination") or {}
+        for sport, result in (discrimination.get("per_sport") or {}).items():
+            emit_notice(f"r1_backtest_draw_discrimination_{sport}", {
+                "scope": discrimination.get("scope"),
+                "n": result.get("n"),
+                "observed_rate_range": result.get(
+                    "observed_rate_range_across_nonempty_bands"),
+                "spearman": result.get(
+                    "spearman_rank_correlation_predicted_draw_vs_realised_draw"),
+                "spearman_month_95": (
+                    result.get("spearman_calendar_month_bootstrap_95_lo"),
+                    result.get("spearman_calendar_month_bootstrap_95_hi"),
+                ),
+                "spearman_valid_replicates": result.get(
+                    "spearman_valid_replicates"),
+                "curve_in_full_report": True,
+            })
+
+        recalibration = analysis.get("draw_probability_recalibration") or {}
+        for sport, result in (recalibration.get("per_sport") or {}).items():
+            emit_notice(f"r1_backtest_draw_recalibration_{sport}", {
+                "method": recalibration.get("method"),
+                "predeclared_rule": recalibration.get(
+                    "predeclared_real_improvement_rule"),
+                "information_retention_rule": recalibration.get(
+                    "predeclared_information_retention_rule"),
+                "development_fit": result.get("development_fit"),
+                "holdout_evaluation": result.get("holdout_evaluation"),
+                "quarterly_summary": result.get("quarterly_summary"),
+                "paired_sequential_fold_information_test": result.get(
+                    "paired_sequential_fold_information_test"),
+                "rule_met": result.get("predeclared_improvement_rule_met"),
+                "information_retention_rule_met": result.get(
+                    "predeclared_information_retention_rule_met"),
+                "information_verdict": result.get("information_verdict"),
+                "transferable_result": recalibration.get(
+                    "transferable_recalibration_result"),
+                "folds_and_curve_in_full_report": True,
+            })
+
+        all_outcomes = analysis.get("all_outcome_probability_recalibration") or {}
+        compact_outcomes = {}
+        for outcome, outcome_result in (all_outcomes.get("outcomes") or {}).items():
+            compact_outcomes[outcome] = {}
+            for sport, result in (outcome_result.get("per_sport") or {}).items():
+                fit = result.get("development_fit") or {}
+                fold_test = result.get("paired_sequential_fold_information_test") or {}
+                compact_outcomes[outcome][sport] = {
+                    "alpha": fit.get("shrink_coefficient"),
+                    "development_base_rate": fit.get("base_rate"),
+                    "information_verdict": result.get("information_verdict"),
+                    "fold_mean_brier_gain_base_minus_shrink": fold_test.get(
+                        "brier_mean_information_gain_base_minus_shrink"),
+                    "fold_brier_95": [
+                        fold_test.get("brier_paired_fold_bootstrap_95_lo"),
+                        fold_test.get("brier_paired_fold_bootstrap_95_hi"),
+                    ],
+                    "positive_folds": fold_test.get("brier_positive_folds"),
+                    "nonzero_folds": fold_test.get("brier_nonzero_folds"),
+                    "sign_test_p": fold_test.get(
+                        "brier_two_sided_exact_sign_test_p"),
+                }
+        if compact_outcomes:
+            emit_notice("r1_backtest_all_outcome_recalibration", {
+                "scope": all_outcomes.get("scope"),
+                "outcomes": compact_outcomes,
+                "full_scores_and_dependence_caveat_in_report": True,
+            })
+
+        inventory = analysis.get("corpus_inventory") or {}
+        per_sport = {}
+        for sport, info in (inventory.get("per_sport") or {}).items():
+            if isinstance(info, dict) and info.get("available"):
+                per_sport[sport] = {
+                    "settled_row_count": info.get("settled_row_count"),
+                    "date_range": info.get("date_range"),
+                }
+        history_files = sorted(
+            p.name for p in (repo_root / "data" / "reports").glob("history_*")
+            if p.is_file())
+        inventory_notice = {
+            "seeded_history_files_on_disk": len(history_files),
+            "sports_with_a_ledger_in_this_checkout": inventory.get(
+                "sports_with_a_ledger_in_this_checkout"),
+            "sports_with_at_least_one_settled_row": inventory.get(
+                "sports_with_at_least_one_settled_row"),
+            "per_sport": per_sport,
+        }
+        # Inventory is retained in the receipt/full report. It was already
+        # proven by the provenance-unlock run; reserving notice slot ten for
+        # canary_abort prevents the safety finding from being silently dropped.
+        return {
+            "status": "COMPLETED",
+            "json_path": str(report_path.relative_to(repo_root)),
+            "markdown_path": str(report_path.with_suffix(".md").relative_to(repo_root)),
+            "verdict": compact_verdict,
+            "calibration": calibration_notices,
+            "headline_rates": headline_rates,
+            "inventory": inventory_notice,
+        }
+    except Exception as exc:  # offline analysis must never fail the batch
+        failure = {
+            "status": "FAILED",
+            "error": f"{type(exc).__name__}: {exc}"[:500],
+        }
+        emit_notice("r1_backtest_verdict", failure)
+        return failure
+
+
+def _write_preflight_abort_receipt(repo_root: Path, targets: list[str],
+                                   sample: dict, backtest: dict) -> Path:
+    """Persist the fail-closed receipt for a source-blocked whole run.
+
+    This path runs before settlement or any other capture-capable phase, so
+    every phase array is necessarily empty.  Keep that explicit: absence here
+    means "not attempted after a measured dual-path block", never "quiet day".
+    """
+    abort = {
+        "aborted_before_phase": "settlement",
+        "dates_completed": 0,
+        "dates_skipped": targets,
+        "phases_skipped": [
+            "settlement", "completion", "delta_settlement", "refresh",
+            "event_day_settlement", "event_day", "forward_pass",
+        ],
+        "canary": sample,
+    }
+    receipt = {
+        "batch_schema": "forward_shadow_batch",
+        "generated_at": dt.datetime.now(dt.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"),
+        "target_dates": targets,
+        "results": [],
+        "settlement_backlog": [],
+        "settlement_completion": [],
+        "delta_settlement": [],
+        "refresh": [],
+        "event_day": [],
+        "event_day_settlement": [],
+        "r1_backtest": backtest,
+        "canary_gate": {"samples": [sample], "aborted": True, "abort": abort},
+        "summary": {
+            "total": 0, "completed": 0, "skipped_existing": 0,
+            "failed": 0, "bundle_verified": 0,
+            "settlement_backlog_total": 0, "settlement_backlog_settled": 0,
+            "settlement_backlog_failed": 0, "settlement_completion_runs": 0,
+            "settlement_completion_supplements": 0,
+            "settlement_completion_resolved_successes": 0,
+            "settlement_completion_resolved_failures": 0,
+            "settlement_completion_terminal_unresolved": 0,
+            "settlement_completion_failed": 0, "delta_settlement_graded": 0,
+            "refresh_runs": 0, "refresh_deltas_written": 0,
+            "refresh_new_events": 0, "refresh_failed": 0,
+            "event_day_runs": 0, "event_day_r1_sports": 0,
+            "event_day_selections": 0, "event_day_failed": 0,
+            "event_day_settled": 0, "canary_samples": 1,
+            "canary_aborted": True,
+        },
+    }
+    path = (repo_root / "data" / "reports" / "shadow" /
+            "forward_batch_receipt.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(receipt, indent=2, sort_keys=True))
+    return path
+
+
 def summarize_capture_timing(entries: list[dict] | None) -> dict:
     """Roll up one date's per-sport ``capture_timing`` into one small dict.
 
@@ -1515,6 +1931,39 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     repo_root = args.root.resolve()
+    targets = compute_target_dates(args.dates)
+
+    # Whole-run pre-flight comes before settlement, completion, refresh,
+    # EVENT_DAY and the forward pass.  Every one of those phases can reach
+    # Forebet; gating only the final loop allowed a blocked run to spend hours
+    # before it ever reached that gate (run 36521832033).
+    preflight_sample: dict | None = None
+    backtest_result: dict = {"status": "SKIPPED_DRY_RUN"}
+    if not args.dry_run:
+        preflight_sample = canary_gate(timeout=args.capture_timeout)
+        # History ledgers were seeded by the workflow before this process
+        # started. Run the pure-offline provenance test after the availability
+        # decision but regardless of whether that decision aborts network work.
+        backtest_result = run_offline_r1_backtest(repo_root)
+        if preflight_sample.get("healthy") is False:
+            abort = {
+                "aborted_before_phase": "settlement",
+                "dates_completed": 0,
+                "dates_skipped": targets,
+                "phases_skipped": [
+                    "settlement", "completion", "delta_settlement", "refresh",
+                    "event_day_settlement", "event_day", "forward_pass",
+                ],
+                "canary": preflight_sample,
+            }
+            emit_notice("canary_abort", abort)
+            receipt_path = _write_preflight_abort_receipt(
+                repo_root, targets, preflight_sample, backtest_result)
+            print(
+                "Forward Shadow ABORTED before every capture-capable phase: "
+                f"{preflight_sample.get('reason')}", file=sys.stderr, flush=True)
+            print(f"Batch receipt: {receipt_path}", file=sys.stderr, flush=True)
+            return 0
 
     # Settlement pass first: grade any overdue (D+1) prediction runs
     # before capturing/ranking new ones. Isolated per date and fully
@@ -1708,7 +2157,6 @@ def main(argv: list[str] | None = None) -> int:
             "error": entry.get("error"),
         })
 
-    targets = compute_target_dates(args.dates)
     print(f"Forward shadow batch: {len(targets)} dates starting from {targets[0]}", file=sys.stderr)
     print(f"Repository root: {repo_root}", file=sys.stderr)
 
@@ -1722,7 +2170,10 @@ def main(argv: list[str] | None = None) -> int:
     # a wall) is now four minutes and an annotation instead. Skipped in
     # --dry-run: no capture budget is at risk there, and every existing
     # dry-run test predates this gate.
-    canary_samples: list[dict] = []
+    # The whole-run preflight is receipt evidence too. Per-date samples below
+    # remain as mid-run re-checks; they are not replaced by the initial gate.
+    canary_samples: list[dict] = (
+        [preflight_sample] if preflight_sample is not None else [])
     canary_abort: dict | None = None
     results = []
     for i, target_date in enumerate(targets):
@@ -1794,15 +2245,17 @@ def main(argv: list[str] | None = None) -> int:
         "refresh": refresh_results,
         "event_day": event_day_results,
         "event_day_settlement": event_day_settlement,
+        "r1_backtest": backtest_result,
         # Canary samples taken before every forward-pass date (see
         # canary_gate() above) plus, when the pass was abandoned on a
         # canary path block rather than completing/exhausting its target
         # dates normally, the abort record itself — the "was abandoned on
         # a canary path block" statement the owner asked every run to be
         # able to make, with sample times attached. NOTE (2026-09-28): the
-        # canary is relay-only on a GitHub runner (direct fallback is
-        # skipped there); a block here means our path was refused, not
-        # necessarily the source.
+        # canary tests the relay first and direct once when the relay is
+        # unhealthy. A block means both paths available to THIS runner were
+        # refused, not that the source endpoint itself was down; an ordinary
+        # IP may still receive real JSON direct at the same moment.
         "canary_gate": {
             "samples": canary_samples,
             "aborted": canary_abort is not None,

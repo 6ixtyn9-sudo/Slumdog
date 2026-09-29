@@ -1,5 +1,730 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — fold arbiter settled draw information; observation freeze next.**
+
+Direct workflow log for run `36594243909` gives `RETAIN_AND_SHRINK` for both
+main draw sports. Football: development base `0.2482762153`, alpha
+`0.2914758229`, mean sequential-fold Brier gain over base `+0.0008809579`,
+paired interval `[+0.0006071473,+0.0011462094]`, 10/10 positive, exact sign
+`p=0.001953125`. Handball: base `0.0652940025`, alpha `0.2350789837`, mean gain
+`+0.0002451233`, interval `[+0.0001455982,+0.0003350729]`, 9/10 positive,
+`p=0.021484375`. Cricket is `DISCARD_TO_BASE_RATE_NOT_REJECTED`: base
+`0.3812709030`, alpha `0.5051737546`, mean `+0.0053689845`, interval
+`[-0.0003877882,+0.0141724014]`, 3/6 positive, `p=1.0`. Evaluation quarters are
+disjoint but expanding fit windows overlap, so this establishes temporal
+transfer under growing fits, not independent replication. The three-month
+terminal holdout is descriptive; the fold test was predeclared as arbiter before
+this output.
+
+One output remains: surface the already-computed home/away arbiters and alphas.
+Then analysis freezes until 500 graded EVENT_DAY picks or 2026-12-28, whichever
+comes first. Existing scorecard, calibration, and arbiter only; no variants.
+Football facets are captured but not selected on. `SettledEvent` and its ledger
+writer now preserve explicit row-level `facet_timing`; absent timing fails closed,
+so old history is not retroactively eligible. The hosted transport is still
+blocked and accumulated zero new capture evidence in this run; waiting becomes
+productive only after relay recovery or ordinary-IP execution.
+
+**2026-09-29 — advance-requested guard overturned the raw comparison.**
+
+The provisional three-month holdout guard returned
+`DISCARD_TO_BASE_RATE_NOT_REJECTED` for both draw sports before the predeclared
+fold arbiter ran; it is preserved as a methodological worked example, not the
+standing verdict. Football holdout Brier was raw `0.185392`, shrink `0.177842`, and
+development-base-only `0.178055`: base-minus-shrink `+0.000213`, month interval
+`[-0.00004,+0.00078]`; log loss was `0.557430`, `0.540865`, and `0.541554`,
+respectively, for information gain `+0.000689`. Handball Brier was raw
+`0.046485`, shrink `0.042218`, and base-only `0.042064`, so shrink lost to base
+by `0.000154`; log loss was `0.203297`, `0.183680`, and base-only `0.183233`, so
+shrink lost by `0.000447`. The earlier `REAL_AND_TRANSFERABLE` result remains an
+accurate frozen comparison against raw forecasts only, but does not establish
+information beyond a constant predictor. This is the seventh worked example and
+the first false positive caught by a guard requested in advance rather than by
+later inspection.
+
+The contradiction was resolved by the predeclared fold arbiter: terminal
+holdout had only three month blocks, while sequential quarters found shrink
+beating base in 10/10 football and 9/10 handball folds. The arbiter uses one
+unweighted base-minus-shrink Brier difference per fold, its paired bootstrap,
+and an exact two-sided sign test. Its standing verdict is recorded above.
+Overlapping expanding fit windows remain an explicit dependence caveat. Frozen
+R1 is unchanged.
+
+**2026-09-29 — football confirms shared over-dispersion; one-parameter recalibration implemented.**
+
+Football shows the same monotonic calibration defect with much stronger
+ranking: observed draws rise `11.33% (n=2144) -> 28.62% (n=113765)` while
+predicted rises about `7.9% -> 41.1%`; relative calibration declines `1.43x ->
+0.70x`. The `0.05-0.10` month interval is `[+0.0196,+0.0491]`; `0.35+` is
+`[-0.1290,-0.1199]`. Handball has the same direction but observed rates barely
+move while predictions do. Durable mechanism: Forebet draw probabilities are
+over-dispersed across genuine draw boards; football discriminates, handball is
+the near-flat extreme. This is calibration, not profit.
+
+A development-only, price-free recalibration is now implemented per football
+and handball: `q = base + alpha*(p-base)`, with Brier-optimal `alpha` clipped to
+`[0,1]`. Untouched holdout reports Brier and log loss before/after with
+calendar-month block-bootstrap improvement intervals and a recalibrated curve.
+Sequential quarterly folds refit only on prior data. Frozen success rule: for
+both sports, holdout Brier improves by >=`0.001`, its month lower bound is >0,
+holdout log loss improves, and >=75% of scored sequential quarters improve
+Brier. Results are **UNVERIFIED** until a run is read; no selector changes.
+
+Spearman annotations are now compact and lead with coefficient plus month-block
+interval rather than burying them behind the curve. Full curves remain in JSON
+and Markdown.
+
+The latest run's persist step created evidence commit `567aeaa` but failed before
+main because untracked `r1_backtest_2026-09-29.json/.md` blocked checkout;
+`--autostash` excludes untracked files. Corrected owner replacement is staged at
+`docs/owner_paste/forward_shadow.yml`: **REPLACE
+`.github/workflows/forward_shadow.yml`**. It moves only generated backtest
+reports to a temporary directory before pull, restores them via `trap` on every
+exit (preserving artifact upload), then restores explicitly on success. Final
+local gates: focused tests **159 passed**; full `python -m pytest` **1778
+passed**; tracked-file `py_compile`, changed-file `pyflakes`, staged YAML parsing,
+and `git diff --check` clean.
+
+**2026-09-29 — handball persistence passes; full curve elevated; football comparison implemented.**
+
+The fixed quarterly test passes: 10/10 nonempty folds positive, 9/10 with month
+lower bound above zero, final two positive; relative ratios `1.75x..2.78x`.
+There are 11 fixed folds and **2025-Q2 is the empty fold** (derived from the
+fixed fold list plus the supplied 10 nonempty rows; new output names empty folds
+explicitly). The fold table supplied by the owner is preserved as direct result:
+2024-Q1 `n=2082`, `2.01x`, `[+0.0137,+0.0347]`; Q2 `n=1226`, `2.03x`,
+`[+0.0057,+0.0290]`; Q3 `n=953`, `2.01x`, `[+0.0029,+0.0432]`; Q4
+`n=1929`, `2.78x`, `[+0.0376,+0.0424]`; 2025-Q1 `n=1892`, `2.22x`,
+`[+0.0188,+0.0388]`; Q3 `n=762`, `1.97x`, `[+0.0029,+0.0274]`; Q4
+`n=1853`, `2.42x`, `[+0.0281,+0.0374]`; 2026-Q1 `n=1799`, `2.00x`,
+`[+0.0128,+0.0296]`; Q2 `n=1002`, `1.75x`, `[+0.0152,+0.0175]`; Q3
+`n=639`, `1.76x`, `[-0.0199,+0.0351]`.
+
+The full curve is elevated above the tail: handball predicted draw probability
+moves about `2.3% -> 21.5%`, observed only `4.6% -> 9.2%`; reported ratios are
+`2.19, 0.93, 0.69, 0.51, 0.43`, with large negative upper-band intervals. This
+is a systematic flattening/misspecification claim, not merely a tail anomaly.
+It remains one sport, calibration not profit, and carries the handball reversal
+warning.
+
+Cross-sport diagnostics now calculate the same full curve for every genuine
+draw board, especially football, plus observed-rate range and Spearman rank
+correlation between predicted draw probability and realised draw. Spearman gets
+a deterministic calendar-month block-bootstrap interval. This separates
+calibration from discrimination numerically; results are **UNVERIFIED** until a
+run is read. No selector is built, and facet timing provenance remains blocked.
+Final local gates: focused tests **157 passed**; full `python -m pytest` **1776
+passed**; tracked-file `py_compile`, changed-file `pyflakes`, and
+`git diff --check` clean.
+
+**2026-09-29 — filtered tail is 99% handball; quarterly persistence test implemented.**
+
+Composition answers breadth decisively. Development retained `<0.05` is handball
+`14473/14614` (99.0%): predicted `2.31%`, observed `5.06%`, relative `2.19x`,
+month `[+0.0233,+0.0308]`. Holdout is handball `639/658` (97.1%), relative
+`1.76x`, but month `[-0.0199,+0.0351]` includes zero. Required claim: **Forebet
+under-forecasts low-probability handball draws**, not a general Forebet draw-model
+property. The same handball sport previously reversed underdog differential from
+`+8.96` development to `-30.20` holdout; this does not prove draw reversal, but
+raises the evidentiary bar and is stated beside the finding.
+
+A fixed quarterly walk-forward now covers every quarter 2024-Q1 through 2026-Q3
+(11 folds, empty folds retained). Each reports n, predicted, observed, surplus,
+relative ratio, month-block interval, sign, frequency and `n<500`. Persistence
+was frozen before execution: >=75% of nonempty folds positive, >=50% with month
+lower bound >0, and final two nonempty folds positive. Output also reports every
+handball league's tail n/share/calibration/month interval (multiplicity warning)
+and the complete handball draw curve from `<0.05` through `0.35+`. No result has
+been read yet; persistence is **UNVERIFIED** and no selector exists.
+
+Football remains indicative: development `3.16x`, `n=100`; holdout `4.35x`,
+`n=13`; about 1.25 rows/active day and roughly 400 active days to reach the
+standing `n=500` threshold. Final local gates: focused tests **156 passed**;
+full `python -m pytest` **1775 passed**; tracked-file `py_compile`, changed-file
+`pyflakes`, and `git diff --check` clean.
+
+**2026-09-29 — filtered genuine-forecast tail revalidates; composition unresolved.**
+
+After excluding absent/two-outcome boards and probabilities below `0.005`, the
+shape survives more cleanly. Development `<0.05`: `n=14614`, predicted
+`0.023097`, observed `0.050943`, surplus `+0.027846`, relative `2.206x`, month
+`[+0.023821,+0.031255]`; neighbouring ratios `1.055x`, `0.999x`, `1.024x` all
+have month intervals including zero. Holdout: `n=658`, predicted `0.021550`,
+observed `0.044073`, relative `2.045x`, positive direction repeated. Frozen
+criteria are met on genuine-forecast rows. This reverses the artifact retraction
+for the **filtered population only**; the unfiltered pooled claim remains
+retracted.
+
+Breadth is not yet known. Cricket retains only 226 development rows after 4,954
+floor exclusions; football's previously read cell was roughly 100 and MMA is
+board-excluded. The report now emits retained `<0.05` n and share of pooled n by
+sport, development and holdout, beside predicted/observed/relative/month interval,
+frequency, and per-sport exclusions. A reconciliation block reports raw `<0.20`
+n, retained n and every exclusion reason. Until those measured shares are read,
+the correct claim is “a 2.2x filtered tail effect of unknown sport composition,”
+not a general property of Forebet's draw model. No selector is built. Final
+local gates: focused tests **155 passed**; full `python -m pytest` **1774
+passed**; tracked-file `py_compile`, changed-file `pyflakes`, and
+`git diff --check` clean.
+
+**2026-09-29 — pooled power-play shape retracted as encoding artifact; genuine-forecast rerun implemented.**
+
+The per-sport audit invalidated the pooled interpretation. Cricket development
+`<0.05`: `n=4995`, predicted `0.000146`, observed `0.005205`, relative `35.6x`;
+holdout `n=854`, relative `80x`. A 0.0146% mean is operationally an absent or
+zero-like draw forecast, so dividing observed incidence by it manufactures a
+large ratio. MMA can settle a fight draw but has a two-outcome board. The pooled
+`n=26344` shape was therefore dominated by rows without a genuine comparable
+draw forecast. **The previously published pooled power-play validation is
+retracted as mostly an encoding artifact.** This is the sixth worked warning:
+the statistical criterion passed, but its population contract omitted forecast
+existence.
+
+The decisive rerun now filters before calibration. It excludes every sport with
+`SPORTS[sport].draw_possible == False`, missing/non-numeric draw probabilities,
+and probabilities below the predeclared `0.005` floor. The floor treats
+below one-in-200 as absent/zero-like rather than a calibrated small forecast; it
+removes cricket's 0.0146% sentinel-like mean while retaining football's genuine
+3.48% cell. Every pooled/per-sport development/holdout result reports raw
+`<0.20` n, exclusions by reason, and retained n before recomputing four buckets
+and month/calendar-day intervals. No result of this filtered rerun has yet been
+read; whether the shape survives is **UNVERIFIED**.
+
+Football remains an indicative lead only: development predicted `3.48%`,
+observed `11%`, relative `3.16x`, `n=100`, 1.25 rows/active day; holdout `n=13`.
+It needs at least the standing `n=500` graded-row threshold, plus enough
+independent calendar days for cluster-aware uncertainty, before it can advance.
+At the observed frequency, 500 rows is roughly 400 active days, but that is a
+volume estimate, not a promise of significance. Final local gates: focused tests
+**155 passed**; full `python -m pytest` **1774 passed**; tracked-file
+`py_compile`, changed-file `pyflakes`, and `git diff --check` clean.
+
+**SUPERSEDED 2026-09-29 — unfiltered extreme-tail shape, retracted above.**
+
+The frozen pooled criteria are met. Development `<0.05`: `n=26344`, predicted
+`1.29%`, observed `3.42%`, surplus `+0.021388`, relative `2.664x`, month
+`[+0.018620,+0.024322]`. Higher buckets were `0.999..1.055x` and all three
+month intervals included zero. Holdout repeated the tail: `n=1802`, surplus
+`+0.014329`, relative `2.821x`, month `[+0.002247,+0.027317]`. Verdict:
+**EXTREME-TAIL / POWER-PLAY SHAPE, VALIDATED**. Holdout's standalone classifier
+is mixed because its `0.15-0.20` interval excludes zero; this does not overturn
+the frozen contract, under which development sets shape and holdout need only
+repeat positive `<0.05` direction.
+
+This is calibration, not profit. A 2.67x error on a 1.29% base means roughly a
+3.4% event, with no claim about return, odds, EV, Kelly or staking. Frozen R1 is
+unchanged. The report now carries an explicit validated-shape field rather than
+requiring readers to reconcile per-period strings themselves.
+
+The immediate product-shaping question is sport concentration. Bounded
+annotations now emit each historical draw-settling sport's `<0.05` development
+and holdout n, predicted, observed, absolute/relative surplus, month interval,
+and rows per active day. Outcome semantics are explicit: football/handball are
+level full-time scores; cricket settles only explicit textual draws while
+no-result/abandoned/cancelled are VOID and excluded; MMA settles unanimous,
+majority or split fight draws while no-contest is VOID, and its two-outcome board
+may have no draw probability. These are not interchangeable outcomes. Per-sport
+eligible-underdog annotations were dropped as lower-value exhausted analysis;
+the full report retains them. Final local gates: focused tests **154 passed**;
+full `python -m pytest` **1773 passed**; tracked-file `py_compile`, changed-file
+`pyflakes`, and `git diff --check` clean.
+
+**2026-09-29 — tail scope clarified; frozen verdict mixed; gate retired.**
+
+The apparent `80668` versus `5836` mismatch was a period-label presentation
+failure, not a different analytical population: the robust parent `n=80668` is
+all dates, while the supplied four sub-buckets (`1774+412+1176+2474=5836`) were
+the **holdout-period** annotation. Both derive from all ledger-valid settled
+rows in draw-capable sports, not R1 or eligible-only rows. Output now names the
+population and period, reports `parent_lt_0_20_n`, and adds an all-dates
+annotation whose four buckets must sum to the same `80668` parent.
+
+Applying the frozen rule to the supplied holdout decomposition gives exactly:
+**`mixed or unresolved; do not call it a power play`**. All four month lower
+bounds exceed zero, but absolute surpluses span `+0.0103..+0.0412` (range
+`0.0309`, far above `0.005`) and no higher bucket includes zero. Relative ratios
+`2.87, 1.55, 1.08, 1.12` show a tail gradient. Dropping the underpowered
+`0.05-0.10` cell (`n=412`) would satisfy the tail ratio comparison, but still
+fails the predeclared null-higher-buckets condition; this is observation, not
+rescue. Reports now calculate and print the frozen verdict per period.
+
+The negative-sport gate is retired, not open. Correctly separated development
+intervals include zero for two-way `[-0.0152,+0.0328]` and draw-capable
+`[-0.0535,+0.0483]`; draw-capable merit moved from frozen `+0.0290` to gated
+`-0.0040`. Holdout two-way `n=184` cannot rescue a gate that failed in the
+period used to select it. Its forensic JSON receipt remains, labeled
+`RETIRED_FAILED_DEVELOPMENT_OUTCOME_SPACE_TEST`; its annotation was removed.
+
+Facet work has one prerequisite before testing: historical `SettledEvent`
+contains a plain `facets` dictionary but no persisted `facet_timing` map, while
+`TimingClass` lives on `EventSnapshot`. Therefore the existing ledger cannot yet
+enforce PRE_EVENT timing row by row merely from intent or parser knowledge. Do
+not run a facet outcome test until a fail-closed timing provenance bridge is
+specified and validated; otherwise it violates the owner's non-negotiable
+TimingClass condition.
+
+**2026-09-29 — run 36569213450 closes draw uncertainty; gate mix artifact and pipefail correction.**
+
+The directly read `forward-batch` log at commit `91560f6` establishes the
+project's first robust positive calibration finding. Whole-corpus `<0.20` draw
+surplus is `+0.0099782` on `n=80668`; 95% block intervals: calendar-day
+`[+0.007705,+0.012329]`, sport-day `[+0.007678,+0.012144]`, ISO-week
+`[+0.007653,+0.012014]`, and calendar-month
+`[+0.007332,+0.012706]`. The predeclared month criterion is met: this is a
+robust/bankable **price-free calibration lead**, never odds/EV/staking. The
+inversion is structural: `0.35+` surplus `-0.124289`, month interval
+`[-0.128943,-0.119436]`, `n=114300`. Forebet under-forecasts draws where it
+dismisses them and heavily over-forecasts where it likes them.
+
+Overall eligible-row development differential was significantly negative:
+`-0.0099129 [-0.0136291,-0.0059415]`, `n=196041`; holdout differential
+`+0.0069582 [-0.0062140,+0.0201335]`, `n=14488`. Development therefore says
+the underdog side was measurably worse than the favourite side; holdout does
+not contradict with a demonstrated positive differential.
+
+The prior gate headline is invalid as pooled merit. It removed basketball,
+hockey and volleyball (two-way) plus handball (draw-capable), shifting the
+remainder toward draw-capable rows whose raw underdog surplus is inflated by
+draw over-prediction. The observed gated holdout `+0.07827` is therefore partly
+mix shift. Gate output is now separated: two-way uses underdog surplus;
+draw-capable uses paired underdog-minus-favourite differential; pooled raw
+before/after comparison is prohibited.
+
+The next analysis decomposes `<0.20` into `<0.05`, `0.05-0.10`, `0.10-0.15`,
+`0.15-0.20`, pooled and per sport, development/holdout, with n, predicted,
+observed, absolute and relative surplus, rows/active-day, and calendar-day/month
+bootstrap intervals. Predeclared extreme-tail shape requires development
+`<0.05` month lower bound above zero, a relative ratio at least twice every
+higher bucket, and at least two higher buckets crossing zero; holdout must
+repeat direction. Broad mild shape requires at least three development month
+lower bounds above zero and <=0.5-point range in absolute surplus; holdout must
+repeat direction. Otherwise the shape is mixed/unresolved, not a power play.
+
+The same run still ended red. `2>/dev/null` suppressed `find` diagnostics but
+not exit 1, which `set -o pipefail` propagated. The owner applied the corrected
+`{ find ... 2>/dev/null || true; } | xargs ...` form to all three optional-root
+pipelines in commit `cf376e4`; the live workflow is byte-identical to
+`docs/owner_paste/forward_shadow.yml`. Contract tests pin exit neutralization,
+not merely stderr suppression. Final local gates: focused tests
+**154 passed**; full `python -m pytest` **1773 passed**; tracked-file
+`py_compile`, changed-file `pyflakes`, staged YAML parsing, and
+`git diff --check` clean.
+
+**2026-09-29 — football headline retracted; draw sensitivity promoted.**
+
+Direct run `36550899550` fields, preserved verbatim:
+
+- football development `n=106520`: underdog `+0.03244`
+  `[+0.02970,+0.03532]`; favourite `+0.03630`
+  `[+0.03358,+0.03923]`; differential `-0.00386`
+  `[-0.00869,+0.00100]`;
+- football holdout `n=11042`: underdog `+0.03751`
+  `[+0.02979,+0.04507]`; favourite `+0.03368`
+  `[+0.02505,+0.04204]`; differential `+0.00383`
+  `[-0.01091,+0.01787]`.
+
+**Football has no demonstrated underdog edge.** Its apparently bulletproof
+held-out underdog surplus was the draw-over-prediction artifact the favourite
+control was designed to catch: both differentials include zero and their signs
+flip. This is now the third permanent worked warning in `AGENTS.md`, after
+handball's temporal reversal and tennis's disappearance under clustering. The
+standing corpus rule is to assume positive underdog surplus in any draw-capable
+sport is draw miscalibration until the same-row clustered differential survives.
+All inspected draw-capable holdout differentials straddled zero, including
+tennis `+2.13 [-1.76,+6.22]` and American football `+0.21 [-9.0,+10.2]` points.
+
+The only positive lead left is two-way baseball: development `n=10687`, `+2.32`
+points `[+1.42,+3.27]`; holdout `n=1349`, `+1.97`
+`[-0.94,+4.92]`. Same direction, but holdout is not significant: a lead, not a
+finding, and not permission for a baseball-only product. The negative
+development map remains basketball `-1.0`, hockey `-1.11`, volleyball `-3.22`,
+and handball `-1.96` points with cluster intervals excluding zero.
+
+The gated-variant numeric result from this run was not supplied/read, so it
+remains **UNVERIFIED** rather than inferred. It now has its own compact
+`r1_backtest_negative_sport_gate_variant` annotation showing frozen versus
+excluded-sport R1 development/holdout results on the same rows. The still-open
+high-upside question, `<0.20` draw surplus under week/month blocks, is now the
+first backtest annotation and carries explicit week/month survival booleans and
+the predeclared interpretation rule.
+
+**2026-09-29 — run 36550899550 control correction and persist-step diagnosis.**
+
+Direct job-log fields supplied by the owner: football signal-wide eligible-row
+underdog surplus was development `n=106520`, 883 days, predicted `0.2801`,
+observed `0.3125`, `+3.24` points, calendar-day bootstrap
+`[+2.97,+3.53]`; holdout `n=11042`, 89 days, predicted `0.2866`, observed
+`0.3241`, `+3.75` points, `[+2.98,+4.51]`. This is **not accepted as an
+underdog edge without its same-row favourite control**: prior R1 football had
+favourite `+4.62` versus underdog `+3.06`, the shared-win-side signature of
+draw over-prediction. The signal-wide report now adds favourite calibration and
+the paired underdog-minus-favourite differential, each calendar-day
+cluster-bootstrapped, for development and holdout. If football's differential
+is non-positive or crosses zero, the report explicitly treats the apparent
+underdog surplus as a draw artifact, not an edge.
+
+The same run's signal-wide development cluster intervals exclude zero on the
+negative side for basketball `-1.0 [-1.56,-0.47]`, hockey `-1.11
+[-1.70,-0.54]`, volleyball `-3.22 [-4.12,-2.34]`, and handball `-1.96
+[-3.16,-0.70]`; baseball was positive `+2.32 [+1.42,+3.27]`. Tennis was not
+significant in development or holdout, retiring the earlier R1 lead; this is
+now pinned beside handball in `AGENTS.md`. An analysis-only parallel R1 variant
+selects exclusions solely where the signal-wide development upper cluster bound
+is below zero, then reports frozen-versus-gated R1 development/holdout results
+on the same rows. It does not alter the live selector, and its draw-capable merit
+still requires the favourite differential.
+
+The run's red conclusion was the workflow persist step, not the driver: with
+`set -euo pipefail`, its first missing `data/reports/shadow` `find` exited 1.
+The one-line replacement staged at `docs/owner_paste/forward_shadow.yml` was
+applied by the owner in commit `fd2bf13`; the live workflow is byte-identical to
+the staged file. Contract tests now pin that all three persist-step `find`
+pipelines suppress a missing-root error. Final local gates for that delivery:
+focused tests **153 passed**; full `python -m pytest` **1772 passed**; tracked-file
+`py_compile`, changed-file `pyflakes`, staged/live YAML parsing, and
+`git diff --check` clean. One initial YAML check used system Python and failed
+exactly with `ModuleNotFoundError: No module named 'yaml'`; rerunning with the
+project venv succeeded for both files.
+
+**2026-09-29 — cluster-aware re-estimation and signal-wide instrument implemented before any selector.**
+
+The whole-corpus draw map now re-estimates surplus with a deterministic block
+bootstrap (`replicates=1000`, `seed=20260929`) under four dependence contracts:
+calendar day across all sports (**PRIMARY**), sport-day, ISO week across all
+sports, and calendar month across all sports. Calendar day is primary because
+Forebet's model/version/regime is shared: football and handball on one date share
+no physical process but can share forecast error. Week/month sensitivity tests
+whether the fragile `<0.20` +1-point surplus survives longer model regimes. The
+point estimate remains unchanged; only uncertainty is corrected. The report
+surfaces `<0.20` and `0.35+` across all four schemes and states whether the low
+bucket's primary cluster interval remains above zero.
+
+The chosen signal-wide analysis is also implemented over every R2-eligible
+underdog row before daily rank-1 truncation. It preserves the fixed temporal
+split (`<=2026-06-30` / `>2026-06-30`), reports overall and per sport, uses
+calendar-day block-bootstrap intervals, and reports candidate rows, active days,
+calendar span, candidates per active day and candidates per calendar day. This
+is an analysis instrument only: no candidate selector, draw track, sport gate,
+threshold, or frozen R1 behavior changed. Walk-forward R1 remains the later
+product-level validation if a signal survives.
+
+Annotation output remains under the observed ten-notice ceiling: provenance;
+draw cluster sensitivity; eligible-signal overall; three bounded per-sport
+chunks; then `canary_abort`. Full sensitivity matrices and home/away/draw maps
+remain in JSON/Markdown. Tests pin deterministic resampling, block counts,
+calendar-day reasoning, strict temporal scope, all-eligible-vs-R1 width, and
+candidate frequency. Local verification on the final tree: focused suite **143
+passed**; full `python -m pytest` **1770 passed**; `py_compile` over every tracked
+Python file, changed-file `pyflakes`, and `git diff --check` all exited clean.
+
+**2026-09-29 — owner-supplied run result: low-predicted draws are the strongest lead; holdout sport gates are null.**
+
+Provenance upgrade: the owner read these fields directly from the job log for
+the run at commit `0239140`; they are **DIRECT JOB-LOG EVIDENCE**, not an
+owner-calculated paraphrase. The Actions runs API no longer returned that recent
+run when this session queried it, and the signed log URL has expired, so the log
+was the only available channel and cannot now be re-fetched here.
+
+Whole-corpus draw-capable scope: `settled_rows=388121`. Pooled draw buckets:
+
+| Predicted draw bucket | n | mean predicted | observed | surplus / interval |
+|---|---:|---:|---:|---:|
+| `<0.20` | 80,668 | 9.62% | 10.62% | +1.00 points / [+0.79, +1.21] |
+| `0.20-0.25` | 47,141 | 22.18% | 21.32% | -0.86 points / [-1.23, -0.49] |
+| `0.25-0.30` | 68,852 | 27.11% | 23.43% | -3.68 points / [-3.99, -3.36] |
+| `0.30-0.35` | 76,505 | 31.93% | 25.41% | -6.52 points / [-6.83, -6.21] |
+| `0.35+` | 114,300 | 41.09% | 28.66% | -12.43 points / [-12.69, -12.16] |
+
+This is monotonic after the `<0.20` inversion: Forebet increasingly over-predicts
+draws as its assigned draw probability rises. The only pooled positive bucket is
+where Forebet dismisses draws. Owner-reported cricket `<0.20`: `n=6046`, mean
+predicted 0.46%, observed 1.49%. This is a strong price-free lead, not permission
+to select draws: firing frequency, sport stability, clustering, and temporal
+out-of-sample behavior remain untested for a selector.
+
+The single temporal holdout is null for sport gating. Every per-sport holdout
+cell has only `n=28..89`; tennis preserved positive direction (+3.4 development
+to +9.7 holdout), hockey preserved negative (-4.7 to -5.4), while four of eight
+inspected sports preserved direction and four flipped. Handball is the permanent
+counterexample now also in `AGENTS.md`: development +8.96 points, 95% interval
+[+1.82,+16.09], but holdout -30.20 points, [-56.38,-4.01]. No sport gate is
+justified.
+
+**Judgement before further implementation:** choose analysis of the **signal over
+all eligible underdog rows** as the next primary instrument, not many tiny
+walk-forward R1 folds. It tests the same per-sport calibration hypothesis with
+far more observations while retaining strict time ordering. However, rows from
+the same board/day are correlated, so row-wise Wilson intervals would be
+anti-conservative; uncertainty must be clustered by sport-day (for example, a
+sport-day block bootstrap), with sequential temporal evaluation and candidate
+frequency reported. Walk-forward R1 remains the later product-level validation
+because it mirrors one-pick-per-sport-day use, but it cannot efficiently decide
+the signal question with folds containing only tens of picks. No implementation
+of either analysis or any selector was made in this entry; this written choice
+precedes construction as requested.
+
+Frozen R1 status remains unchanged: clean two-way `n=4826`, surplus +0.23
+points with prediction inside the observed interval — no demonstrated edge.
+Odds, payout, EV, Kelly and staking remain excluded. Any low-draw experiment
+must be a parallel research track and cannot mutate R1.
+
+**2026-09-29 — clean two-way result is no demonstrated edge; temporal holdout added before any gate.**
+
+Correction to the inherited run identifier: the draw-space annotations were read
+from run `36542931199`, job `109322408619`, head `84f84c6`; run `36540808677`
+was the preceding calibration build. Exact clean pooled fields:
+`n=4826`, `mean_predicted_probability=0.4512639867384998`,
+`observed_hit_rate=0.4536`, Wilson `0.4396..0.4677`,
+`observed_minus_predicted=0.0023360132615001805`. Predicted is inside the
+observed interval: the frozen R1 rule has **no demonstrated edge** on the
+cleanest pooled sample.
+
+The same annotations show opposite full-period sport leads: tennis `n=651`,
+predicted `0.4477726574500768`, observed `0.4885`, Wilson `0.4503..0.5268`,
+surplus `0.04072734254992316`; hockey `n=968`, predicted
+`0.4568595041322314`, observed `0.4091`, Wilson `0.3785..0.4404`, surplus
+`-0.0477595041322314`. Both predictions lie outside their observed intervals,
+but seven sports were inspected; these are leads exposed to multiplicity, not
+shipping findings.
+
+Coverage is broad: `distinct_sport_days=6987`, `distinct_calendar_days=1176`,
+`mean_r1_picks_per_sport_day=1.0`, `mean_r1_picks_per_calendar_day=
+5.941326530612245`. Draw-capable R1 fields are `n=2161`, underdog predicted
+`0.3620731142989357` / observed `0.3938`, favourite predicted
+`0.45590467376214716` / observed `0.4577`. **DERIVED** from those exact
+annotation fields (not directly measured as a draw row): implied predicted draw
+`0.1820222119389171`, implied observed draw `0.14850000000000008`, difference
+`-0.033522211938917024`. This points against draws; the whole-corpus explicit
+draw buckets remain the authoritative next measurement.
+
+The backtest now applies the predeclared temporal split `event_date <=
+2026-06-30` versus `event_date > 2026-06-30` before any variant exists. Every
+sport reports development and holdout effects side by side. Two-way sports use
+underdog calibration surplus; draw-capable sports use the draw-immune underdog
+minus favourite differential. n<500 is flagged and the report carries an
+explicit multiple-sports warning. This records whether tennis/hockey preserve
+direction; it does not alter selection.
+
+Annotation priority was corrected after live evidence showed GitHub retained
+only the first ten notices from the step. The bounded sequence now reserves slot
+10 for `canary_abort`: provenance, draw-space headline, compact per-sport groups,
+three holdout chunks, pooled whole-corpus draw buckets, and a draw-bucket finding
+summary. The latter names only n>=500 buckets whose predicted draw probability
+lies outside the observed Wilson interval and explicitly emits
+`backing_draws_supported`. Full home/away/draw maps and raw tables remain in the
+JSON/Markdown artifact and receipt. No frozen rule or selector changed.
+
+**2026-09-29 — draw-space split and three-outcome calibration map implemented; no selector tuned.**
+
+Run `36540808677`, job `109315483001`, calibration annotations were read this
+session. Exact measured examples: overall favourite control
+`mean_predicted_probability=0.5193502218405611`, `observed_hit_rate=0.5190`,
+`observed_minus_predicted=-0.0003502218405611046`, `n=6987`; R1 band
+`0.20-0.30` has predicted `0.26066037735849057`, observed `0.3514`, surplus
+`0.09073962264150942`, `n=424`, while its same-row favourite control surplus is
+`0.04712075471698107`. Therefore the R1 band's raw +9.1 points is not labelled
+selection edge: both win sides move upward, consistent with draw-probability
+miscalibration. In the dominant `0.40+` band, R1 predicted
+`0.4485477105907026`, observed `0.4549`, surplus `0.00635228940929744`,
+Wilson observed `0.4420..0.4678`, `n=5722`; predicted lies inside that interval.
+The measured sign is positive but no robust edge is established by this pooled
+view.
+
+The backtest now separates outcome spaces using `SportSpec.draw_settles`, not a
+handwritten sport list. Two-way: basketball, tennis, hockey (its overtime
+contract settles two-way), baseball, american football, rugby, volleyball.
+Draw-capable: football, handball, cricket, and MMA (MMA's board is two-price but
+its outcome contract permits a settled draw). For two-way R1 rows it reports
+pooled and per-sport underdog calibration surplus with Wilson-shifted surplus
+bounds. For draw-capable R1 rows it reports underdog surplus minus favourite
+surplus, with a stated paired normal 95% interval. Every sport/slice has n and
+`indicative_only_n_lt_500`.
+
+Coverage now records distinct sport-days, distinct calendar days, mean R1 picks
+per sport-day, and mean R1 picks per calendar day. Separately, the whole settled
+corpus (not only R1 picks) gets a three-outcome map for draw-capable sports:
+home, away, and draw, each bucketed by its own predicted probability at `<0.20`,
+`0.20-0.25`, `0.25-0.30`, `0.30-0.35`, `0.35+`; each bucket carries predicted
+mean, observed rate, Wilson interval, surplus, n and the n<500 flag, pooled and
+per sport. Notices are split by outcome and sport so no result is silently
+truncated.
+
+"Power play" remains price-free: rare is not sufficient; candidate evidence is
+a positive held-out calibration surplus with adequate n. Odds, EV, Kelly and
+staking remain barred. No draw selector, power-play selector, band restriction,
+sport gate, threshold, or frozen R1 change was made. The map must be read before
+any parallel-track proposal; any eventual selector must be separately labelled
+and evaluated on the post-2026-06-30 holdout.
+
+**2026-09-29 — provenance unlock read from run `36539053490`; calibration is now the primary merit metric.**
+
+Anonymous check-run annotations for job `109309839581` were read directly this
+session. `forward_shadow:r1_backtest_verdict` proves STANDARD
+`verdict="IDENTICAL"`, `matched_pair_count=43`, `differing_count=0`,
+`max_absolute_probability_delta_seen=0.0`, and
+`underdog_identity_flipped_count=0` (`pre_event_picks_available=62`). EVENT_DAY
+remains `INSUFFICIENT_DATA`, `matched_pair_count=0`. This clears the historical
+corpus provenance hold for STANDARD; it does not manufacture EVENT_DAY evidence.
+
+The paired inventory annotation reports `seeded_history_files_on_disk=22`, 11/11
+sports with ledgers and settled rows, totalling **678,794** ledger-valid settled
+rows (sum of the exact per-sport annotation fields). Largest exact fields:
+football `settled_row_count=341849`, `date_range=["2024-01-01","2026-09-27"]`;
+basketball `109239`, `["2023-02-12","2026-09-25"]`; hockey `60973`,
+`["2023-08-02","2026-09-15"]`; volleyball `40038`; tennis `39946`; handball
+`38845`; baseball `23686`; rugby `9187`; american_football `7604`; cricket
+`6774`; mma `653`.
+
+The same annotation reports HISTORICAL_PAGE raw rates on the same rows:
+`our_r1_pick successes=3040, n=6987, hit_rate=0.4351,
+wilson_95_lo=0.4235, wilson_95_hi=0.4468, settled_draws=321`;
+`always_favourite_same_rows successes=3626, n=6987, hit_rate=0.5190,
+wilson_95_lo=0.5072, wilson_95_hi=0.5307`; Forebet's own pick
+`successes=3496, n=6636, hit_rate=0.5268, wilson_95_lo=0.5148,
+wilson_95_hi=0.5388`, with 351 missing picks. These values are measured, but raw
+underdog-vs-favourite hit rate is now explicitly labelled descriptive rather
+than the merit test: underdogs have lower assigned probabilities by definition.
+
+`src/slumdog/backtest.py` now computes the price-free calibration question on
+exactly the decided R1 rows: mean assigned probability, observed hit rate,
+Wilson interval, n, and `observed_minus_predicted`. It reports overall, the four
+predeclared underdog-probability bands, and every sport. The favourite side on
+the same rows is computed as a control. The Markdown puts calibration above raw
+rates; Forward Shadow emits compact overall/band calibration, bounded per-sport
+calibration notices, then a separately labelled raw-rate notice. No selection
+rule, threshold, or live ranking changed. Variant testing remains blocked until
+the live calibration table is read; later variants must use a time holdout and
+leave the frozen live rule untouched.
+
+**2026-09-29 — whole-run abort proven live; seeded ledgers now drive the offline provenance verdict on every dispatch.**
+
+Run `36538082614`, job `109306705966`, proved the preflight gate. The owner-read
+log records driver start `07:41:21.6`, canary sampled `07:41:21.7`, and the
+abort notice at `07:41:27.8`: **6.1 seconds**. Exact notice fields:
+`aborted_before_phase="settlement"`, `dates_completed=0`, and
+`phases_skipped=["settlement","completion","delta_settlement","refresh",
+"event_day_settlement","event_day","forward_pass"]`; the driver step exited
+0. The canary reason says both paths tested by this runner were blocked and
+explicitly says this is not proof the source itself is down. This replaces the
+prior 2h53m51s blocked run as the live behavior baseline and satisfies the
+under-one-minute requirement. API metadata separately shows the driver step
+`conclusion="success"` (07:41:21Z→07:41:27Z); the overall job was
+`conclusion="failure"` because the subsequent persist step failed, not because
+the gate failed.
+
+The same log proves the workflow had already printed
+`Seeding history from pipeline run 36396799126` and `Seeded 22 history files`
+before starting the driver. Because `slumdog.backtest.r1_backtest` is pure
+offline computation, `forward_shadow_batch.py` now runs it immediately after
+the whole-run canary decision, whether that decision is healthy or blocked.
+It emits two compact notices in order:
+
+1. `forward_shadow:r1_backtest_verdict`: STANDARD/EVENT_DAY verdict, matched-pair
+   count, differing/identity-flip counts and max probability delta, followed by
+   our R1 / always-favourite / Forebet headline rate blocks with exact n;
+2. `forward_shadow:r1_backtest_inventory`: number of seeded `history_*` files on
+   disk and, for every available sport ledger, `settled_row_count` and
+   `date_range`.
+
+The complete `r1_backtest_<date>.json` and `.md` remain in `data/reports` for the
+existing full-evidence artifact. The Forward Shadow persist find does not name
+those report paths and was deliberately not edited; the compact backtest result
+also enters `forward_batch_receipt.json`. Any backtest exception emits a FAILED
+verdict notice and cannot fail the driver. Offline tests prove annotation order,
+exact verdict/rate/inventory fields, failure containment, and execution on the
+blocked-abort path. No ranking rule changed and no Depth Build was requested.
+
+**2026-09-29 — Forward Shadow run `36521832033` exposed a misplaced gate; whole-run preflight added.**
+
+Cancellation was attempted first and failed exactly with `HTTP 403: Resource
+not accessible by integration`; the owner then cancelled it. The run API now
+reports `status="completed"`, `conclusion="cancelled"`,
+`updated_at="2026-09-29T07:29:36Z"`. This is the second multi-hour Forward
+Shadow dispatch against a blocked relay. **Superseded by run `36538082614`
+above:** the under-one-minute live abort is now proven.
+
+Two hypotheses were checked before changing code:
+
+- **Python stdout buffering is disproved in source.** `emit_notice()` already
+  calls `print(..., flush=True)` (`scripts/forward_shadow_batch.py`, the print
+  in `emit_notice`). A new test monkeypatches `print` and asserts the actual
+  `flush` keyword is `True`. However, cancellation changed the API evidence:
+  notices that were absent while the process ran appeared only after the job
+  ended. Therefore GitHub's check-run annotation publication itself can lag an
+  in-progress process; `annotations=[]` during a run does **not** prove no phase
+  notice was printed.
+- **The gate was in the wrong place.** Before this fix, `canary_gate()` existed
+  only inside the D+2..D+6 forward loop. The actual order before that call was:
+  standard D+1 settlement (network: yes; gated: no), completion (yes/no), delta
+  settlement (yes/no), refresh (yes/no), EVENT_DAY settlement (yes/no), and
+  EVENT_DAY clock/capture (yes/no); only then did the gated forward pass begin.
+  Post-cancellation annotations prove more precisely where the run got: standard
+  settlement completed with `count=2`, dates `2026-09-27` and `2026-09-28`,
+  `settled=2`, `failed=0`; completion finished with `count=12`,
+  `supplements_written=0`, `resolved_successes=0`, `resolved_failures=0`; delta
+  settlement finished with `count=0`, `graded=0`. No `refresh` notice exists.
+  Thus the run progressed through delta settlement and was cancelled during or
+  before completion of refresh. The exact request in flight remains unknown.
+
+`main()` now samples the existing dual-path canary immediately after argument
+parsing/root resolution and before every capture-capable phase. If unhealthy,
+it emits `forward_shadow:canary_abort`, writes
+`forward_batch_receipt.json` with `aborted_before_phase="settlement"`, the
+sample, and all seven skipped phases, then exits 0. All phase/result arrays are
+explicitly empty. A healthy preflight is retained in the receipt, and the
+existing per-date samples remain as mid-run re-checks. Wording preserves the
+network distinction: both paths available to the GitHub runner were blocked;
+this is not evidence that Forebet's endpoint was down for ordinary IPs.
+
+Regression coverage runs the driver with every phase enabled, makes the
+preflight unhealthy, replaces every capture-capable phase entry point with a
+function that raises if called, and proves exactly one `canary_abort` notice,
+zero phase calls, and the explicit abort receipt. Targeted verification:
+`tests/test_forward_shadow_batch.py` → `109 passed in 62.72s`.
+
+**2026-09-29 — full probe now exits green immediately when its first dual-path canary is blocked.**
+
+`scripts/probe_kickoff_timezone.py::run_probe` now calls the existing
+`slumdog.forebet.sample_canary` before every other stage. That canary makes one
+relay attempt and, only when needed, one direct attempt; it never retries. If
+neither path proves football's `tz=0` JSON healthy, `run_probe` emits
+`probe:canary` immediately with `probe_short_circuit.active=true`,
+`skipped="all_remaining_stages"`, and `exit_code=0`, then returns without
+calling `direct_vs_relay_probe`, `run_open_questions`, or any later fetch. The
+normal CLI verdict treats this as an intentional resolved availability sample,
+so a short green run cannot be mistaken for a crashed or truncated probe. If
+either canary path is healthy, the complete diagnostic continues unchanged;
+its initial healthy sample is retained as `availability_canary`, while the
+existing later render-clock-derived `canary` remains available for the
+circuit-breaker comparison.
+
+Offline verification at implementation time: `.venv/bin/python -m pytest
+tests/test_probe_kickoff_timezone.py` → `243 passed in 14.57s`; full suite →
+`1759 passed in 135.23s`. Full-repo pyflakes still reports the 13 known warnings
+in four untouched test modules; pyflakes on both changed Python files is clean.
+
+**LIVE PROVED:** push `accf321` auto-triggered probe run `36536307469`, job
+`109301049258`. The anonymous-readable `probe:canary` annotation reports
+`healthy=false`, relay `reason="looked like a challenge page (272 bytes)"`,
+direct `reason="RuntimeError: direct fetch failed across transports:
+urllib=HTTPError"`, `probe_short_circuit.active=true`,
+`skipped="all_remaining_stages"`, and `exit_code=0`. Job metadata reports
+`status="completed"`, `conclusion="success"`, `completed_at="2026-09-29T07:23:41Z"`.
+This proves the short-circuit end to end on one blocked live sample; it does not
+prove reliability across future windows.
+
+**CONTRADICTS EXPECTATION — Forward Shadow did not abort within minutes.** At
+the read immediately after that probe completed, run `36521832033`, job
+`109256185228`, still had `status="in_progress"`, `conclusion=null`; step 6 had
+`started_at="2026-09-29T04:29:39Z"`, `completed_at=null`, while the check-run
+annotations endpoint returned `[]`. The probe's own `sampled_at` timestamp
+`2026-09-29T07:23:30.418467+00:00` makes that at least 2h53m51s in step 6 with
+no finished-phase annotation. Therefore the promised "abort within minutes via
+canary_gate() with settlement results intact" is not observed in this run.
+Exactly which pre-forward phase is stuck is OPEN because no phase had emitted an
+annotation; do not generalize this to `canary_gate()` itself having failed,
+because the run had not proved it reached that call.
+
 **2026-09-29 (continued) — `forward_shadow.yml`'s cancellation-safety fix applied; PR opened to land this branch onto `main` (agent cannot push to `main` directly, by design).**
 
 The owner pasted the last outstanding staged fix directly to `main`

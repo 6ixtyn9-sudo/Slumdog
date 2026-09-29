@@ -75,6 +75,13 @@ def settled_from_dict(payload: dict) -> SettledEvent:
     for key in ("period_scores_1", "period_scores_2"):
         if key in kwargs:
             kwargs[key] = tuple(kwargs[key])
+    timing = kwargs.get("facet_timing") or {}
+    if not isinstance(timing, dict):
+        raise ValueError("facet_timing must be a dictionary")
+    kwargs["facet_timing"] = {
+        key: value if isinstance(value, TimingClass) else TimingClass(str(value))
+        for key, value in timing.items()
+    }
     return SettledEvent(**kwargs)
 
 

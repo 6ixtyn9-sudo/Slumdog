@@ -9,7 +9,18 @@ import gzip
 import json
 from dataclasses import asdict
 
-from slumdog.backtest import r1_backtest, KNOWN_LIMITATIONS
+import pytest
+
+from slumdog.backtest import (
+    KNOWN_LIMITATIONS,
+    _cluster_bootstrap_surplus,
+    _draw_model_discrimination,
+    _all_outcome_probability_recalibration,
+    _draw_probability_recalibration,
+    _handball_draw_diagnostics,
+    _low_draw_tail_analysis,
+    r1_backtest,
+)
 from slumdog.contracts import SettledEvent
 
 
@@ -44,14 +55,15 @@ def _pre_event_selection(event_id, sport, event_date, *, favorite_index, underdo
 
 def _ev(event_id, sport, event_date, p1, p2, winner_index, *,
         probability_1=0.6, probability_2=0.4, draw_probability=None,
-        forebet_pick=1, disposition="SETTLED", reconstruction="HISTORICAL_PAGE"):
+        forebet_pick=1, disposition="SETTLED", reconstruction="HISTORICAL_PAGE",
+        league=""):
     return SettledEvent(
         event_id=event_id, sport=sport, event_date=event_date,
         participant_1=p1, participant_2=p2, winner_index=winner_index,
         score_1=1.0, score_2=0.0,
         probability_1=probability_1, probability_2=probability_2,
         draw_probability=draw_probability, forebet_pick=forebet_pick,
-        disposition=disposition, reconstruction=reconstruction,
+        disposition=disposition, reconstruction=reconstruction, league=league,
     )
 
 
@@ -207,7 +219,366 @@ class TestReconstructionAndGrading:
         assert analysis["reconstruction_populations_present"] == []
 
 
+class TestClusterBootstrap:
+    def test_calendar_day_primary_and_block_sensitivity_are_deterministic(self):
+        records = []
+        for day in range(1, 11):
+            date = f"2026-01-{day:02d}"
+            for sport in ("football", "handball"):
+                # Identical same-day errors across sports: exactly the
+                # cross-sport dependence calendar-day blocks preserve.
+                records.append((sport, date, "<0.20", 0.10,
+                                1 if day % 2 == 0 else 0))
+        first = _cluster_bootstrap_surplus(
+            records, ["<0.20"], replicates=200, seed=7)
+        second = _cluster_bootstrap_surplus(
+            records, ["<0.20"], replicates=200, seed=7)
+        assert first == second
+        assert first["primary_block"] == "calendar_day_PRIMARY"
+        schemes = first["schemes"]
+        assert schemes["calendar_day_PRIMARY"]["blocks"] == 10
+        assert schemes["sport_day"]["blocks"] == 20
+        assert schemes["calendar_month"]["blocks"] == 1
+        assert schemes["calendar_day_PRIMARY"]["buckets"]["<0.20"][
+            "valid_replicates"] == 200
+        assert "cross-sport dependence" in first["primary_block_reason"]
+
+
 class TestBaselinesAndBands:
+    def test_calibration_compares_observed_to_assigned_probability_same_rows(
+            self, tmp_path):
+        events = _build_eligible_scenario(winner_index=2)
+        _write_ledger(tmp_path, "football", events)
+        path = r1_backtest(tmp_path, target_date="2026-01-01")
+        analysis = json.loads(path.read_text())
+        scorecard = analysis["populations"]["HISTORICAL_PAGE"]
+        calibration = scorecard["calibration"]
+        dog = calibration["overall"]["r1_underdog"]
+        assert dog["n"] == 1
+        assert dog["successes"] == 1
+        assert dog["mean_predicted_probability"] == pytest.approx(0.4)
+        assert dog["hit_rate"] == pytest.approx(1.0)
+        assert dog["observed_minus_predicted"] == pytest.approx(0.6)
+        favourite = calibration["overall"]["favourite_control"]
+        assert favourite["n"] == 1
+        assert favourite["mean_predicted_probability"] == pytest.approx(0.6)
+        assert favourite["hit_rate"] == pytest.approx(0.0)
+        assert favourite["observed_minus_predicted"] == pytest.approx(-0.6)
+        assert calibration["by_underdog_probability_band"]["0.40+"][
+            "r1_underdog"] == dog
+        assert calibration["by_sport"]["football"]["r1_underdog"] == dog
+        assert "PRIMARY MERIT METRIC" in calibration["interpretation"]
+        assert "NOT THE MERIT TEST" in scorecard["raw_hit_rate_note"]
+
+    def test_calibration_section_precedes_raw_hit_rates_in_markdown(self, tmp_path):
+        events = _build_eligible_scenario(winner_index=2)
+        _write_ledger(tmp_path, "football", events)
+        path = r1_backtest(tmp_path, target_date="2026-01-01")
+        text = path.with_suffix(".md").read_text()
+        calibration_pos = text.find("PRIMARY MERIT METRIC")
+        raw_pos = text.find("Raw hit rates (descriptive baselines")
+        assert calibration_pos != -1
+        assert raw_pos != -1
+        assert calibration_pos < raw_pos
+        assert "Observed - predicted" in text
+        assert "Favourite control" in text
+
+    def test_draw_space_split_keeps_two_way_clean_and_draw_differential(self,
+                                                                        tmp_path):
+        football = _build_eligible_scenario(sport="football", winner_index=2)
+        basketball = _build_eligible_scenario(
+            sport="basketball", winner_index=2,
+            test_event_date=_date(101))
+        hockey = _build_eligible_scenario(
+            sport="hockey", winner_index=2,
+            test_event_date=_date(102))
+        _write_ledger(tmp_path, "football", football)
+        _write_ledger(tmp_path, "basketball", basketball)
+        _write_ledger(tmp_path, "hockey", hockey)
+        path = r1_backtest(tmp_path, target_date="2026-01-01")
+        scorecard = json.loads(path.read_text())["populations"]["HISTORICAL_PAGE"]
+        split = scorecard["draw_space_split"]
+        assert split["two_way_sports"]["sports"] == ["basketball", "hockey"]
+        assert split["draw_capable_sports"]["sports"] == ["football"]
+        pooled = split["two_way_sports"]["pooled"]
+        assert pooled["n"] == 2
+        assert pooled["mean_predicted_probability"] == pytest.approx(0.4)
+        assert pooled["hit_rate"] == pytest.approx(1.0)
+        assert pooled["observed_minus_predicted"] == pytest.approx(0.6)
+        assert pooled["surplus_wilson_95_lo"] == pytest.approx(
+            pooled["wilson_95_lo"] - 0.4)
+        assert pooled["indicative_only_n_lt_500"] is True
+        draw = split["draw_capable_sports"]["pooled"]
+        assert draw["n"] == 1
+        assert draw["differential_surplus"] == pytest.approx(1.2)
+        assert "paired" in draw["differential_interval_method"]
+        coverage = scorecard["coverage"]
+        assert coverage["distinct_sport_days"] == 3
+        assert coverage["mean_r1_picks_per_sport_day"] == pytest.approx(1.0)
+
+    def test_temporal_holdout_is_strictly_after_predeclared_cutoff(self, tmp_path):
+        events = _build_eligible_scenario(sport="tennis", winner_index=2)
+        events.append(_ev(
+            "holdout-event", "tennis", "2026-07-15", "TeamB", "TeamA",
+            winner_index=1, probability_1=0.6, probability_2=0.4,
+            forebet_pick=1,
+        ))
+        _write_ledger(tmp_path, "tennis", events)
+        path = r1_backtest(tmp_path, target_date="2026-08-01")
+        holdout = json.loads(path.read_text())["populations"]["HISTORICAL_PAGE"][
+            "temporal_holdout"]
+        assert holdout["cutoff"] == "2026-06-30"
+        tennis = holdout["per_sport"]["tennis"]
+        assert tennis["development_through_cutoff"]["n"] == 1
+        assert tennis["development_through_cutoff"]["observed_minus_predicted"] == pytest.approx(0.6)
+        assert tennis["holdout_after_cutoff"]["n"] == 1
+        assert tennis["holdout_after_cutoff"]["observed_minus_predicted"] == pytest.approx(-0.4)
+        assert tennis["indicative_only_holdout_n_lt_500"] is True
+        assert "multiple sports" in holdout["multiplicity_warning"]
+
+    def test_signal_wide_analysis_uses_every_eligible_row_and_clusters_by_day(
+            self, tmp_path):
+        events = _build_eligible_scenario(sport="tennis", winner_index=2)
+        events.append(_ev(
+            "second-eligible", "tennis", _date(100), "TeamB", "TeamA",
+            winner_index=2, probability_1=0.58, probability_2=0.42,
+            forebet_pick=1,
+        ))
+        _write_ledger(tmp_path, "tennis", events)
+        path = r1_backtest(tmp_path, target_date="2026-01-01")
+        analysis = json.loads(path.read_text())
+        # Only one row is daily R1, but both eligible rows enter the signal.
+        assert analysis["populations"]["HISTORICAL_PAGE"]["overall"]["n"] == 1
+        signal = analysis["eligible_underdog_signal"]
+        tennis = signal["per_sport"]["tennis"]["all"]
+        assert tennis["calibration"]["n"] == 2
+        assert tennis["candidate_frequency"]["candidate_rows"] == 2
+        assert tennis["candidate_frequency"]["active_days"] == 1
+        assert tennis["candidate_frequency"]["mean_candidates_per_active_day"] == 2
+        bootstrap = tennis["calendar_day_cluster_bootstrap"]
+        assert bootstrap["primary_block"] == "calendar_day_PRIMARY"
+        assert bootstrap["schemes"]["calendar_day_PRIMARY"]["blocks"] == 1
+        favourite = tennis["favourite_control"]
+        assert favourite["n"] == 2
+        assert favourite["observed_minus_predicted"] == pytest.approx(-0.59)
+        differential = tennis["differential"]
+        assert differential["n"] == 2
+        assert differential["observed_minus_predicted"] == pytest.approx(1.18)
+        differential_bootstrap = tennis[
+            "differential_calendar_day_cluster_bootstrap"]
+        differential_bucket = differential_bootstrap["schemes"][
+            "calendar_day_PRIMARY"]["buckets"]["all"]
+        assert differential_bucket["bootstrap_95_lo"] == pytest.approx(1.18)
+        assert differential_bucket["bootstrap_95_hi"] == pytest.approx(1.18)
+        assert tennis["favourite_calendar_day_cluster_bootstrap"]["schemes"][
+            "calendar_day_PRIMARY"]["blocks"] == 1
+        assert signal["cutoff"] == "2026-06-30"
+        assert "shared across sports" in signal["block_reason"]
+        variant = analysis["negative_sport_gate_variant"]
+        assert variant["status"] == "RETIRED_FAILED_DEVELOPMENT_OUTCOME_SPACE_TEST"
+        assert variant["excluded_sports_selected_on_development_only"] == []
+        development_variant = variant["development_through_cutoff"]
+        assert development_variant[
+            "pooled_raw_surplus_prohibited_due_to_outcome_space_mix_shift"] is True
+        assert development_variant["two_way"]["rows_removed"] == 0
+        assert development_variant["draw_capable"]["rows_removed"] == 0
+        assert "outcome-space mix" in variant["warning"]
+
+    def test_three_outcome_map_uses_all_draw_capable_settled_rows(self, tmp_path):
+        event = _ev(
+            "draw-1", "football", _date(1), "Home", "Away", winner_index=0,
+            probability_1=0.4, probability_2=0.3, draw_probability=0.3,
+            disposition="SETTLED_DRAW",
+        )
+        _write_ledger(tmp_path, "football", [event])
+        path = r1_backtest(tmp_path, target_date="2026-01-01")
+        outcome_map = json.loads(path.read_text())["three_outcome_calibration_map"]
+        assert outcome_map["sports"] == ["football"]
+        assert outcome_map["settled_rows_in_draw_capable_sports"] == 1
+        draw = outcome_map["pooled"]["draw"]["buckets"]["0.30-0.35"]
+        assert draw["n"] == 1
+        assert draw["mean_predicted_probability"] == pytest.approx(0.3)
+        assert draw["hit_rate"] == pytest.approx(1.0)
+        assert draw["observed_minus_predicted"] == pytest.approx(0.7)
+        assert draw["indicative_only_n_lt_500"] is True
+        home = outcome_map["pooled"]["home"]["buckets"]["0.35+"]
+        assert home["hit_rate"] == pytest.approx(0.0)
+        assert home["observed_minus_predicted"] == pytest.approx(-0.4)
+
+    def test_low_draw_tail_reports_relative_surplus_frequency_and_two_blocks(
+            self, tmp_path):
+        events = [
+            _ev(f"draw-tail-{index}", "football", f"2026-01-0{index}",
+                "Home", "Away", winner_index=0,
+                probability_1=0.60, probability_2=0.36 - probability,
+                draw_probability=probability, disposition="SETTLED_DRAW")
+            for index, probability in enumerate((0.04, 0.08, 0.12, 0.18), start=1)
+        ]
+        _write_ledger(tmp_path, "football", events)
+        analysis = json.loads(r1_backtest(
+            tmp_path, target_date="2026-02-01").read_text())[
+                "low_draw_tail_analysis"]
+        assert analysis["bucket_contract"] == [
+            "<0.05", "0.05-0.10", "0.10-0.15", "0.15-0.20"]
+        development = analysis["pooled"]["development_through_cutoff"]
+        assert "ledger-valid settled rows" in development["population"]
+        assert "0.005 genuine-forecast floor" in development["population"]
+        assert development["parent_lt_0_20_n"] == 4
+        assert development["frozen_shape_verdict"] == (
+            "mixed or unresolved; do not call it a power play")
+        bucket = development["buckets"]["<0.05"]
+        assert bucket["n"] == 1
+        assert bucket["mean_predicted_probability"] == pytest.approx(0.04)
+        assert bucket["observed_hit_rate"] == pytest.approx(1.0)
+        assert bucket["absolute_surplus"] == pytest.approx(0.96)
+        assert bucket[
+            "relative_surplus_observed_divided_by_predicted"] == pytest.approx(25.0)
+        assert bucket["candidate_rows_per_active_day"] == pytest.approx(1.0)
+        bootstrap = analysis["per_sport"]["football"][
+            "development_through_cutoff"]["cluster_bootstrap"]
+        assert set(bootstrap["schemes"]) == {
+            "calendar_day_PRIMARY", "calendar_month"}
+        assert "extreme_tail_power_play_shape" in analysis[
+            "predeclared_shape_interpretation"]
+        assert "no-result" in analysis["draw_outcome_semantics"]["cricket"]
+        assert "split fight draw" in analysis["draw_outcome_semantics"]["mma"]
+        assert analysis["pooled"]["validated_shape_verdict"] == "NOT VALIDATED"
+        composition = analysis["retained_lt_0_05_composition"][
+            "development_through_cutoff"]
+        assert composition["pooled_retained_lt_0_05_n"] == 1
+        assert composition["sports"]["football"]["n"] == 1
+        assert composition["sports"]["football"][
+            "share_of_pooled_retained_lt_0_05"] == pytest.approx(1.0)
+
+    def test_low_draw_tail_excludes_zero_like_and_two_outcome_board_rows(
+            self, tmp_path):
+        cricket = _ev(
+            "cricket-zero-like", "cricket", "2026-01-01", "A", "B",
+            winner_index=0, probability_1=0.60, probability_2=0.3999,
+            draw_probability=0.0001, disposition="SETTLED_DRAW")
+        mma = _ev(
+            "mma-two-outcome", "mma", "2026-01-01", "A", "B",
+            winner_index=0, probability_1=0.60, probability_2=0.37,
+            draw_probability=0.03, disposition="SETTLED_DRAW")
+        analysis = _low_draw_tail_analysis([cricket, mma])
+        cricket_audit = analysis["per_sport"]["cricket"][
+            "development_through_cutoff"]["forecast_exclusion_audit"]
+        assert cricket_audit["raw_numeric_lt_0_20_n_before_forecast_filter"] == 1
+        assert cricket_audit["excluded"][
+            "below_0_005_no_forecast_floor"] == 1
+        assert cricket_audit["retained_lt_0_20_n"] == 0
+        mma_audit = analysis["per_sport"]["mma"][
+            "development_through_cutoff"]["forecast_exclusion_audit"]
+        assert mma_audit["excluded"][
+            "sport_board_does_not_publish_draw_probability"] == 1
+        assert mma_audit["retained_lt_0_20_n"] == 0
+        assert analysis["genuine_draw_forecast_contract"][
+            "minimum_probability"] == pytest.approx(0.005)
+
+    def test_handball_walk_forward_uses_fixed_quarters_and_predeclared_rule(self):
+        events = []
+        index = 0
+        for year in (2024, 2025, 2026):
+            for quarter in (1, 2, 3, 4):
+                if year == 2026 and quarter == 4:
+                    continue
+                month = (quarter - 1) * 3 + 1
+                events.append(_ev(
+                    f"hb-{index}", "handball", f"{year}-{month:02d}-15",
+                    "Home", "Away", winner_index=0,
+                    probability_1=0.60, probability_2=0.37,
+                    draw_probability=0.03, disposition="SETTLED_DRAW",
+                    league="Test League"))
+                index += 1
+        result = _handball_draw_diagnostics(events)
+        assert len(result["walk_forward_folds"]) == 11
+        assert result["walk_forward_folds"][0]["fold"] == "2024-Q1"
+        assert result["walk_forward_folds"][-1]["fold"] == "2026-Q3"
+        assert result["persistence_summary"] == {
+            "total_fixed_folds": 11,
+            "nonempty_folds": 11,
+            "empty_folds": [],
+            "positive_sign_folds": 11,
+            "month_interval_excludes_zero_positive_folds": 11,
+            "final_two_nonempty_positive": True,
+            "persistence_rule_met": True,
+        }
+        league = result["league_concentration"]["leagues"][0]
+        assert league["league"] == "Test League"
+        assert league["share_of_handball_tail"] == pytest.approx(1.0)
+        assert result["full_draw_calibration_curve"]["<0.05"]["n"] == 11
+        assert "75%" in result["predeclared_persistence_rule"]
+
+    def test_draw_discrimination_reports_curve_range_and_month_bootstrap(self):
+        football = [
+            _ev(f"f-{index}", "football", f"2026-01-{index + 1:02d}",
+                "Home", "Away", winner_index=(0 if index >= 2 else 1),
+                probability_1=0.60, probability_2=0.39 - probability,
+                draw_probability=probability,
+                disposition=("SETTLED_DRAW" if index >= 2 else "SETTLED"))
+            for index, probability in enumerate((0.01, 0.08, 0.18, 0.28))
+        ]
+        mma = [_ev(
+            "mma", "mma", "2026-01-01", "A", "B", winner_index=0,
+            probability_1=0.6, probability_2=0.37, draw_probability=0.03,
+            disposition="SETTLED_DRAW")]
+        result = _draw_model_discrimination(football + mma)
+        assert set(result["per_sport"]) == {"football"}
+        football_result = result["per_sport"]["football"]
+        assert football_result["n"] == 4
+        assert football_result[
+            "spearman_rank_correlation_predicted_draw_vs_realised_draw"] > 0
+        assert football_result["spearman_valid_replicates"] == 1000
+        observed_range = football_result[
+            "observed_rate_range_across_nonempty_bands"]
+        assert observed_range == {"minimum": 0.0, "maximum": 1.0, "range": 1.0}
+        assert football_result["full_draw_calibration_curve"]["0.15-0.20"][
+            "n"] == 1
+
+    def test_one_parameter_recalibration_fits_development_only_and_scores_holdout(self):
+        events = []
+        for sport in ("football", "handball"):
+            for index, (day, probability, draw) in enumerate((
+                ("2025-01-10", 0.05, False),
+                ("2025-04-10", 0.15, False),
+                ("2025-07-10", 0.35, True),
+                ("2026-01-10", 0.45, True),
+                ("2026-07-10", 0.10, False),
+                ("2026-08-10", 0.40, True),
+            )):
+                events.append(_ev(
+                    f"{sport}-{index}", sport, day, "Home", "Away",
+                    winner_index=0 if draw else 1,
+                    probability_1=0.55,
+                    probability_2=0.45 - probability,
+                    draw_probability=probability,
+                    disposition="SETTLED_DRAW" if draw else "SETTLED"))
+        result = _draw_probability_recalibration(events)
+        assert set(result["per_sport"]) == {"football", "handball"}
+        for sport_result in result["per_sport"].values():
+            fit = sport_result["development_fit"]
+            assert fit["n"] == 4
+            assert 0 <= fit["shrink_coefficient"] <= 1
+            holdout = sport_result["holdout_evaluation"]
+            assert holdout["n"] == 2
+            assert "brier_before" in holdout and "log_loss_after" in holdout
+            assert "brier_base_rate_only" in holdout
+            assert "brier_information_gain_base_minus_shrink" in holdout
+            assert "log_loss_base_rate_only" in holdout
+            assert "information_verdict" in sport_result
+            paired = sport_result["paired_sequential_fold_information_test"]
+            assert paired["n_folds"] == sport_result["quarterly_summary"]["scored_folds"]
+            assert "brier_two_sided_exact_sign_test_p" in paired
+            assert "brier_paired_fold_bootstrap_95_lo" in paired
+            assert len(sport_result["sequential_quarterly_folds"]) == 11
+            assert "<0.05" in sport_result["holdout_recalibrated_curve"]
+        assert "both sports pass" in result["predeclared_real_improvement_rule"]
+        outcomes = _all_outcome_probability_recalibration(events, result)
+        assert set(outcomes["outcomes"]) == {"home_win", "away_win", "draw"}
+        assert outcomes["outcomes"]["draw"] is result
+        assert outcomes["outcomes"]["home_win"]["per_sport"]["football"][
+            "development_fit"]["n"] == 4
+
     def test_baselines_computed_on_the_same_rows(self, tmp_path):
         events = _build_eligible_scenario(winner_index=2)
         _write_ledger(tmp_path, "football", events)

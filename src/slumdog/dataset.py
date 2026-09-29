@@ -40,7 +40,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from .contracts import SettledEvent
+from .contracts import SettledEvent, TimingClass
 from .history import HistoryIndex
 from .sports import SPORTS
 from .underdog import ForebetUnderdogIdentity, identify_forebet_underdog, label_underdog_outcome
@@ -1139,6 +1139,16 @@ def _validate_settled_dict(d: dict[str, Any]) -> SettledEvent:
     facets = d.get("facets", {})
     if not isinstance(facets, dict):
         facets = {}
+    raw_timing = d.get("facet_timing", {})
+    if not isinstance(raw_timing, dict):
+        raise ValueError("SCHEMA_VALIDATION_FAILED:facet_timing must be a dictionary")
+    try:
+        facet_timing = {
+            key: value if isinstance(value, TimingClass) else TimingClass(str(value))
+            for key, value in raw_timing.items()
+        }
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"SCHEMA_VALIDATION_FAILED:invalid facet_timing:{exc}") from exc
 
     # Odds — allowed in raw but must not affect new dataset (documented exclusion)
     odds1 = d.get("odds_1")
@@ -1169,6 +1179,7 @@ def _validate_settled_dict(d: dict[str, Any]) -> SettledEvent:
             source_url=source_url,
             disposition=disposition,
             facets=facets,
+            facet_timing=facet_timing,
         )
     except Exception as e:
         raise ValueError(f"SCHEMA_VALIDATION_FAILED:{type(e).__name__}:{e}") from e

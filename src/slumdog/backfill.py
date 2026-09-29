@@ -93,6 +93,10 @@ def _validated_ledger_payloads(rows, sport: str, raw_sha256: str) -> list[dict]:
     by_key: dict[tuple[str, str, str], dict] = {}
     for row in rows:
         payload = asdict(row)
+        payload["facet_timing"] = {
+            key: value.value if hasattr(value, "value") else str(value)
+            for key, value in (row.facet_timing or {}).items()
+        }
         payload.setdefault("facets", {})
         if isinstance(payload.get("facets"), dict):
             payload["facets"]["raw_sha256"] = raw_sha256
