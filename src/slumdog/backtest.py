@@ -1036,6 +1036,49 @@ def _low_draw_tail_analysis(events: list[SettledEvent]) -> dict[str, Any]:
     by_sport: dict[str, list[SettledEvent]] = defaultdict(list)
     for event in draw_events:
         by_sport[event.sport].append(event)
+    pooled_periods = periods(draw_events, 3000)
+    per_sport_periods = {
+        sport: periods(group, 3100 + index * 10)
+        for index, (sport, group) in enumerate(sorted(by_sport.items()))
+    }
+
+    composition = {}
+    for period_name in ("all", "development_through_cutoff", "holdout_after_cutoff"):
+        pooled_period = pooled_periods[period_name]
+        pooled_n = pooled_period["buckets"]["<0.05"]["n"]
+        sports = {}
+        for sport, sport_periods in per_sport_periods.items():
+            sport_period = sport_periods[period_name]
+            bucket = sport_period["buckets"]["<0.05"]
+            month = (sport_period["cluster_bootstrap"]["schemes"]
+                     .get("calendar_month", {}).get("buckets", {}).get("<0.05", {}))
+            sports[sport] = {
+                **bucket,
+                "share_of_pooled_retained_lt_0_05": (
+                    bucket["n"] / pooled_n if pooled_n else None),
+                "calendar_month_95_lo": month.get("bootstrap_95_lo"),
+                "calendar_month_95_hi": month.get("bootstrap_95_hi"),
+                "forecast_exclusion_audit": sport_period[
+                    "forecast_exclusion_audit"],
+            }
+        composition[period_name] = {
+            "pooled_retained_lt_0_05_n": pooled_n,
+            "sports": sports,
+            "reconciliation": {
+                "raw_numeric_lt_0_20_n_before_forecast_filter": (
+                    pooled_period["forecast_exclusion_audit"]
+                    ["raw_numeric_lt_0_20_n_before_forecast_filter"]),
+                "retained_lt_0_20_n": pooled_period[
+                    "forecast_exclusion_audit"]["retained_lt_0_20_n"],
+                "excluded_by_reason": pooled_period[
+                    "forecast_exclusion_audit"]["excluded"],
+                "note": (
+                    "The unfiltered-to-filtered <0.05 gap is reconciled by the "
+                    "per-sport below-floor and board/missing exclusions above; "
+                    "never attribute the residual without these measured counts."
+                ),
+            },
+        }
     return {
         "scope": (
             "all ledger-valid settled rows after requiring a sport board that "
@@ -1090,11 +1133,9 @@ def _low_draw_tail_analysis(events: list[SettledEvent]) -> dict[str, Any]:
             ),
             "otherwise": "mixed or unresolved; do not call it a power play",
         },
-        "pooled": periods(draw_events, 3000),
-        "per_sport": {
-            sport: periods(group, 3100 + index * 10)
-            for index, (sport, group) in enumerate(sorted(by_sport.items()))
-        },
+        "pooled": pooled_periods,
+        "per_sport": per_sport_periods,
+        "retained_lt_0_05_composition": composition,
     }
 
 

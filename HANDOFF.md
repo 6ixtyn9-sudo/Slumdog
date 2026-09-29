@@ -1,5 +1,29 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — filtered genuine-forecast tail revalidates; composition unresolved.**
+
+After excluding absent/two-outcome boards and probabilities below `0.005`, the
+shape survives more cleanly. Development `<0.05`: `n=14614`, predicted
+`0.023097`, observed `0.050943`, surplus `+0.027846`, relative `2.206x`, month
+`[+0.023821,+0.031255]`; neighbouring ratios `1.055x`, `0.999x`, `1.024x` all
+have month intervals including zero. Holdout: `n=658`, predicted `0.021550`,
+observed `0.044073`, relative `2.045x`, positive direction repeated. Frozen
+criteria are met on genuine-forecast rows. This reverses the artifact retraction
+for the **filtered population only**; the unfiltered pooled claim remains
+retracted.
+
+Breadth is not yet known. Cricket retains only 226 development rows after 4,954
+floor exclusions; football's previously read cell was roughly 100 and MMA is
+board-excluded. The report now emits retained `<0.05` n and share of pooled n by
+sport, development and holdout, beside predicted/observed/relative/month interval,
+frequency, and per-sport exclusions. A reconciliation block reports raw `<0.20`
+n, retained n and every exclusion reason. Until those measured shares are read,
+the correct claim is “a 2.2x filtered tail effect of unknown sport composition,”
+not a general property of Forebet's draw model. No selector is built. Final
+local gates: focused tests **155 passed**; full `python -m pytest` **1774
+passed**; tracked-file `py_compile`, changed-file `pyflakes`, and
+`git diff --check` clean.
+
 **2026-09-29 — pooled power-play shape retracted as encoding artifact; genuine-forecast rerun implemented.**
 
 The per-sport audit invalidated the pooled interpretation. Cricket development

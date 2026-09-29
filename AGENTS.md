@@ -470,7 +470,18 @@ This is the sixth worked warning and the most important: predeclaration prevents
 post-hoc storytelling but cannot repair a misspecified population contract.
 Before calibration, require that the sport's board publishes draw probability
 and apply the predeclared `0.005` plausibility floor; report exclusions per
-sport. Football remains only an indicative lead: development predicted `0.0348`,
+sport. The **unfiltered** pooled claim remains retracted.
+
+The filtered population subsequently revalidated the shape: development
+`n=14614`, predicted `0.023097`, observed `0.050943`, surplus `+0.027846`,
+relative `2.206x`, month `[+0.023821,+0.031255]`; neighbouring ratios were
+`1.055x`, `0.999x`, `1.024x` with month intervals crossing zero. Holdout
+`n=658`, predicted `0.021550`, observed `0.044073`, relative `2.045x`, repeated
+direction. This reverses the artifact retraction only for the filtered,
+genuine-forecast population. Its breadth is still unverified until retained
+`<0.05` sport shares are read; never call it a general Forebet property first.
+
+Football remains only an indicative lead: development predicted `0.0348`,
 observed `0.11`, relative `3.16x`, but `n=100` and 1.25 rows/active day; holdout
 `n=13`. Under the standing evidence rule it needs at least `n=500` graded rows
 (and enough independent calendar days for clustered uncertainty) before it can

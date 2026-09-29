@@ -1,4 +1,20 @@
 
+### Update 2026-09-29: filtered low-draw shape survives; sport composition unresolved
+
+Genuine-forecast development `<0.05`: `n=14614`, predicted `0.023097`, observed
+`0.050943`, surplus `+0.027846`, relative `2.206x`, month
+`[+0.023821,+0.031255]`; all neighbouring ratios (`1.055x`, `0.999x`, `1.024x`)
+are flat with month intervals crossing zero. Holdout `n=658`, predicted
+`0.021550`, observed `0.044073`, relative `2.045x`, repeats direction. Frozen
+criteria validate on the filtered population. The unfiltered pooled claim stays
+retracted.
+
+Sport breadth remains unverified. New composition output gives each sport's
+retained `<0.05` count and pooled share in development/holdout, its calibration,
+month interval and firing frequency, plus exclusions. Reconciliation names the
+full raw-to-retained gap by reason. Do not generalize beyond “2.2x filtered tail
+effect of unknown sport composition” until this table is read; no selector yet.
+
 ### Update 2026-09-29: pooled low-draw shape retracted; genuine-forecast filter added
 
 Per-sport evidence shows the pooled `<0.05` validation was mostly an encoding

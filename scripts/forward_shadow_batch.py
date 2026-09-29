@@ -465,6 +465,39 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                     },
                 )
 
+            composition = tail.get("retained_lt_0_05_composition") or {}
+            for period, title_suffix in (
+                ("development_through_cutoff", "development"),
+                ("holdout_after_cutoff", "holdout"),
+            ):
+                block = composition.get(period) or {}
+                emit_notice(f"r1_backtest_low_draw_composition_{title_suffix}", {
+                    "pooled_retained_lt_0_05_n": block.get(
+                        "pooled_retained_lt_0_05_n"),
+                    "sports": {
+                        sport: {
+                            "n": values.get("n"),
+                            "share": values.get(
+                                "share_of_pooled_retained_lt_0_05"),
+                            "predicted": values.get(
+                                "mean_predicted_probability"),
+                            "observed": values.get("observed_hit_rate"),
+                            "relative": values.get(
+                                "relative_surplus_observed_divided_by_predicted"),
+                            "month_95": (
+                                values.get("calendar_month_95_lo"),
+                                values.get("calendar_month_95_hi"),
+                            ),
+                            "rows_per_active_day": values.get(
+                                "candidate_rows_per_active_day"),
+                            "exclusions": (values.get(
+                                "forecast_exclusion_audit") or {}).get("excluded"),
+                        }
+                        for sport, values in (block.get("sports") or {}).items()
+                    },
+                    "reconciliation": block.get("reconciliation"),
+                })
+
         # Provenance remains in the receipt/full report. Reserve the finite
         # notice budget for the same-population tail decomposition and canary.
         signal = analysis.get("eligible_underdog_signal") or {}

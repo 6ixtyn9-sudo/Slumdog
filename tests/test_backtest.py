@@ -438,6 +438,12 @@ class TestBaselinesAndBands:
         assert "no-result" in analysis["draw_outcome_semantics"]["cricket"]
         assert "split fight draw" in analysis["draw_outcome_semantics"]["mma"]
         assert analysis["pooled"]["validated_shape_verdict"] == "NOT VALIDATED"
+        composition = analysis["retained_lt_0_05_composition"][
+            "development_through_cutoff"]
+        assert composition["pooled_retained_lt_0_05_n"] == 1
+        assert composition["sports"]["football"]["n"] == 1
+        assert composition["sports"]["football"][
+            "share_of_pooled_retained_lt_0_05"] == pytest.approx(1.0)
 
     def test_low_draw_tail_excludes_zero_like_and_two_outcome_board_rows(
             self, tmp_path):
