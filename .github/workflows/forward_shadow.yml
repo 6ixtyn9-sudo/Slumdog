@@ -47,6 +47,7 @@ jobs:
           PYTHONPATH: src
         run: python scripts/forward_shadow_batch.py --root .
       - name: Persist small evidence to git (permanent ledger)
+        if: always()
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
