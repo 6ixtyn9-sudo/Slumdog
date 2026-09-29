@@ -1,4 +1,18 @@
 
+### Update 2026-09-29: blocked-window probe short-circuit
+
+The full kickoff/timezone probe now samples the existing dual-path canary as
+`run_probe`'s first operation. If both the one-attempt relay leg and the
+one-attempt direct leg fail to prove football's `tz=0` JSON healthy, it emits a
+`probe:canary` annotation carrying `probe_short_circuit.active=true`, records
+that every remaining stage was skipped, and exits 0. This is an intentional
+availability sample, not a broken probe. A healthy result on either path still
+runs the complete diagnostic. No retry or backoff was added.
+
+Status: code + offline tests proven (`tests/test_probe_kickoff_timezone.py`:
+243 passed); live runner behavior remains unverified until the push-triggered
+probe's annotation is read.
+
 ### Update 2026-09-27: two questions closed, and the capture module landed
 
 **The renderer will not hand back markup.** `X-Target-Selector` combined with

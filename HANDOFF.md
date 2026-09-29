@@ -1,5 +1,27 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — full probe now exits green immediately when its first dual-path canary is blocked.**
+
+`scripts/probe_kickoff_timezone.py::run_probe` now calls the existing
+`slumdog.forebet.sample_canary` before every other stage. That canary makes one
+relay attempt and, only when needed, one direct attempt; it never retries. If
+neither path proves football's `tz=0` JSON healthy, `run_probe` emits
+`probe:canary` immediately with `probe_short_circuit.active=true`,
+`skipped="all_remaining_stages"`, and `exit_code=0`, then returns without
+calling `direct_vs_relay_probe`, `run_open_questions`, or any later fetch. The
+normal CLI verdict treats this as an intentional resolved availability sample,
+so a short green run cannot be mistaken for a crashed or truncated probe. If
+either canary path is healthy, the complete diagnostic continues unchanged;
+its initial healthy sample is retained as `availability_canary`, while the
+existing later render-clock-derived `canary` remains available for the
+circuit-breaker comparison.
+
+Offline verification at implementation time: `.venv/bin/python -m pytest
+tests/test_probe_kickoff_timezone.py` → `243 passed in 13.75s`. This proves the
+control flow under mocks, not live Forebet behavior. The pushed branch's
+auto-triggered probe run is the live test; read its `probe:canary` annotation
+before claiming the short-circuit worked in CI.
+
 **2026-09-29 (continued) — `forward_shadow.yml`'s cancellation-safety fix applied; PR opened to land this branch onto `main` (agent cannot push to `main` directly, by design).**
 
 The owner pasted the last outstanding staged fix directly to `main`
