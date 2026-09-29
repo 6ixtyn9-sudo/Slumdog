@@ -1,5 +1,30 @@
 # Slumdog Living Handoff
 
+**2026-09-29 (continued) — `forward_shadow.yml`'s cancellation-safety fix applied; PR opened to land this branch onto `main` (agent cannot push to `main` directly, by design).**
+
+The owner pasted the last outstanding staged fix directly to `main`
+(commit `28fc073`, "Add condition to persist evidence to git") — the
+persist step's `if: always()`, a single added line, confirmed byte-for-byte
+identical to what was staged at `docs/workflow_staging/forward_shadow.yml`
+before deleting that file. Picked up onto this branch the same way as every
+other owner-applied workflow fix: `git merge origin/main -s ours --no-commit`
++ `git checkout FETCH_HEAD -- .github/workflows/forward_shadow.yml` (merge
+commit `5c51b8b`). `tests/test_workflow_persist_contract.py`'s
+`TestTheStagedFixIsNarrowAndCorrect` (pinned the pending paste) is gone;
+its assertion now lives on `live_text` directly in
+`TestEveryDeclaredArtifactIsPersisted`. Nothing remains staged in
+`docs/workflow_staging/` as of this entry — only `README.md` (the index).
+
+The owner asked to land this branch's work onto `main` "without merging"
+because the session might end. This session's standing instructions
+restrict it to pushing only its own branch (`arena/01a0e863-slumdog`) —
+opening a PR from that branch is the sanctioned path, not pushing to `main`
+directly. **PR #22** (`arena/01a0e863-slumdog` → `main`) was opened instead,
+`mergeStateStatus: CLEAN`, `mergeable: MERGEABLE`. Reassured the owner: the
+branch is already fully pushed to GitHub, so nothing is at risk from the
+session ending — the PR persists and can be merged any time, by anyone,
+independent of this session.
+
 **2026-09-29 — Duplicate-workflow incident closed out: pipeline.yml restaged and correctly applied, cron approach killed, workflow-hygiene guards added, `docs/owner_paste/` renamed to `docs/workflow_staging/`.**
 
 **What happened, in order:**

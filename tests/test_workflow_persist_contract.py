@@ -29,12 +29,18 @@ then thrown away at the door" failure the 15-minute probe cap already taught
 this repo once (`docs/STATE.md`, "A Stage Reports As It Finishes"), now
 found in the batch driver's own workflow.
 
-The fix (`if: always()` on the persist step, nothing else) is staged again
-at ``docs/workflow_staging/forward_shadow.yml`` for the owner to paste in. Until
-it is applied, ``TestTheStagedFixIsNarrowAndCorrect`` below pins the staged
-copy so it cannot drift from "add one line" into something wider; once
-applied, that class's assertions move onto ``live_text`` (see its docstring)
-exactly as happened for the 2026-09-27 cycle above.
+The fix (`if: always()` on the persist step, nothing else) was staged at
+``docs/workflow_staging/forward_shadow.yml`` and applied by the owner on
+2026-09-29 (`main` commit ``28fc073``, "Add condition to persist evidence to
+git") — a single added line, nothing else, confirmed by diffing the staged
+copy against the applied commit byte-for-byte before this file was deleted.
+This branch picked the change up via a merge of ``origin/main`` (merge
+commit ``5c51b8b``) rather than an authored diff, the same pattern used for
+every other owner-applied workflow fix in this repo. ``TestTheStagedFixIs
+NarrowAndCorrect`` (which pinned the staged copy while it was pending) is
+gone; its two checks now live on ``live_text`` directly, in
+``TestEveryDeclaredArtifactIsPersisted`` and ``TestThePersistStepStaysNarrow``
+below — the same migration the 2026-09-27 cycle already went through once.
 """
 from __future__ import annotations
 
@@ -49,7 +55,6 @@ from scripts.check_workflow_evidence_globs import (
 )
 
 LIVE = Path(".github/workflows/forward_shadow.yml")
-STAGED = Path("docs/workflow_staging/forward_shadow.yml")
 PERSIST_STEP_NAME = (
     "      - name: Persist small evidence to git (permanent ledger)\n")
 
@@ -79,62 +84,20 @@ class TestEveryDeclaredArtifactIsPersisted:
         assert "data/reports/shadow_event_day" in roots
 
     def test_the_persist_step_survives_cancellation_or_timeout(self, live_text):
-        # NOT YET TRUE on `live_text` (owner-paste pending, see module
-        # docstring) — this assertion documents the target state and will
-        # start passing the day the paste lands, the same way
-        # test_both_evidence_trees_are_persisted already does for the prior
-        # cycle. It is intentionally NOT asserted here yet: asserting it
-        # against the live file today would redden the suite over a gap this
-        # repo cannot close by itself (workflow files are owner-authored).
-        # `TestTheStagedFixIsNarrowAndCorrect` below asserts it against the
-        # staged copy instead, so the fix is pinned before it is applied.
-        pass
-
-
-class TestTheStagedFixIsNarrowAndCorrect:
-    """Pins the pending owner-paste while it waits to be applied.
-
-    Once the owner pastes ``docs/workflow_staging/forward_shadow.yml`` over the
-    live file, this class's assertions belong on ``live_text`` instead (drop
-    this class, add its two checks to ``TestEveryDeclaredArtifactIsPersisted``
-    / ``TestThePersistStepStaysNarrow``, delete the staged file) — exactly
-    the migration the 2026-09-27 cycle already went through once.
-    """
-
-    def test_a_pending_paste_adds_only_if_always_to_the_persist_step(
-        self, live_text
-    ):
-        if not STAGED.exists():
-            pytest.skip("no owner-paste pending for forward_shadow.yml")
-        # A positional diff, not set membership: "if: always()" already
-        # occurs once in the live file (step 8), so a naive "line not in
-        # live_lines" membership check would never see the newly-added copy
-        # as new. difflib.unified_diff is position-aware.
-        import difflib
-
-        live_lines = live_text.splitlines(keepends=True)
-        staged_lines = STAGED.read_text().splitlines(keepends=True)
-        diff = list(difflib.unified_diff(live_lines, staged_lines, n=0))
-        added = [line[1:] for line in diff if line.startswith("+")
-                 and not line.startswith("+++")]
-        removed = [line[1:] for line in diff if line.startswith("-")
-                   and not line.startswith("---")]
-        assert removed == [], (
-            "the staged paste must only ADD to the live file, not remove "
-            f"anything; removed: {removed!r}")
-        assert added == ["        if: always()\n"], (
-            "the staged paste has drifted from the single-line fix it was "
-            f"created for: {added!r}")
-
-    def test_a_pending_paste_marks_the_persist_step_always(self):
-        if not STAGED.exists():
-            pytest.skip("no owner-paste pending for forward_shadow.yml")
-        staged_text = STAGED.read_text()
-        idx = staged_text.index(PERSIST_STEP_NAME)
-        step_block = staged_text[idx:idx + len(PERSIST_STEP_NAME) + 40]
+        # Applied 2026-09-29 (main commit 28fc073): the persist step now
+        # carries `if: always()`, so a cancellation or timeout after the
+        # D+1 settlement/completion passes have already finished (but
+        # before the overrunning forward pass completes) no longer throws
+        # away evidence already written to disk. Positional, not membership:
+        # "if: always()" already occurs once elsewhere in this file (the
+        # upload-artifact step), so this checks it appears specifically
+        # within the persist step's own block.
+        idx = live_text.index(PERSIST_STEP_NAME)
+        step_block = live_text[idx:idx + len(PERSIST_STEP_NAME) + 60]
         assert "if: always()" in step_block, (
-            "staged forward_shadow.yml no longer marks the persist step "
-            "if: always() — the fix it exists for is gone")
+            "the persist step no longer carries if: always() — a "
+            "cancellation or timeout would silently discard already-"
+            "finished evidence again")
 
 
 class TestThePersistStepStaysNarrow:

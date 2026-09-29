@@ -34,7 +34,7 @@ The staged copy is deleted rather than kept as a record — git history is the
 record. `tests/test_workflow_persist_contract.py` now guards the live file
 directly, so the gap cannot silently reopen.
 
-## `forward_shadow.yml` — pending, staged 2026-09-28: persist step must survive cancellation
+## `forward_shadow.yml` — APPLIED 2026-09-29, file removed: persist step now survives cancellation
 
 **Proven, not inferred:** Forward Shadow #33 (run 36426785929) was dispatched
 2026-09-28T13:10:59Z and cancelled by the owner at 15:07:37Z after its one
@@ -69,11 +69,16 @@ when an earlier step failed or the job was cancelled/timed out. Staged at
 the live file by exactly that one added line — nothing else — so pasting it
 cannot smuggle in a wider change.
 
-**To apply:** open `docs/workflow_staging/forward_shadow.yml` on this branch,
-copy the whole file, paste it over `.github/workflows/forward_shadow.yml` on
-`main` in the GitHub web UI, commit. Then delete the staged copy (git history
-is the record, same as the 2026-09-27 paste) and move
-`TestTheStagedFixIsNarrowAndCorrect`'s two checks onto `live_text` in
+**Applied:** the owner pasted the replacement (`main` commit `28fc073`, "Add
+condition to persist evidence to git") — a single added line, nothing else,
+confirmed by diffing the staged copy against the applied commit byte-for-byte
+before deleting it. This branch picked the change up via a merge of
+`origin/main` (merge commit `5c51b8b`) rather than an authored diff, the same
+pattern used for every other owner-applied workflow fix here.
+
+The staged copy is deleted rather than kept as a record — git history is the
+record, same as the 2026-09-27 cycle above. `TestTheStagedFixIsNarrowAndCorrect`
+is gone; its two checks now live on `live_text` directly, in
 `TestEveryDeclaredArtifactIsPersisted` / `TestThePersistStepStaysNarrow`.
 
 ## `probe_kickoff_timezone.yml` — APPLIED 2026-09-28, file removed
