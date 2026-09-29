@@ -4,10 +4,16 @@
 Run `36521832033` proved the existing gate was too late: it guarded only the
 D+2..D+6 loop, after standard settlement, completion, delta settlement,
 refresh, EVENT_DAY settlement and EVENT_DAY capture had all had an opportunity
-to make network requests. `emit_notice()` was not buffering annotations: its
-source already uses `print(..., flush=True)`, now pinned by a test. Therefore
-`annotations=[]` after at least 2h53m51s supports an unfinished first phase,
-not hidden completed-phase notices; the exact in-flight request remains unknown.
+to make network requests. `emit_notice()` does use `print(..., flush=True)`, now
+pinned by a test, so Python block buffering was not the cause. But notices absent
+while the job ran appeared after cancellation: GitHub can delay publishing
+check-run annotations from an in-progress process. The final annotations prove
+settlement completed (`count=2`, `settled=2`, `failed=0`), completion completed
+(`count=12`, `supplements_written=0`, `resolved_successes=0`,
+`resolved_failures=0`), and delta settlement completed (`count=0`, `graded=0`).
+No refresh notice exists, so cancellation happened during or before refresh
+completion; the exact request remains unknown. The run finished
+`conclusion="cancelled"`, `updated_at="2026-09-29T07:29:36Z"`.
 
 The driver now samples the dual-path canary before every capture-capable phase.
 An unhealthy sample emits `forward_shadow:canary_abort`, writes a receipt with

@@ -3,27 +3,34 @@
 **2026-09-29 — Forward Shadow run `36521832033` exposed a misplaced gate; whole-run preflight added.**
 
 Cancellation was attempted first and failed exactly with `HTTP 403: Resource
-not accessible by integration`; the owner must cancel this run. This is the
-second multi-hour Forward Shadow dispatch against a blocked relay, so the
-workflow is unsafe to trigger until a live blocked-window dispatch proves an
-under-one-minute abort.
+not accessible by integration`; the owner then cancelled it. The run API now
+reports `status="completed"`, `conclusion="cancelled"`,
+`updated_at="2026-09-29T07:29:36Z"`. This is the second multi-hour Forward
+Shadow dispatch against a blocked relay, so the workflow is unsafe to trigger
+until a live blocked-window dispatch proves an under-one-minute abort.
 
 Two hypotheses were checked before changing code:
 
-- **Annotation buffering is disproved in source.** `emit_notice()` already calls
-  `print(..., flush=True)` (`scripts/forward_shadow_batch.py`, the print in
-  `emit_notice`). A new test monkeypatches `print` and asserts the actual
-  `flush` keyword is `True`. Thus zero annotations cannot be explained by this
-  process retaining completed-phase notices in its stdout buffer.
+- **Python stdout buffering is disproved in source.** `emit_notice()` already
+  calls `print(..., flush=True)` (`scripts/forward_shadow_batch.py`, the print
+  in `emit_notice`). A new test monkeypatches `print` and asserts the actual
+  `flush` keyword is `True`. However, cancellation changed the API evidence:
+  notices that were absent while the process ran appeared only after the job
+  ended. Therefore GitHub's check-run annotation publication itself can lag an
+  in-progress process; `annotations=[]` during a run does **not** prove no phase
+  notice was printed.
 - **The gate was in the wrong place.** Before this fix, `canary_gate()` existed
   only inside the D+2..D+6 forward loop. The actual order before that call was:
   standard D+1 settlement (network: yes; gated: no), completion (yes/no), delta
   settlement (yes/no), refresh (yes/no), EVENT_DAY settlement (yes/no), and
   EVENT_DAY clock/capture (yes/no); only then did the gated forward pass begin.
-  Therefore run `36521832033`'s `2h53m51s` with `annotations=[]` supports being
-  stuck in the first standard-settlement phase. It does not prove which request
-  or date was in flight, because that phase never completed and emitted its
-  notice.
+  Post-cancellation annotations prove more precisely where the run got: standard
+  settlement completed with `count=2`, dates `2026-09-27` and `2026-09-28`,
+  `settled=2`, `failed=0`; completion finished with `count=12`,
+  `supplements_written=0`, `resolved_successes=0`, `resolved_failures=0`; delta
+  settlement finished with `count=0`, `graded=0`. No `refresh` notice exists.
+  Thus the run progressed through delta settlement and was cancelled during or
+  before completion of refresh. The exact request in flight remains unknown.
 
 `main()` now samples the existing dual-path canary immediately after argument
 parsing/root resolution and before every capture-capable phase. If unhealthy,
