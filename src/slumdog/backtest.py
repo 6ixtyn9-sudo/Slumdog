@@ -862,6 +862,8 @@ def _three_outcome_calibration(events: list[SettledEvent]) -> dict[str, Any]:
     }
 
 
+GENUINE_DRAW_FORECAST_FLOOR = 0.005
+
 LOW_DRAW_TAIL_BANDS: tuple[tuple[str, float, float], ...] = (
     ("<0.05", 0.0, 0.05),
     ("0.05-0.10", 0.05, 0.10),
@@ -878,11 +880,29 @@ def _low_draw_tail_analysis(events: list[SettledEvent]) -> dict[str, Any]:
     def summarize(group: list[SettledEvent], seed_offset: int) -> dict[str, Any]:
         by_band: dict[str, list[SettledEvent]] = defaultdict(list)
         records: list[tuple[str, str, str, float, float]] = []
+        exclusion_counts: Counter[str] = Counter()
+        raw_lt_0_20_n = 0
         for event in group:
             probability = event.draw_probability
-            if not isinstance(probability, (int, float)) or isinstance(probability, bool):
+            numeric_probability = (
+                isinstance(probability, (int, float))
+                and not isinstance(probability, bool)
+            )
+            if numeric_probability and float(probability) < 0.20:
+                raw_lt_0_20_n += 1
+            # draw_settles and board shape are deliberately distinct. MMA can
+            # settle a fight draw but Forebet exposes a two-outcome board; any
+            # zero-like value is not a draw forecast and must not enter calibration.
+            if not SPORTS[event.sport].draw_possible:
+                exclusion_counts["sport_board_does_not_publish_draw_probability"] += 1
+                continue
+            if not numeric_probability:
+                exclusion_counts["missing_or_non_numeric_draw_probability"] += 1
                 continue
             probability = float(probability)
+            if probability < GENUINE_DRAW_FORECAST_FLOOR:
+                exclusion_counts["below_0_005_no_forecast_floor"] += 1
+                continue
             label = next((label for label, lo, hi in LOW_DRAW_TAIL_BANDS
                           if lo <= probability < hi), None)
             if label is None:
@@ -918,9 +938,16 @@ def _low_draw_tail_analysis(events: list[SettledEvent]) -> dict[str, Any]:
             scheme_names=("calendar_day_PRIMARY", "calendar_month"))
         return {
             "population": (
-                "all ledger-valid settled rows in draw-capable sports in this "
-                "period; bucket rows require draw_probability <0.20"
+                "ledger-valid settled rows in sports whose board publishes a "
+                "draw probability, after the predeclared 0.005 genuine-forecast "
+                "floor; bucket rows require 0.005 <= draw_probability <0.20"
             ),
+            "forecast_exclusion_audit": {
+                "all_settled_rows_considered": len(group),
+                "raw_numeric_lt_0_20_n_before_forecast_filter": raw_lt_0_20_n,
+                "excluded": dict(sorted(exclusion_counts.items())),
+                "retained_lt_0_20_n": sum(bucket["n"] for bucket in buckets.values()),
+            },
             "parent_lt_0_20_n": sum(bucket["n"] for bucket in buckets.values()),
             "buckets": buckets,
             "cluster_bootstrap": bootstrap,
@@ -1011,9 +1038,20 @@ def _low_draw_tail_analysis(events: list[SettledEvent]) -> dict[str, Any]:
         by_sport[event.sport].append(event)
     return {
         "scope": (
-            "all ledger-valid settled rows in draw-capable sports with predicted "
-            "draw probability below 0.20; not a selector and not R1-only"
+            "all ledger-valid settled rows after requiring a sport board that "
+            "publishes draw probability and predicted draw probability >=0.005; "
+            "not a selector and not R1-only"
         ),
+        "genuine_draw_forecast_contract": {
+            "minimum_probability": GENUINE_DRAW_FORECAST_FLOOR,
+            "excluded_board_contract": "SPORTS[sport].draw_possible is false",
+            "rationale": (
+                "Predeclared conservative floor for the decisive rerun: "
+                "below 0.5% (one in 200) is treated as absent/zero-like encoding, "
+                "not a calibrated small forecast. This removes cricket's 0.0146% "
+                "sentinel-like mean without excluding football's genuine 3.48% cell."
+            ),
+        },
         "cutoff": HOLDOUT_CUTOFF,
         "bucket_contract": labels,
         "draw_outcome_semantics": {

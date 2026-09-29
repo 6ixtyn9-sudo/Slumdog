@@ -456,25 +456,25 @@ Rules:
   across a changed outcome-space mixture; two-way merit is underdog surplus and
   draw-capable merit is the same-row underdog-minus-favourite differential.
 
-## Validated Low-Draw Parallel-Track Finding
+## Retracted Pooled Low-Draw Shape — Sixth Worked Warning
 
-The first predeclared shape to validate is the pooled `<0.05` draw tail. On all
-ledger-valid settled rows in draw-capable sports: development `n=26344`, mean
-predicted `0.0129`, observed `0.0342`, surplus `+0.021388`, observed/predicted
-`2.664`, month-block interval `[+0.018620,+0.024322]`; all three neighbouring
-5-point buckets had ratios `0.999..1.055` and month intervals including zero.
-Holdout repeated the tail direction: `n=1802`, surplus `+0.014329`, ratio
-`2.821`, month interval `[+0.002247,+0.027317]`. The frozen contract therefore
-returns **EXTREME-TAIL / POWER-PLAY SHAPE, VALIDATED** even though holdout's
-standalone four-bucket classifier is mixed; development sets the shape and
-holdout was predeclared only to repeat the `<0.05` direction.
+The pooled `<0.05` shape passed its predeclared statistical criterion and was
+then **retracted as mostly an encoding artifact** when the required per-sport
+audit exposed that the criterion never asked whether a forecast existed.
+Cricket development had `n=4995`, mean predicted `0.000146`, observed `0.005205`
+and an artificial `35.6x` ratio; holdout was `80x` on `n=854`. Forebet was
+functionally not modelling that draw outcome. MMA can settle fight draws but has
+a two-outcome board, so it likewise cannot supply a genuine draw forecast.
 
-Limits must accompany every mention: this is calibration, not profit; a 2.7x
-relative error on a 1.29% base is still only a roughly 3.4% event. No odds, EV,
-payout, Kelly or staking inference follows. It does not mutate frozen R1. Before
-a parallel selector, inspect every sport separately and preserve outcome
-semantics: football/handball level scores, cricket textual draws (no-result is
-VOID), and MMA fight draws are not interchangeable objects.
+This is the sixth worked warning and the most important: predeclaration prevents
+post-hoc storytelling but cannot repair a misspecified population contract.
+Before calibration, require that the sport's board publishes draw probability
+and apply the predeclared `0.005` plausibility floor; report exclusions per
+sport. Football remains only an indicative lead: development predicted `0.0348`,
+observed `0.11`, relative `3.16x`, but `n=100` and 1.25 rows/active day; holdout
+`n=13`. Under the standing evidence rule it needs at least `n=500` graded rows
+(and enough independent calendar days for clustered uncertainty) before it can
+advance beyond indicative. No selector exists; frozen R1 is unchanged.
 
 ## Documentation Governance
 

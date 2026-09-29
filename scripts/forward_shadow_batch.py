@@ -389,6 +389,7 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                 schemes = bootstrap.get("schemes") or {}
                 return {
                     "population": period.get("population"),
+                    "forecast_exclusion_audit": period.get("forecast_exclusion_audit"),
                     "parent_lt_0_20_n": period.get("parent_lt_0_20_n"),
                     "frozen_shape_verdict": period.get("frozen_shape_verdict"),
                     "buckets": {
@@ -440,6 +441,8 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                 compact = compact_tail_period(period)
                 return {
                     "population": compact.get("population"),
+                    "forecast_exclusion_audit": compact.get(
+                        "forecast_exclusion_audit"),
                     "parent_lt_0_20_n": compact.get("parent_lt_0_20_n"),
                     "lt_0_05": (compact.get("buckets") or {}).get("<0.05"),
                 }

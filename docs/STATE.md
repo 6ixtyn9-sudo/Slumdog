@@ -1,5 +1,24 @@
 
-### Update 2026-09-29: extreme-tail draw shape validated; sport concentration next
+### Update 2026-09-29: pooled low-draw shape retracted; genuine-forecast filter added
+
+Per-sport evidence shows the pooled `<0.05` validation was mostly an encoding
+artifact. Cricket development (`n=4995`) predicted `0.000146`, observed
+`0.005205`, relative `35.6x`; holdout (`n=854`) was `80x`. MMA can settle draws
+but exposes a two-outcome board. These are not genuine comparable draw
+forecasts. The previously published pooled power-play shape is retracted as the
+sixth worked warning: the frozen statistical criterion passed, but forecast
+existence was absent from its population contract.
+
+The decisive rerun excludes boards that do not publish draw probability,
+missing/non-numeric values, and values below the predeclared `0.005`
+plausibility floor before calibration. Exclusion counts are reported per sport
+and period, then all four tail bands and block intervals are recomputed. Results
+are unverified until a new run is read. Football remains indicative only:
+development `n=100`, predicted `3.48%`, observed `11%`, `3.16x`, 1.25 rows per
+active day; holdout `n=13`. It needs at least `n=500` plus adequate independent
+days under the standing evidence rule.
+
+### Superseded 2026-09-29: unfiltered extreme-tail shape (retracted above)
 
 Pooled development `<0.05` draw calibration meets every frozen shape criterion:
 `n=26344`, predicted `1.29%`, observed `3.42%`, surplus `+0.021388`, relative

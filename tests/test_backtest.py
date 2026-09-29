@@ -14,6 +14,7 @@ import pytest
 from slumdog.backtest import (
     KNOWN_LIMITATIONS,
     _cluster_bootstrap_surplus,
+    _low_draw_tail_analysis,
     r1_backtest,
 )
 from slumdog.contracts import SettledEvent
@@ -415,7 +416,8 @@ class TestBaselinesAndBands:
         assert analysis["bucket_contract"] == [
             "<0.05", "0.05-0.10", "0.10-0.15", "0.15-0.20"]
         development = analysis["pooled"]["development_through_cutoff"]
-        assert "all ledger-valid settled rows" in development["population"]
+        assert "ledger-valid settled rows" in development["population"]
+        assert "0.005 genuine-forecast floor" in development["population"]
         assert development["parent_lt_0_20_n"] == 4
         assert development["frozen_shape_verdict"] == (
             "mixed or unresolved; do not call it a power play")
@@ -436,6 +438,31 @@ class TestBaselinesAndBands:
         assert "no-result" in analysis["draw_outcome_semantics"]["cricket"]
         assert "split fight draw" in analysis["draw_outcome_semantics"]["mma"]
         assert analysis["pooled"]["validated_shape_verdict"] == "NOT VALIDATED"
+
+    def test_low_draw_tail_excludes_zero_like_and_two_outcome_board_rows(
+            self, tmp_path):
+        cricket = _ev(
+            "cricket-zero-like", "cricket", "2026-01-01", "A", "B",
+            winner_index=0, probability_1=0.60, probability_2=0.3999,
+            draw_probability=0.0001, disposition="SETTLED_DRAW")
+        mma = _ev(
+            "mma-two-outcome", "mma", "2026-01-01", "A", "B",
+            winner_index=0, probability_1=0.60, probability_2=0.37,
+            draw_probability=0.03, disposition="SETTLED_DRAW")
+        analysis = _low_draw_tail_analysis([cricket, mma])
+        cricket_audit = analysis["per_sport"]["cricket"][
+            "development_through_cutoff"]["forecast_exclusion_audit"]
+        assert cricket_audit["raw_numeric_lt_0_20_n_before_forecast_filter"] == 1
+        assert cricket_audit["excluded"][
+            "below_0_005_no_forecast_floor"] == 1
+        assert cricket_audit["retained_lt_0_20_n"] == 0
+        mma_audit = analysis["per_sport"]["mma"][
+            "development_through_cutoff"]["forecast_exclusion_audit"]
+        assert mma_audit["excluded"][
+            "sport_board_does_not_publish_draw_probability"] == 1
+        assert mma_audit["retained_lt_0_20_n"] == 0
+        assert analysis["genuine_draw_forecast_contract"][
+            "minimum_probability"] == pytest.approx(0.005)
 
     def test_baselines_computed_on_the_same_rows(self, tmp_path):
         events = _build_eligible_scenario(winner_index=2)

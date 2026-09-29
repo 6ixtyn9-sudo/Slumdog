@@ -1,6 +1,38 @@
 # Slumdog Living Handoff
 
-**2026-09-29 — extreme-tail draw shape validated; per-sport semantics is next.**
+**2026-09-29 — pooled power-play shape retracted as encoding artifact; genuine-forecast rerun implemented.**
+
+The per-sport audit invalidated the pooled interpretation. Cricket development
+`<0.05`: `n=4995`, predicted `0.000146`, observed `0.005205`, relative `35.6x`;
+holdout `n=854`, relative `80x`. A 0.0146% mean is operationally an absent or
+zero-like draw forecast, so dividing observed incidence by it manufactures a
+large ratio. MMA can settle a fight draw but has a two-outcome board. The pooled
+`n=26344` shape was therefore dominated by rows without a genuine comparable
+draw forecast. **The previously published pooled power-play validation is
+retracted as mostly an encoding artifact.** This is the sixth worked warning:
+the statistical criterion passed, but its population contract omitted forecast
+existence.
+
+The decisive rerun now filters before calibration. It excludes every sport with
+`SPORTS[sport].draw_possible == False`, missing/non-numeric draw probabilities,
+and probabilities below the predeclared `0.005` floor. The floor treats
+below one-in-200 as absent/zero-like rather than a calibrated small forecast; it
+removes cricket's 0.0146% sentinel-like mean while retaining football's genuine
+3.48% cell. Every pooled/per-sport development/holdout result reports raw
+`<0.20` n, exclusions by reason, and retained n before recomputing four buckets
+and month/calendar-day intervals. No result of this filtered rerun has yet been
+read; whether the shape survives is **UNVERIFIED**.
+
+Football remains an indicative lead only: development predicted `3.48%`,
+observed `11%`, relative `3.16x`, `n=100`, 1.25 rows/active day; holdout `n=13`.
+It needs at least the standing `n=500` graded-row threshold, plus enough
+independent calendar days for cluster-aware uncertainty, before it can advance.
+At the observed frequency, 500 rows is roughly 400 active days, but that is a
+volume estimate, not a promise of significance. Final local gates: focused tests
+**155 passed**; full `python -m pytest` **1774 passed**; tracked-file
+`py_compile`, changed-file `pyflakes`, and `git diff --check` clean.
+
+**SUPERSEDED 2026-09-29 — unfiltered extreme-tail shape, retracted above.**
 
 The frozen pooled criteria are met. Development `<0.05`: `n=26344`, predicted
 `1.29%`, observed `3.42%`, surplus `+0.021388`, relative `2.664x`, month
