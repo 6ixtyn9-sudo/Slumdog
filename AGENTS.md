@@ -426,6 +426,12 @@ Rules:
 - A parallel selector remains a research track until its direction and useful
   firing frequency survive out-of-sample evaluation. Rare alone is never a
   "power play"; positive held-out calibration surplus with adequate evidence is.
+- Tennis is the second worked warning: its earlier R1-level positive lead did
+  not survive signal-wide calendar-day clustering in run `36550899550`
+  (development and holdout intervals both included zero). Treat it as retired,
+  not as a gate. Together with handball's sign reversal, this demonstrates why
+  inspected sport leads need clustered temporal validation and multiplicity
+  discipline before product use.
 
 ## Documentation Governance
 

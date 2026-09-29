@@ -1,4 +1,27 @@
 
+### Update 2026-09-29: signal-wide controls, negative-map variant, persist fix staged
+
+Run `36550899550` measured football eligible-underdog surplus at development
+`+3.24` points `[+2.97,+3.53]` (`n=106520`) and holdout `+3.75`
+`[+2.98,+4.51]` (`n=11042`), calendar-day clustered. This is not accepted as
+an edge until same-row favourite calibration is removed: prior R1 football had
+favourite `+4.62` versus underdog `+3.06`, consistent with draw over-prediction.
+Signal-wide output now reports underdog, favourite control, and their paired
+differential with cluster intervals in both periods. A non-positive or
+zero-crossing differential explicitly retracts the apparent underdog edge.
+
+Development negative cluster intervals survived for basketball, hockey,
+volleyball, and handball; tennis was non-significant in both periods and its
+earlier R1 lead is retired. An analysis-only parallel R1 variant chooses
+excluded sports from development negative intervals only and compares the gated
+and frozen R1 rule on development/holdout rows; it does not mutate production.
+
+The run's red status came from the persist step's first `find` failing when
+`data/reports/shadow` was absent after a valid canary abort. The one-line
+failure-tolerance replacement is staged at `docs/owner_paste/forward_shadow.yml`:
+**REPLACE `.github/workflows/forward_shadow.yml`**. The live workflow remains
+owner-authored and untouched.
+
 ### Update 2026-09-29: cluster-aware draw sensitivity and eligible-signal analysis
 
 Before any selector, draw surplus is now re-estimated with deterministic block

@@ -692,7 +692,7 @@ def _percentile(values: list[float], q: float) -> float | None:
 
 
 def _cluster_bootstrap_surplus(
-    records: list[tuple[str, str, str, float, int]],
+    records: list[tuple[str, str, str, float, float]],
     bucket_labels: list[str],
     *,
     replicates: int = BOOTSTRAP_REPLICATES,
@@ -884,21 +884,61 @@ def _eligible_signal_analysis(rows: list[dict[str, Any]]) -> dict[str, Any]:
         }
 
     def summarize(group: list[dict[str, Any]], seed_offset: int) -> dict[str, Any]:
-        block = _surplus_with_shifted_wilson(
+        underdog = _surplus_with_shifted_wilson(
             _calibration_block(group, side="underdog"))
-        records = [
-            (row["sport"], row["event_date"], "all",
-             float(row["underdog_probability"]),
-             1 if row.get("grade") == "SUCCESS" else 0)
-            for row in group
-            if isinstance(row.get("underdog_probability"), (int, float))
-            and not isinstance(row.get("underdog_probability"), bool)
-            and row.get("grade") in ("SUCCESS", "FAILURE")
-        ]
+        favourite = _surplus_with_shifted_wilson(
+            _calibration_block(group, side="favorite"))
+        underdog_records = []
+        favourite_records = []
+        differential_records = []
+        for row in group:
+            dog_p = row.get("underdog_probability")
+            fav_p = row.get("favorite_probability")
+            dog_grade = row.get("grade")
+            fav_grade = _grade_pick(row, row.get("favorite_index"))
+            if (not isinstance(dog_p, (int, float)) or isinstance(dog_p, bool)
+                    or not isinstance(fav_p, (int, float)) or isinstance(fav_p, bool)
+                    or dog_grade not in ("SUCCESS", "FAILURE")
+                    or fav_grade not in ("SUCCESS", "FAILURE")):
+                continue
+            dog_observed = 1 if dog_grade == "SUCCESS" else 0
+            fav_observed = 1 if fav_grade == "SUCCESS" else 0
+            prefix = (row["sport"], row["event_date"], "all")
+            underdog_records.append((*prefix, float(dog_p), dog_observed))
+            favourite_records.append((*prefix, float(fav_p), fav_observed))
+            differential_records.append((
+                *prefix, float(dog_p) - float(fav_p),
+                dog_observed - fav_observed,
+            ))
+        dog_surplus = underdog.get("observed_minus_predicted")
+        fav_surplus = favourite.get("observed_minus_predicted")
+        differential = {
+            "n": len(differential_records),
+            "observed_minus_predicted": (
+                dog_surplus - fav_surplus
+                if dog_surplus is not None and fav_surplus is not None else None
+            ),
+            "definition": "underdog surplus minus favourite surplus on the same rows",
+            "draw_artifact_warning": (
+                "For draw-capable sports, positive underdog surplus is not an edge "
+                "when this differential is non-positive or its cluster interval "
+                "includes zero; both win sides can rise when draws are over-predicted."
+            ),
+        }
         return {
-            "calibration": block,
+            # Keep the established key for consumers, but place its mandatory
+            # same-row control and paired differential beside it.
+            "calibration": underdog,
+            "favourite_control": favourite,
+            "differential": differential,
             "calendar_day_cluster_bootstrap": _cluster_bootstrap_surplus(
-                records, ["all"], seed=BOOTSTRAP_SEED + seed_offset,
+                underdog_records, ["all"], seed=BOOTSTRAP_SEED + seed_offset,
+                scheme_names=("calendar_day_PRIMARY",)),
+            "favourite_calendar_day_cluster_bootstrap": _cluster_bootstrap_surplus(
+                favourite_records, ["all"], seed=BOOTSTRAP_SEED + seed_offset,
+                scheme_names=("calendar_day_PRIMARY",)),
+            "differential_calendar_day_cluster_bootstrap": _cluster_bootstrap_surplus(
+                differential_records, ["all"], seed=BOOTSTRAP_SEED + seed_offset,
                 scheme_names=("calendar_day_PRIMARY",)),
             "candidate_frequency": frequency(group),
         }
@@ -938,6 +978,71 @@ def _eligible_signal_analysis(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 [row for row in rows if row["event_date"] > HOLDOUT_CUTOFF], 1002),
         },
         "per_sport": per_sport,
+    }
+
+
+def _negative_sport_gate_variant(
+    signal: dict[str, Any], r1_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Analysis-only R1 variant excluding development-negative sports."""
+    excluded = []
+    selection_receipt = {}
+    for sport, periods in (signal.get("per_sport") or {}).items():
+        development = periods.get("development_through_cutoff") or {}
+        bucket = (((development.get("calendar_day_cluster_bootstrap") or {})
+                   .get("schemes") or {}).get("calendar_day_PRIMARY", {})
+                  .get("buckets", {}).get("all", {}))
+        hi = bucket.get("bootstrap_95_hi")
+        decision = hi is not None and hi < 0
+        selection_receipt[sport] = {
+            "development_underdog_cluster_95_lo": bucket.get("bootstrap_95_lo"),
+            "development_underdog_cluster_95_hi": hi,
+            "excluded": decision,
+        }
+        if decision:
+            excluded.append(sport)
+
+    def period(group: list[dict[str, Any]], seed_offset: int) -> dict[str, Any]:
+        kept = [row for row in group if row["sport"] not in excluded]
+        records = [
+            (row["sport"], row["event_date"], "all",
+             float(row["underdog_probability"]),
+             1 if row.get("grade") == "SUCCESS" else 0)
+            for row in kept
+            if isinstance(row.get("underdog_probability"), (int, float))
+            and not isinstance(row.get("underdog_probability"), bool)
+            and row.get("grade") in ("SUCCESS", "FAILURE")
+        ]
+        return {
+            "frozen_r1_all_sports": _surplus_with_shifted_wilson(
+                _calibration_block(group, side="underdog")),
+            "variant_r1_after_gate": _surplus_with_shifted_wilson(
+                _calibration_block(kept, side="underdog")),
+            "rows_removed": len(group) - len(kept),
+            "calendar_day_cluster_bootstrap": _cluster_bootstrap_surplus(
+                records, ["all"], seed=BOOTSTRAP_SEED + seed_offset,
+                scheme_names=("calendar_day_PRIMARY",)),
+            "draw_space_split_after_gate": _draw_space_split(kept),
+        }
+
+    development = [row for row in r1_rows if row["event_date"] <= HOLDOUT_CUTOFF]
+    holdout = [row for row in r1_rows if row["event_date"] > HOLDOUT_CUTOFF]
+    return {
+        "status": "ANALYSIS_ONLY_PARALLEL_VARIANT_NOT_A_LIVE_GATE",
+        "selection_rule": (
+            "Exclude a sport only when its signal-wide development-period "
+            "underdog-surplus calendar-day bootstrap upper 95% bound is below zero."
+        ),
+        "excluded_sports_selected_on_development_only": excluded,
+        "selection_receipt": selection_receipt,
+        "development_through_cutoff": period(development, 2001),
+        "holdout_after_cutoff": period(holdout, 2002),
+        "warning": (
+            "This hypothesis was prompted by inspected sport effects and remains "
+            "multiplicity-exposed. Holdout comparison is evidence, not permission "
+            "to mutate frozen R1. Draw-capable merit remains the underdog-minus-"
+            "favourite control in draw_space_split_after_gate."
+        ),
     }
 
 
@@ -1017,6 +1122,7 @@ def r1_backtest(root: Path | str = ".", target_date: str | None = None) -> Path:
     for row in all_r1_rows:
         rows_by_population[row["reconstruction"]].append(row)
 
+    eligible_signal = _eligible_signal_analysis(all_cohort_rows)
     analysis: dict[str, Any] = {
         "generated_at_target_date": target_date,
         "provenance_verdict": provenance_verdict,
@@ -1044,7 +1150,9 @@ def r1_backtest(root: Path | str = ".", target_date: str | None = None) -> Path:
         },
         "corpus_wide_reconstruction_counts": dict(corpus_wide_reconstruction_counts),
         "three_outcome_calibration_map": _three_outcome_calibration(all_settled_events),
-        "eligible_underdog_signal": _eligible_signal_analysis(all_cohort_rows),
+        "eligible_underdog_signal": eligible_signal,
+        "negative_sport_gate_variant": _negative_sport_gate_variant(
+            eligible_signal, all_r1_rows),
         "reconstruction_populations_present": populations,
         "populations": {},
     }
@@ -1261,26 +1369,37 @@ def _render_r1_backtest_markdown(analysis: dict[str, Any]) -> str:
             "",
             signal.get("multiplicity_warning", ""),
             "",
-            "| Sport | Period | Surplus | Calendar-day bootstrap 95% CI | n | Candidates/calendar day |",
-            "| --- | --- | ---: | ---: | ---: | ---: |",
+            "| Sport | Period | Underdog surplus [cluster 95% CI] | Favourite control [cluster 95% CI] | Dog-favourite differential [cluster 95% CI] | n | Candidates/calendar day |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
         ]
         for sport, periods in (signal.get("per_sport") or {}).items():
             for period in ("development_through_cutoff", "holdout_after_cutoff"):
                 result = periods[period]
-                calibration = result["calibration"]
-                bucket = (result["calendar_day_cluster_bootstrap"].get("schemes", {})
-                          .get("calendar_day_PRIMARY", {}).get("buckets", {})
-                          .get("all", {}))
-                lo = bucket.get("bootstrap_95_lo")
-                hi = bucket.get("bootstrap_95_hi")
-                ci = f"{lo:+.2%}..{hi:+.2%}" if lo is not None and hi is not None else "-"
-                surplus = calibration.get("observed_minus_predicted")
-                surplus_text = f"{surplus:+.2%}" if surplus is not None else "-"
+                def metric(calibration_key: str, bootstrap_key: str) -> str:
+                    calibration = result[calibration_key]
+                    bucket = (result[bootstrap_key].get("schemes", {})
+                              .get("calendar_day_PRIMARY", {}).get("buckets", {})
+                              .get("all", {}))
+                    surplus = calibration.get("observed_minus_predicted")
+                    lo = bucket.get("bootstrap_95_lo")
+                    hi = bucket.get("bootstrap_95_hi")
+                    if surplus is None:
+                        return "-"
+                    interval = (f"{lo:+.2%}..{hi:+.2%}"
+                                if lo is not None and hi is not None else "-")
+                    return f"{surplus:+.2%} [{interval}]"
+
+                dog_text = metric("calibration", "calendar_day_cluster_bootstrap")
+                fav_text = metric(
+                    "favourite_control", "favourite_calendar_day_cluster_bootstrap")
+                differential_text = metric(
+                    "differential", "differential_calendar_day_cluster_bootstrap")
                 freq = result["candidate_frequency"].get("mean_candidates_per_calendar_day")
                 freq_text = f"{freq:.3f}" if freq is not None else "-"
                 lines.append(
-                    f"| {sport} | {period} | {surplus_text} | {ci} | "
-                    f"{calibration.get('n', 0)} | {freq_text} |"
+                    f"| {sport} | {period} | {dog_text} | {fav_text} | "
+                    f"{differential_text} | {result['calibration'].get('n', 0)} | "
+                    f"{freq_text} |"
                 )
 
     for population, scorecard in analysis.get("populations", {}).items():

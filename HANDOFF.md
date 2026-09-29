@@ -1,5 +1,43 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — run 36550899550 control correction and persist-step diagnosis.**
+
+Direct job-log fields supplied by the owner: football signal-wide eligible-row
+underdog surplus was development `n=106520`, 883 days, predicted `0.2801`,
+observed `0.3125`, `+3.24` points, calendar-day bootstrap
+`[+2.97,+3.53]`; holdout `n=11042`, 89 days, predicted `0.2866`, observed
+`0.3241`, `+3.75` points, `[+2.98,+4.51]`. This is **not accepted as an
+underdog edge without its same-row favourite control**: prior R1 football had
+favourite `+4.62` versus underdog `+3.06`, the shared-win-side signature of
+draw over-prediction. The signal-wide report now adds favourite calibration and
+the paired underdog-minus-favourite differential, each calendar-day
+cluster-bootstrapped, for development and holdout. If football's differential
+is non-positive or crosses zero, the report explicitly treats the apparent
+underdog surplus as a draw artifact, not an edge.
+
+The same run's signal-wide development cluster intervals exclude zero on the
+negative side for basketball `-1.0 [-1.56,-0.47]`, hockey `-1.11
+[-1.70,-0.54]`, volleyball `-3.22 [-4.12,-2.34]`, and handball `-1.96
+[-3.16,-0.70]`; baseball was positive `+2.32 [+1.42,+3.27]`. Tennis was not
+significant in development or holdout, retiring the earlier R1 lead; this is
+now pinned beside handball in `AGENTS.md`. An analysis-only parallel R1 variant
+selects exclusions solely where the signal-wide development upper cluster bound
+is below zero, then reports frozen-versus-gated R1 development/holdout results
+on the same rows. It does not alter the live selector, and its draw-capable merit
+still requires the favourite differential.
+
+The run's red conclusion was the workflow persist step, not the driver: with
+`set -euo pipefail`, its first missing `data/reports/shadow` `find` exited 1.
+A one-line owner replacement is staged at `docs/owner_paste/forward_shadow.yml`;
+**REPLACE `.github/workflows/forward_shadow.yml`**. A contract test pins that
+this is the only change and all three persist-step `find` pipelines suppress a
+missing-root error. The agent did not edit the live workflow. Final local gates:
+focused tests **153 passed**; full `python -m pytest` **1772 passed**; tracked-file
+`py_compile`, changed-file `pyflakes`, staged/live YAML parsing, and
+`git diff --check` clean. One initial YAML check used system Python and failed
+exactly with `ModuleNotFoundError: No module named 'yaml'`; rerunning with the
+project venv succeeded for both files.
+
 **2026-09-29 — cluster-aware re-estimation and signal-wide instrument implemented before any selector.**
 
 The whole-corpus draw map now re-estimates surplus with a deterministic block

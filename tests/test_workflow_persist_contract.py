@@ -55,6 +55,7 @@ from scripts.check_workflow_evidence_globs import (
 )
 
 LIVE = Path(".github/workflows/forward_shadow.yml")
+STAGED = Path("docs/owner_paste/forward_shadow.yml")
 PERSIST_STEP_NAME = (
     "      - name: Persist small evidence to git (permanent ledger)\n")
 
@@ -98,6 +99,35 @@ class TestEveryDeclaredArtifactIsPersisted:
             "the persist step no longer carries if: always() — a "
             "cancellation or timeout would silently discard already-"
             "finished evidence again")
+
+
+class TestPendingMissingDirectoryFix:
+    def test_staged_replacement_changes_only_the_first_find_tolerance(self, live_text):
+        staged = STAGED.read_text()
+        expected = live_text.replace(
+            "find data/reports/shadow -type f \\( -name",
+            "find data/reports/shadow -type f \\( -name",
+            1,
+        )
+        first_line = next(
+            line for line in expected.splitlines()
+            if line.strip().startswith("find data/reports/shadow -type f"))
+        assert first_line.endswith("| xargs -r git add -f")
+        expected = expected.replace(
+            first_line,
+            first_line.replace(" | xargs -r git add -f",
+                               " 2>/dev/null | xargs -r git add -f"),
+            1,
+        )
+        assert staged == expected
+
+    def test_all_three_find_pipelines_are_failure_tolerant(self):
+        persist = STAGED.read_text().split(PERSIST_STEP_NAME, 1)[1]
+        persist = persist.split("      - name: Upload full evidence", 1)[0]
+        find_lines = [line.strip() for line in persist.splitlines()
+                      if line.strip().startswith("find ")]
+        assert len(find_lines) == 3
+        assert all("2>/dev/null" in line for line in find_lines)
 
 
 class TestThePersistStepStaysNarrow:

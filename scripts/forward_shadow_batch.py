@@ -370,20 +370,46 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
         signal = analysis.get("eligible_underdog_signal") or {}
         if signal:
             def compact_signal_period(period: dict) -> dict:
-                calibration = period.get("calibration") or {}
+                def compact_leg(calibration_key: str, bootstrap_key: str) -> dict:
+                    calibration = period.get(calibration_key) or {}
+                    bucket = (((period.get(bootstrap_key) or {}).get("schemes") or {})
+                              .get("calendar_day_PRIMARY", {}).get("buckets", {})
+                              .get("all", {}))
+                    return {
+                        "n": calibration.get("n"),
+                        "mean_predicted_probability": calibration.get(
+                            "mean_predicted_probability"),
+                        "observed_hit_rate": calibration.get("hit_rate"),
+                        "observed_minus_predicted": calibration.get(
+                            "observed_minus_predicted"),
+                        "cluster_bootstrap_95_lo": bucket.get("bootstrap_95_lo"),
+                        "cluster_bootstrap_95_hi": bucket.get("bootstrap_95_hi"),
+                    }
+
+                return {
+                    "underdog": compact_leg(
+                        "calibration", "calendar_day_cluster_bootstrap"),
+                    "favourite_control": compact_leg(
+                        "favourite_control",
+                        "favourite_calendar_day_cluster_bootstrap"),
+                    "underdog_minus_favourite": compact_leg(
+                        "differential",
+                        "differential_calendar_day_cluster_bootstrap"),
+                    "candidate_frequency": period.get("candidate_frequency"),
+                }
+
+            gate_variant = analysis.get("negative_sport_gate_variant") or {}
+
+            def compact_gate_period(period: dict) -> dict:
                 bucket = (((period.get("calendar_day_cluster_bootstrap") or {})
                            .get("schemes") or {}).get("calendar_day_PRIMARY", {})
                           .get("buckets", {}).get("all", {}))
                 return {
-                    "n": calibration.get("n"),
-                    "mean_predicted_probability": calibration.get(
-                        "mean_predicted_probability"),
-                    "observed_hit_rate": calibration.get("hit_rate"),
-                    "observed_minus_predicted": calibration.get(
-                        "observed_minus_predicted"),
-                    "cluster_bootstrap_95_lo": bucket.get("bootstrap_95_lo"),
-                    "cluster_bootstrap_95_hi": bucket.get("bootstrap_95_hi"),
-                    "candidate_frequency": period.get("candidate_frequency"),
+                    "frozen_r1_all_sports": period.get("frozen_r1_all_sports"),
+                    "variant_r1_after_gate": period.get("variant_r1_after_gate"),
+                    "variant_cluster_bootstrap_95_lo": bucket.get("bootstrap_95_lo"),
+                    "variant_cluster_bootstrap_95_hi": bucket.get("bootstrap_95_hi"),
+                    "rows_removed": period.get("rows_removed"),
                 }
 
             emit_notice("r1_backtest_eligible_signal_overall", {
@@ -397,6 +423,15 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                         "development_through_cutoff") or {}),
                 "holdout": compact_signal_period(
                     (signal.get("overall") or {}).get("holdout_after_cutoff") or {}),
+                "negative_sport_gate_variant": {
+                    "status": gate_variant.get("status"),
+                    "excluded_sports_selected_on_development_only": gate_variant.get(
+                        "excluded_sports_selected_on_development_only"),
+                    "development": compact_gate_period(
+                        gate_variant.get("development_through_cutoff") or {}),
+                    "holdout": compact_gate_period(
+                        gate_variant.get("holdout_after_cutoff") or {}),
+                },
             })
             signal_sports = sorted((signal.get("per_sport") or {}).items())
             for chunk_index in range(0, len(signal_sports), 4):

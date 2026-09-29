@@ -352,8 +352,27 @@ class TestBaselinesAndBands:
         bootstrap = tennis["calendar_day_cluster_bootstrap"]
         assert bootstrap["primary_block"] == "calendar_day_PRIMARY"
         assert bootstrap["schemes"]["calendar_day_PRIMARY"]["blocks"] == 1
+        favourite = tennis["favourite_control"]
+        assert favourite["n"] == 2
+        assert favourite["observed_minus_predicted"] == pytest.approx(-0.59)
+        differential = tennis["differential"]
+        assert differential["n"] == 2
+        assert differential["observed_minus_predicted"] == pytest.approx(1.18)
+        differential_bootstrap = tennis[
+            "differential_calendar_day_cluster_bootstrap"]
+        differential_bucket = differential_bootstrap["schemes"][
+            "calendar_day_PRIMARY"]["buckets"]["all"]
+        assert differential_bucket["bootstrap_95_lo"] == pytest.approx(1.18)
+        assert differential_bucket["bootstrap_95_hi"] == pytest.approx(1.18)
+        assert tennis["favourite_calendar_day_cluster_bootstrap"]["schemes"][
+            "calendar_day_PRIMARY"]["blocks"] == 1
         assert signal["cutoff"] == "2026-06-30"
         assert "shared across sports" in signal["block_reason"]
+        variant = analysis["negative_sport_gate_variant"]
+        assert variant["status"] == "ANALYSIS_ONLY_PARALLEL_VARIANT_NOT_A_LIVE_GATE"
+        assert variant["excluded_sports_selected_on_development_only"] == []
+        assert variant["development_through_cutoff"]["rows_removed"] == 0
+        assert "permission" in variant["warning"]
 
     def test_three_outcome_map_uses_all_draw_capable_settled_rows(self, tmp_path):
         event = _ev(
