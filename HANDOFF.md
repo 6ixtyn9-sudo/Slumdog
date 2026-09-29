@@ -17,10 +17,31 @@ existing later render-clock-derived `canary` remains available for the
 circuit-breaker comparison.
 
 Offline verification at implementation time: `.venv/bin/python -m pytest
-tests/test_probe_kickoff_timezone.py` → `243 passed in 13.75s`. This proves the
-control flow under mocks, not live Forebet behavior. The pushed branch's
-auto-triggered probe run is the live test; read its `probe:canary` annotation
-before claiming the short-circuit worked in CI.
+tests/test_probe_kickoff_timezone.py` → `243 passed in 14.57s`; full suite →
+`1759 passed in 135.23s`. Full-repo pyflakes still reports the 13 known warnings
+in four untouched test modules; pyflakes on both changed Python files is clean.
+
+**LIVE PROVED:** push `accf321` auto-triggered probe run `36536307469`, job
+`109301049258`. The anonymous-readable `probe:canary` annotation reports
+`healthy=false`, relay `reason="looked like a challenge page (272 bytes)"`,
+direct `reason="RuntimeError: direct fetch failed across transports:
+urllib=HTTPError"`, `probe_short_circuit.active=true`,
+`skipped="all_remaining_stages"`, and `exit_code=0`. Job metadata reports
+`status="completed"`, `conclusion="success"`, `completed_at="2026-09-29T07:23:41Z"`.
+This proves the short-circuit end to end on one blocked live sample; it does not
+prove reliability across future windows.
+
+**CONTRADICTS EXPECTATION — Forward Shadow did not abort within minutes.** At
+the read immediately after that probe completed, run `36521832033`, job
+`109256185228`, still had `status="in_progress"`, `conclusion=null`; step 6 had
+`started_at="2026-09-29T04:29:39Z"`, `completed_at=null`, while the check-run
+annotations endpoint returned `[]`. The probe's own `sampled_at` timestamp
+`2026-09-29T07:23:30.418467+00:00` makes that at least 2h53m51s in step 6 with
+no finished-phase annotation. Therefore the promised "abort within minutes via
+canary_gate() with settlement results intact" is not observed in this run.
+Exactly which pre-forward phase is stuck is OPEN because no phase had emitted an
+annotation; do not generalize this to `canary_gate()` itself having failed,
+because the run had not proved it reached that call.
 
 **2026-09-29 (continued) — `forward_shadow.yml`'s cancellation-safety fix applied; PR opened to land this branch onto `main` (agent cannot push to `main` directly, by design).**
 

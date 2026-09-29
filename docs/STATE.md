@@ -10,8 +10,20 @@ availability sample, not a broken probe. A healthy result on either path still
 runs the complete diagnostic. No retry or backoff was added.
 
 Status: code + offline tests proven (`tests/test_probe_kickoff_timezone.py`:
-243 passed); live runner behavior remains unverified until the push-triggered
-probe's annotation is read.
+243 passed; full suite: 1759 passed). Live runner behavior is also proven for
+one blocked sample: run `36536307469`, job `109301049258`, completed
+`success` at `2026-09-29T07:23:41Z`; its `probe:canary` annotation reports
+`healthy=false`, relay `looked like a challenge page (272 bytes)`, direct
+`RuntimeError: direct fetch failed across transports: urllib=HTTPError`,
+`probe_short_circuit.active=true`, `skipped="all_remaining_stages"`, and
+`exit_code=0`.
+
+Forward Shadow run `36521832033` contradicts the expected fast abort: at the
+same observation it remained `in_progress`, with step 6 running since
+`2026-09-29T04:29:39Z`, and job `109256185228`'s annotations endpoint returned
+`[]`. This proves only that no phase had finished and reported after at least
+2h53m51s; it does not prove the driver reached or failed inside `canary_gate()`.
+The blocking pre-forward phase remains open.
 
 ### Update 2026-09-27: two questions closed, and the capture module landed
 
