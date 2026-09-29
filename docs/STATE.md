@@ -1,4 +1,24 @@
 
+### Update 2026-09-29: draw map lead; single holdout rejects sport gating
+
+Owner-read run output supplied this session reports 388,121 settled rows in
+whole-corpus draw-capable sports. Draw calibration is monotonic after a low-end
+inversion: `<0.20` is under-predicted (`n=80668`, predicted 9.62%, observed
+10.62%, surplus +1.00 points, interval [+0.79,+1.21]); `0.35+` is severely
+over-predicted (`n=114300`, predicted 41.09%, observed 28.66%, surplus -12.43,
+[-12.69,-12.16]). Cricket `<0.20` is owner-reported at `n=6046`, predicted
+0.46%, observed 1.49%. This is the strongest lead, but not yet a selector.
+
+The one temporal holdout cannot authorize sport gates: every cell is only
+n=28..89 and direction preservation is 4/8. Handball reverses from development
++8.96 [+1.82,+16.09] to holdout -30.20 [-56.38,-4.01], the standing warning in
+`AGENTS.md`. Decision before implementation: next analyze calibration over all
+eligible underdog rows with strict temporal ordering and sport-day-cluster-aware
+uncertainty; use walk-forward R1 later as product-level validation. This is more
+powerful for the signal question without pretending correlated rows are
+independent. No selector, gate, parallel track, or frozen-rule change has been
+implemented.
+
 ### Update 2026-09-29: clean pooled test has no demonstrated edge; holdout is next
 
 Run `36542931199`, job `109322408619` (not the preceding `36540808677`) reports

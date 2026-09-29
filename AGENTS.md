@@ -403,6 +403,30 @@ whose answer cannot be used is not worth making. The stage records the
 outcome in `entry["render_clock"]`, so "why is basketball missing today" is
 answerable from the receipt.
 
+## Multiplicity And Temporal Holdout Warning
+
+A per-sport effect discovered on the same period used to inspect every sport is
+a lead, not a gate. The standing counterexample is handball calibration from the
+2026-09-29 offline backtest: development surplus **+8.96 percentage points**
+with a 95% interval **[+1.82, +16.09]**, followed by holdout surplus **-30.20
+points** with **[-56.38, -4.01]** — statistically separated from zero in opposite
+directions. Had the development period been used to authorize a sport gate, the
+system would have shipped a confident mistake.
+
+Rules:
+
+- Never mutate the frozen R1 rule from a full-period or development-only sport,
+  band, facet, or outcome effect.
+- Multiple sports/bands/facets inspected together require explicit multiplicity
+  treatment; an isolated 95% interval is not sufficient.
+- Preserve a genuinely later holdout, report its n, and label n<500 indicative.
+- When many rows share a sport-day, row-wise Wilson intervals alone may
+  overstate effective information; use sport-day-cluster-aware uncertainty for
+  signal-wide analyses.
+- A parallel selector remains a research track until its direction and useful
+  firing frequency survive out-of-sample evaluation. Rare alone is never a
+  "power play"; positive held-out calibration surplus with adequate evidence is.
+
 ## Documentation Governance
 
 - `docs/STATE.md` is canonical current truth, not append-only diary. Git history is history.

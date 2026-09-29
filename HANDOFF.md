@@ -1,5 +1,55 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — owner-supplied run result: low-predicted draws are the strongest lead; holdout sport gates are null.**
+
+The owner supplied the completed run's exact draw-map and holdout fields this
+session. The Actions runs API no longer returned that recent run when queried,
+so these values are recorded as **OWNER-READ RUN OUTPUT**, not independently
+re-fetched annotations.
+
+Whole-corpus draw-capable scope: `settled_rows=388121`. Pooled draw buckets:
+
+| Predicted draw bucket | n | mean predicted | observed | surplus / interval |
+|---|---:|---:|---:|---:|
+| `<0.20` | 80,668 | 9.62% | 10.62% | +1.00 points / [+0.79, +1.21] |
+| `0.20-0.25` | 47,141 | 22.18% | 21.32% | -0.86 points / [-1.23, -0.49] |
+| `0.25-0.30` | 68,852 | 27.11% | 23.43% | -3.68 points / [-3.99, -3.36] |
+| `0.30-0.35` | 76,505 | 31.93% | 25.41% | -6.52 points / [-6.83, -6.21] |
+| `0.35+` | 114,300 | 41.09% | 28.66% | -12.43 points / [-12.69, -12.16] |
+
+This is monotonic after the `<0.20` inversion: Forebet increasingly over-predicts
+draws as its assigned draw probability rises. The only pooled positive bucket is
+where Forebet dismisses draws. Owner-reported cricket `<0.20`: `n=6046`, mean
+predicted 0.46%, observed 1.49%. This is a strong price-free lead, not permission
+to select draws: firing frequency, sport stability, clustering, and temporal
+out-of-sample behavior remain untested for a selector.
+
+The single temporal holdout is null for sport gating. Every per-sport holdout
+cell has only `n=28..89`; tennis preserved positive direction (+3.4 development
+to +9.7 holdout), hockey preserved negative (-4.7 to -5.4), while four of eight
+inspected sports preserved direction and four flipped. Handball is the permanent
+counterexample now also in `AGENTS.md`: development +8.96 points, 95% interval
+[+1.82,+16.09], but holdout -30.20 points, [-56.38,-4.01]. No sport gate is
+justified.
+
+**Judgement before further implementation:** choose analysis of the **signal over
+all eligible underdog rows** as the next primary instrument, not many tiny
+walk-forward R1 folds. It tests the same per-sport calibration hypothesis with
+far more observations while retaining strict time ordering. However, rows from
+the same board/day are correlated, so row-wise Wilson intervals would be
+anti-conservative; uncertainty must be clustered by sport-day (for example, a
+sport-day block bootstrap), with sequential temporal evaluation and candidate
+frequency reported. Walk-forward R1 remains the later product-level validation
+because it mirrors one-pick-per-sport-day use, but it cannot efficiently decide
+the signal question with folds containing only tens of picks. No implementation
+of either analysis or any selector was made in this entry; this written choice
+precedes construction as requested.
+
+Frozen R1 status remains unchanged: clean two-way `n=4826`, surplus +0.23
+points with prediction inside the observed interval — no demonstrated edge.
+Odds, payout, EV, Kelly and staking remain excluded. Any low-draw experiment
+must be a parallel research track and cannot mutate R1.
+
 **2026-09-29 — clean two-way result is no demonstrated edge; temporal holdout added before any gate.**
 
 Correction to the inherited run identifier: the draw-space annotations were read
