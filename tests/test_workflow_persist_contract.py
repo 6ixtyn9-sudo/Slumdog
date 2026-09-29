@@ -101,18 +101,31 @@ class TestEveryDeclaredArtifactIsPersisted:
             "finished evidence again")
 
 
-class TestAppliedMissingDirectoryFix:
-    def test_owner_applied_staged_replacement_byte_for_byte(self, live_text):
-        # Owner-authored commit fd2bf13 applied the staged one-line repair.
-        assert STAGED.read_text() == live_text
+class TestPendingPipefailCorrection:
+    def test_staged_change_only_wraps_the_three_optional_find_pipelines(self,
+                                                                        live_text):
+        staged = STAGED.read_text()
+        expected = live_text
+        live_lines = [line for line in live_text.splitlines()
+                      if line.strip().startswith("find ")
+                      and "2>/dev/null | xargs -r git add -f" in line]
+        assert len(live_lines) == 3
+        for line in live_lines:
+            replacement = (line[:len(line) - len(line.lstrip())] + "{ "
+                           + line.strip().replace(
+                               "2>/dev/null | xargs",
+                               "2>/dev/null || true; } | xargs"))
+            expected = expected.replace(line, replacement, 1)
+        assert staged == expected
 
-    def test_all_three_find_pipelines_are_failure_tolerant(self):
-        persist = LIVE.read_text().split(PERSIST_STEP_NAME, 1)[1]
+    def test_all_three_optional_finds_neutralize_exit_before_pipefail(self):
+        persist = STAGED.read_text().split(PERSIST_STEP_NAME, 1)[1]
         persist = persist.split("      - name: Upload full evidence", 1)[0]
         find_lines = [line.strip() for line in persist.splitlines()
-                      if line.strip().startswith("find ")]
+                      if line.strip().startswith("{ find ")]
         assert len(find_lines) == 3
-        assert all("2>/dev/null" in line for line in find_lines)
+        assert all("2>/dev/null || true; } | xargs -r git add -f" in line
+                   for line in find_lines)
 
 
 class TestThePersistStepStaysNarrow:

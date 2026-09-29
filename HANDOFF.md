@@ -1,5 +1,52 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — run 36569213450 closes draw uncertainty; gate mix artifact and pipefail correction.**
+
+The directly read `forward-batch` log at commit `91560f6` establishes the
+project's first robust positive calibration finding. Whole-corpus `<0.20` draw
+surplus is `+0.0099782` on `n=80668`; 95% block intervals: calendar-day
+`[+0.007705,+0.012329]`, sport-day `[+0.007678,+0.012144]`, ISO-week
+`[+0.007653,+0.012014]`, and calendar-month
+`[+0.007332,+0.012706]`. The predeclared month criterion is met: this is a
+robust/bankable **price-free calibration lead**, never odds/EV/staking. The
+inversion is structural: `0.35+` surplus `-0.124289`, month interval
+`[-0.128943,-0.119436]`, `n=114300`. Forebet under-forecasts draws where it
+dismisses them and heavily over-forecasts where it likes them.
+
+Overall eligible-row development differential was significantly negative:
+`-0.0099129 [-0.0136291,-0.0059415]`, `n=196041`; holdout differential
+`+0.0069582 [-0.0062140,+0.0201335]`, `n=14488`. Development therefore says
+the underdog side was measurably worse than the favourite side; holdout does
+not contradict with a demonstrated positive differential.
+
+The prior gate headline is invalid as pooled merit. It removed basketball,
+hockey and volleyball (two-way) plus handball (draw-capable), shifting the
+remainder toward draw-capable rows whose raw underdog surplus is inflated by
+draw over-prediction. The observed gated holdout `+0.07827` is therefore partly
+mix shift. Gate output is now separated: two-way uses underdog surplus;
+draw-capable uses paired underdog-minus-favourite differential; pooled raw
+before/after comparison is prohibited.
+
+The next analysis decomposes `<0.20` into `<0.05`, `0.05-0.10`, `0.10-0.15`,
+`0.15-0.20`, pooled and per sport, development/holdout, with n, predicted,
+observed, absolute and relative surplus, rows/active-day, and calendar-day/month
+bootstrap intervals. Predeclared extreme-tail shape requires development
+`<0.05` month lower bound above zero, a relative ratio at least twice every
+higher bucket, and at least two higher buckets crossing zero; holdout must
+repeat direction. Broad mild shape requires at least three development month
+lower bounds above zero and <=0.5-point range in absolute surplus; holdout must
+repeat direction. Otherwise the shape is mixed/unresolved, not a power play.
+
+The same run still ended red. `2>/dev/null` suppressed `find` diagnostics but
+not exit 1, which `set -o pipefail` propagated. Correct replacement is staged
+at `docs/owner_paste/forward_shadow.yml`: **REPLACE
+`.github/workflows/forward_shadow.yml`**. All three optional-root pipelines use
+`{ find ... 2>/dev/null || true; } | xargs ...`; contract tests pin that exit
+neutralization, not merely stderr suppression. Final local gates: focused tests
+**154 passed**; full `python -m pytest` **1773 passed**; tracked-file
+`py_compile`, changed-file `pyflakes`, staged YAML parsing, and
+`git diff --check` clean.
+
 **2026-09-29 — football headline retracted; draw sensitivity promoted.**
 
 Direct run `36550899550` fields, preserved verbatim:

@@ -382,6 +382,44 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                 ),
             })
 
+        tail = analysis.get("low_draw_tail_analysis") or {}
+        if tail:
+            def compact_tail_period(period: dict) -> dict:
+                bootstrap = period.get("cluster_bootstrap") or {}
+                schemes = bootstrap.get("schemes") or {}
+                return {
+                    label: {
+                        **(period.get("buckets", {}).get(label) or {}),
+                        "calendar_day_95": (
+                            (schemes.get("calendar_day_PRIMARY", {}).get("buckets", {})
+                             .get(label, {}).get("bootstrap_95_lo")),
+                            (schemes.get("calendar_day_PRIMARY", {}).get("buckets", {})
+                             .get(label, {}).get("bootstrap_95_hi")),
+                        ),
+                        "calendar_month_95": (
+                            (schemes.get("calendar_month", {}).get("buckets", {})
+                             .get(label, {}).get("bootstrap_95_lo")),
+                            (schemes.get("calendar_month", {}).get("buckets", {})
+                             .get(label, {}).get("bootstrap_95_hi")),
+                        ),
+                    }
+                    for label in tail.get("bucket_contract", [])
+                }
+
+            emit_notice("r1_backtest_low_draw_tail_development", {
+                "predeclared_shape_interpretation": tail.get(
+                    "predeclared_shape_interpretation"),
+                "buckets": compact_tail_period(
+                    (tail.get("pooled") or {}).get(
+                        "development_through_cutoff") or {}),
+                "per_sport_in_full_report": True,
+            })
+            emit_notice("r1_backtest_low_draw_tail_holdout", {
+                "buckets": compact_tail_period(
+                    (tail.get("pooled") or {}).get("holdout_after_cutoff") or {}),
+                "per_sport_in_full_report": True,
+            })
+
         emit_notice("r1_backtest_verdict", {
             "provenance_verdict": compact_verdict,
         })
@@ -420,23 +458,31 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
             gate_variant = analysis.get("negative_sport_gate_variant") or {}
 
             def compact_gate_period(period: dict) -> dict:
-                bucket = (((period.get("calendar_day_cluster_bootstrap") or {})
-                           .get("schemes") or {}).get("calendar_day_PRIMARY", {})
-                          .get("buckets", {}).get("all", {}))
-                frozen = period.get("frozen_r1_all_sports") or {}
-                variant = period.get("variant_r1_after_gate") or {}
+                def compact_space(space: dict) -> dict:
+                    frozen = space.get("frozen_r1") or {}
+                    variant = space.get("variant_r1") or {}
+                    bucket = (((space.get("variant_calendar_day_cluster_bootstrap")
+                                or {}).get("schemes") or {})
+                              .get("calendar_day_PRIMARY", {}).get("buckets", {})
+                              .get("all", {}))
+                    point_key = ("differential_surplus"
+                                 if space.get("merit_metric") ==
+                                 "underdog_minus_favourite_differential"
+                                 else "observed_minus_predicted")
+                    return {
+                        "merit_metric": space.get("merit_metric"),
+                        "frozen_n": frozen.get("n"),
+                        "frozen_merit": frozen.get(point_key),
+                        "variant_n": variant.get("n"),
+                        "variant_merit": variant.get(point_key),
+                        "variant_cluster_95_lo": bucket.get("bootstrap_95_lo"),
+                        "variant_cluster_95_hi": bucket.get("bootstrap_95_hi"),
+                        "rows_removed": space.get("rows_removed"),
+                    }
                 return {
-                    "frozen_r1": {
-                        "n": frozen.get("n"),
-                        "surplus": frozen.get("observed_minus_predicted"),
-                    },
-                    "variant_r1": {
-                        "n": variant.get("n"),
-                        "surplus": variant.get("observed_minus_predicted"),
-                        "cluster_bootstrap_95_lo": bucket.get("bootstrap_95_lo"),
-                        "cluster_bootstrap_95_hi": bucket.get("bootstrap_95_hi"),
-                    },
-                    "rows_removed": period.get("rows_removed"),
+                    "pooled_raw_surplus_prohibited_due_to_mix_shift": True,
+                    "two_way": compact_space(period.get("two_way") or {}),
+                    "draw_capable": compact_space(period.get("draw_capable") or {}),
                 }
 
             emit_notice("r1_backtest_negative_sport_gate_variant", {

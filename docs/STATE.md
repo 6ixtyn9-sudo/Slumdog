@@ -1,4 +1,29 @@
 
+### Update 2026-09-29: low-draw lead robust; tail decomposition and gate-space correction
+
+Run `36569213450` directly measured `<0.20` draw surplus `+0.0099782`
+(`n=80668`) with calendar-day `[+0.007705,+0.012329]`, sport-day
+`[+0.007678,+0.012144]`, week `[+0.007653,+0.012014]`, and month
+`[+0.007332,+0.012706]` intervals. It survives the predeclared month criterion:
+the first robust/bankable price-free calibration lead. `0.35+` remains the
+opposite structural fact: `-0.124289 [-0.128943,-0.119436]` under month blocks
+(`n=114300`).
+
+Pooled eligible development differential is significantly negative:
+`-0.0099129 [-0.0136291,-0.0059415]`, `n=196041`; holdout is
+`+0.0069582 [-0.0062140,+0.0201335]`, `n=14488`. The negative-sport gate's
+pooled raw comparison is invalid because excluding three two-way sports and one
+draw-capable sport shifts the outcome-space mixture. Variant evaluation now
+separates two-way underdog surplus from draw-capable underdog-minus-favourite
+differential and prohibits pooled raw merit.
+
+Low draws are now decomposed into four fixed 5-point bands, pooled/per-sport and
+development/holdout, with absolute/relative surplus, firing frequency and
+calendar-day/month intervals. Shape criteria were frozen before execution and
+are recorded in the report. The workflow remained red because stderr redirection
+did not neutralize `find` exit 1 under `pipefail`; corrected grouped pipelines
+are staged under `docs/owner_paste/forward_shadow.yml` for owner replacement.
+
 ### Update 2026-09-29: football edge retracted; low-draw sensitivity is last open upside
 
 Run `36550899550` resolves the football control. Development (`n=106520`):

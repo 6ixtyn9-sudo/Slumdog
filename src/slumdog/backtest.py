@@ -862,6 +862,111 @@ def _three_outcome_calibration(events: list[SettledEvent]) -> dict[str, Any]:
     }
 
 
+LOW_DRAW_TAIL_BANDS: tuple[tuple[str, float, float], ...] = (
+    ("<0.05", 0.0, 0.05),
+    ("0.05-0.10", 0.05, 0.10),
+    ("0.10-0.15", 0.10, 0.15),
+    ("0.15-0.20", 0.15, 0.20),
+)
+
+
+def _low_draw_tail_analysis(events: list[SettledEvent]) -> dict[str, Any]:
+    """Decompose the robust <0.20 draw effect without fitting a selector."""
+    draw_events = [event for event in events if SPORTS[event.sport].draw_settles]
+    labels = [label for label, _lo, _hi in LOW_DRAW_TAIL_BANDS]
+
+    def summarize(group: list[SettledEvent], seed_offset: int) -> dict[str, Any]:
+        by_band: dict[str, list[SettledEvent]] = defaultdict(list)
+        records: list[tuple[str, str, str, float, float]] = []
+        for event in group:
+            probability = event.draw_probability
+            if not isinstance(probability, (int, float)) or isinstance(probability, bool):
+                continue
+            probability = float(probability)
+            label = next((label for label, lo, hi in LOW_DRAW_TAIL_BANDS
+                          if lo <= probability < hi), None)
+            if label is None:
+                continue
+            by_band[label].append(event)
+            records.append((event.sport, event.event_date, label, probability,
+                            1.0 if event.winner_index == 0 else 0.0))
+        buckets = {}
+        for label in labels:
+            rows = by_band.get(label, [])
+            predicted = (sum(float(event.draw_probability) for event in rows) / len(rows)
+                         if rows else None)
+            observed = (sum(1 for event in rows if event.winner_index == 0) / len(rows)
+                        if rows else None)
+            dates = sorted({event.event_date for event in rows})
+            buckets[label] = {
+                "n": len(rows),
+                "mean_predicted_probability": predicted,
+                "observed_hit_rate": observed,
+                "absolute_surplus": (
+                    observed - predicted
+                    if observed is not None and predicted is not None else None),
+                "relative_surplus_observed_divided_by_predicted": (
+                    observed / predicted
+                    if observed is not None and predicted not in (None, 0) else None),
+                "active_days": len(dates),
+                "candidate_rows_per_active_day": (
+                    len(rows) / len(dates) if dates else None),
+                "indicative_only_n_lt_500": len(rows) < 500,
+            }
+        return {
+            "buckets": buckets,
+            "cluster_bootstrap": _cluster_bootstrap_surplus(
+                records, labels, seed=BOOTSTRAP_SEED + seed_offset,
+                scheme_names=("calendar_day_PRIMARY", "calendar_month")),
+        }
+
+    def periods(group: list[SettledEvent], seed_offset: int) -> dict[str, Any]:
+        return {
+            "all": summarize(group, seed_offset),
+            "development_through_cutoff": summarize(
+                [event for event in group if event.event_date <= HOLDOUT_CUTOFF],
+                seed_offset + 1),
+            "holdout_after_cutoff": summarize(
+                [event for event in group if event.event_date > HOLDOUT_CUTOFF],
+                seed_offset + 2),
+        }
+
+    by_sport: dict[str, list[SettledEvent]] = defaultdict(list)
+    for event in draw_events:
+        by_sport[event.sport].append(event)
+    return {
+        "scope": (
+            "all ledger-valid settled rows in draw-capable sports with predicted "
+            "draw probability below 0.20; not a selector and not R1-only"
+        ),
+        "cutoff": HOLDOUT_CUTOFF,
+        "bucket_contract": labels,
+        "interval_contract": (
+            "absolute observed-minus-predicted surplus, calendar-day primary and "
+            "calendar-month sensitivity; relative surplus is observed/predicted"
+        ),
+        "predeclared_shape_interpretation": {
+            "extreme_tail_power_play_shape": (
+                "Development <0.05 month lower bound >0 and its relative ratio is "
+                "at least twice every higher sub-bucket, with at least two higher "
+                "sub-buckets whose month intervals include zero; holdout must repeat "
+                "the direction before the shape is validated."
+            ),
+            "mild_broad_miscalibration_shape": (
+                "At least three of four development month lower bounds exceed zero "
+                "and the range of their absolute-surplus point estimates is <=0.005; "
+                "holdout must repeat the direction before the shape is validated."
+            ),
+            "otherwise": "mixed or unresolved; do not call it a power play",
+        },
+        "pooled": periods(draw_events, 3000),
+        "per_sport": {
+            sport: periods(group, 3100 + index * 10)
+            for index, (sport, group) in enumerate(sorted(by_sport.items()))
+        },
+    }
+
+
 def _eligible_signal_analysis(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Calibration over every R2-eligible underdog, not only daily R1."""
     def frequency(group: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1004,25 +1109,66 @@ def _negative_sport_gate_variant(
 
     def period(group: list[dict[str, Any]], seed_offset: int) -> dict[str, Any]:
         kept = [row for row in group if row["sport"] not in excluded]
-        records = [
-            (row["sport"], row["event_date"], "all",
-             float(row["underdog_probability"]),
-             1 if row.get("grade") == "SUCCESS" else 0)
-            for row in kept
-            if isinstance(row.get("underdog_probability"), (int, float))
-            and not isinstance(row.get("underdog_probability"), bool)
-            and row.get("grade") in ("SUCCESS", "FAILURE")
-        ]
+
+        def outcome_space(draw_capable: bool, offset: int) -> dict[str, Any]:
+            frozen_rows = [row for row in group
+                           if SPORTS[row["sport"]].draw_settles == draw_capable]
+            variant_rows = [row for row in kept
+                            if SPORTS[row["sport"]].draw_settles == draw_capable]
+            if draw_capable:
+                frozen_metric = _draw_space_split(frozen_rows)[
+                    "draw_capable_sports"]["pooled"]
+                variant_metric = _draw_space_split(variant_rows)[
+                    "draw_capable_sports"]["pooled"]
+                records = []
+                for row in variant_rows:
+                    dog_p = row.get("underdog_probability")
+                    fav_p = row.get("favorite_probability")
+                    dog_grade = row.get("grade")
+                    fav_grade = _grade_pick(row, row.get("favorite_index"))
+                    if (not isinstance(dog_p, (int, float)) or isinstance(dog_p, bool)
+                            or not isinstance(fav_p, (int, float))
+                            or isinstance(fav_p, bool)
+                            or dog_grade not in ("SUCCESS", "FAILURE")
+                            or fav_grade not in ("SUCCESS", "FAILURE")):
+                        continue
+                    records.append((
+                        row["sport"], row["event_date"], "all",
+                        float(dog_p) - float(fav_p),
+                        float((1 if dog_grade == "SUCCESS" else 0)
+                              - (1 if fav_grade == "SUCCESS" else 0)),
+                    ))
+                metric_name = "underdog_minus_favourite_differential"
+            else:
+                frozen_metric = _surplus_with_shifted_wilson(
+                    _calibration_block(frozen_rows, side="underdog"))
+                variant_metric = _surplus_with_shifted_wilson(
+                    _calibration_block(variant_rows, side="underdog"))
+                records = [
+                    (row["sport"], row["event_date"], "all",
+                     float(row["underdog_probability"]),
+                     1.0 if row.get("grade") == "SUCCESS" else 0.0)
+                    for row in variant_rows
+                    if isinstance(row.get("underdog_probability"), (int, float))
+                    and not isinstance(row.get("underdog_probability"), bool)
+                    and row.get("grade") in ("SUCCESS", "FAILURE")
+                ]
+                metric_name = "underdog_surplus"
+            return {
+                "merit_metric": metric_name,
+                "frozen_r1": frozen_metric,
+                "variant_r1": variant_metric,
+                "rows_removed": len(frozen_rows) - len(variant_rows),
+                "variant_calendar_day_cluster_bootstrap": _cluster_bootstrap_surplus(
+                    records, ["all"], seed=BOOTSTRAP_SEED + seed_offset + offset,
+                    scheme_names=("calendar_day_PRIMARY",)),
+            }
+
         return {
-            "frozen_r1_all_sports": _surplus_with_shifted_wilson(
-                _calibration_block(group, side="underdog")),
-            "variant_r1_after_gate": _surplus_with_shifted_wilson(
-                _calibration_block(kept, side="underdog")),
-            "rows_removed": len(group) - len(kept),
-            "calendar_day_cluster_bootstrap": _cluster_bootstrap_surplus(
-                records, ["all"], seed=BOOTSTRAP_SEED + seed_offset,
-                scheme_names=("calendar_day_PRIMARY",)),
-            "draw_space_split_after_gate": _draw_space_split(kept),
+            "pooled_raw_surplus_prohibited_due_to_outcome_space_mix_shift": True,
+            "two_way": outcome_space(False, 0),
+            "draw_capable": outcome_space(True, 1),
+            "total_rows_removed": len(group) - len(kept),
         }
 
     development = [row for row in r1_rows if row["event_date"] <= HOLDOUT_CUTOFF]
@@ -1039,9 +1185,11 @@ def _negative_sport_gate_variant(
         "holdout_after_cutoff": period(holdout, 2002),
         "warning": (
             "This hypothesis was prompted by inspected sport effects and remains "
-            "multiplicity-exposed. Holdout comparison is evidence, not permission "
-            "to mutate frozen R1. Draw-capable merit remains the underdog-minus-"
-            "favourite control in draw_space_split_after_gate."
+            "multiplicity-exposed. Never compare pooled raw surplus before/after "
+            "this gate: excluding three two-way sports and one draw-capable sport "
+            "changes the outcome-space mix and mechanically changes draw-artifact "
+            "exposure. Two-way merit is underdog surplus; draw-capable merit is "
+            "the underdog-minus-favourite differential."
         ),
     }
 
@@ -1150,6 +1298,7 @@ def r1_backtest(root: Path | str = ".", target_date: str | None = None) -> Path:
         },
         "corpus_wide_reconstruction_counts": dict(corpus_wide_reconstruction_counts),
         "three_outcome_calibration_map": _three_outcome_calibration(all_settled_events),
+        "low_draw_tail_analysis": _low_draw_tail_analysis(all_settled_events),
         "eligible_underdog_signal": eligible_signal,
         "negative_sport_gate_variant": _negative_sport_gate_variant(
             eligible_signal, all_r1_rows),
@@ -1356,6 +1505,51 @@ def _render_r1_backtest_markdown(analysis: dict[str, Any]) -> str:
                 lines.append(
                     f"| {scheme} | {label} | {ci} | {scheme_result.get('blocks')} |"
                 )
+
+    tail = analysis.get("low_draw_tail_analysis") or {}
+    if tail:
+        lines += [
+            "", "## Low-draw tail decomposition", "", tail.get("scope", ""), "",
+            "Predeclared interpretation: "
+            + json.dumps(tail.get("predeclared_shape_interpretation", {}),
+                         sort_keys=True),
+            "",
+            "| Scope | Period | Bucket | n | Predicted | Observed | Absolute surplus | Observed/predicted | Calendar-day 95% | Month 95% | Rows/active day |",
+            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+        tail_scopes = [("pooled", tail.get("pooled") or {})]
+        tail_scopes.extend((sport, periods)
+                           for sport, periods in (tail.get("per_sport") or {}).items())
+        for scope, periods in tail_scopes:
+            for period_name in ("development_through_cutoff", "holdout_after_cutoff"):
+                period = periods.get(period_name) or {}
+                schemes = (period.get("cluster_bootstrap") or {}).get("schemes") or {}
+                for label in tail.get("bucket_contract", []):
+                    bucket = (period.get("buckets") or {}).get(label) or {}
+                    day = (schemes.get("calendar_day_PRIMARY", {}).get("buckets", {})
+                           .get(label, {}))
+                    month = (schemes.get("calendar_month", {}).get("buckets", {})
+                             .get(label, {}))
+                    def interval(block: dict) -> str:
+                        lo = block.get("bootstrap_95_lo")
+                        hi = block.get("bootstrap_95_hi")
+                        return (f"{lo:+.2%}..{hi:+.2%}"
+                                if lo is not None and hi is not None else "-")
+                    def percent(value: float | None) -> str:
+                        return f"{value:.2%}" if value is not None else "-"
+                    relative = bucket.get(
+                        "relative_surplus_observed_divided_by_predicted")
+                    frequency = bucket.get("candidate_rows_per_active_day")
+                    relative_text = f"{relative:.3f}" if relative is not None else "-"
+                    frequency_text = f"{frequency:.3f}" if frequency is not None else "-"
+                    lines.append(
+                        f"| {scope} | {period_name} | {label} | {bucket.get('n', 0)} | "
+                        f"{percent(bucket.get('mean_predicted_probability'))} | "
+                        f"{percent(bucket.get('observed_hit_rate'))} | "
+                        f"{percent(bucket.get('absolute_surplus'))} | "
+                        f"{relative_text} | {interval(day)} | {interval(month)} | "
+                        f"{frequency_text} |"
+                    )
 
     signal = analysis.get("eligible_underdog_signal") or {}
     if signal:

@@ -371,8 +371,12 @@ class TestBaselinesAndBands:
         variant = analysis["negative_sport_gate_variant"]
         assert variant["status"] == "ANALYSIS_ONLY_PARALLEL_VARIANT_NOT_A_LIVE_GATE"
         assert variant["excluded_sports_selected_on_development_only"] == []
-        assert variant["development_through_cutoff"]["rows_removed"] == 0
-        assert "permission" in variant["warning"]
+        development_variant = variant["development_through_cutoff"]
+        assert development_variant[
+            "pooled_raw_surplus_prohibited_due_to_outcome_space_mix_shift"] is True
+        assert development_variant["two_way"]["rows_removed"] == 0
+        assert development_variant["draw_capable"]["rows_removed"] == 0
+        assert "outcome-space mix" in variant["warning"]
 
     def test_three_outcome_map_uses_all_draw_capable_settled_rows(self, tmp_path):
         event = _ev(
@@ -394,6 +398,37 @@ class TestBaselinesAndBands:
         home = outcome_map["pooled"]["home"]["buckets"]["0.35+"]
         assert home["hit_rate"] == pytest.approx(0.0)
         assert home["observed_minus_predicted"] == pytest.approx(-0.4)
+
+    def test_low_draw_tail_reports_relative_surplus_frequency_and_two_blocks(
+            self, tmp_path):
+        events = [
+            _ev(f"draw-tail-{index}", "football", f"2026-01-0{index}",
+                "Home", "Away", winner_index=0,
+                probability_1=0.60, probability_2=0.36 - probability,
+                draw_probability=probability, disposition="SETTLED_DRAW")
+            for index, probability in enumerate((0.04, 0.08, 0.12, 0.18), start=1)
+        ]
+        _write_ledger(tmp_path, "football", events)
+        analysis = json.loads(r1_backtest(
+            tmp_path, target_date="2026-02-01").read_text())[
+                "low_draw_tail_analysis"]
+        assert analysis["bucket_contract"] == [
+            "<0.05", "0.05-0.10", "0.10-0.15", "0.15-0.20"]
+        bucket = analysis["pooled"]["development_through_cutoff"][
+            "buckets"]["<0.05"]
+        assert bucket["n"] == 1
+        assert bucket["mean_predicted_probability"] == pytest.approx(0.04)
+        assert bucket["observed_hit_rate"] == pytest.approx(1.0)
+        assert bucket["absolute_surplus"] == pytest.approx(0.96)
+        assert bucket[
+            "relative_surplus_observed_divided_by_predicted"] == pytest.approx(25.0)
+        assert bucket["candidate_rows_per_active_day"] == pytest.approx(1.0)
+        bootstrap = analysis["per_sport"]["football"][
+            "development_through_cutoff"]["cluster_bootstrap"]
+        assert set(bootstrap["schemes"]) == {
+            "calendar_day_PRIMARY", "calendar_month"}
+        assert "extreme_tail_power_play_shape" in analysis[
+            "predeclared_shape_interpretation"]
 
     def test_baselines_computed_on_the_same_rows(self, tmp_path):
         events = _build_eligible_scenario(winner_index=2)
