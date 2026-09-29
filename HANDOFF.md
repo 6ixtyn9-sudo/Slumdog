@@ -1,9 +1,36 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — fold arbiter settled draw information; observation freeze next.**
+
+Direct workflow log for run `36594243909` gives `RETAIN_AND_SHRINK` for both
+main draw sports. Football: development base `0.2482762153`, alpha
+`0.2914758229`, mean sequential-fold Brier gain over base `+0.0008809579`,
+paired interval `[+0.0006071473,+0.0011462094]`, 10/10 positive, exact sign
+`p=0.001953125`. Handball: base `0.0652940025`, alpha `0.2350789837`, mean gain
+`+0.0002451233`, interval `[+0.0001455982,+0.0003350729]`, 9/10 positive,
+`p=0.021484375`. Cricket is `DISCARD_TO_BASE_RATE_NOT_REJECTED`: base
+`0.3812709030`, alpha `0.5051737546`, mean `+0.0053689845`, interval
+`[-0.0003877882,+0.0141724014]`, 3/6 positive, `p=1.0`. Evaluation quarters are
+disjoint but expanding fit windows overlap, so this establishes temporal
+transfer under growing fits, not independent replication. The three-month
+terminal holdout is descriptive; the fold test was predeclared as arbiter before
+this output.
+
+One output remains: surface the already-computed home/away arbiters and alphas.
+Then analysis freezes until 500 graded EVENT_DAY picks or 2026-12-28, whichever
+comes first. Existing scorecard, calibration, and arbiter only; no variants.
+Football facets are captured but not selected on. `SettledEvent` and its ledger
+writer now preserve explicit row-level `facet_timing`; absent timing fails closed,
+so old history is not retroactively eligible. The hosted transport is still
+blocked and accumulated zero new capture evidence in this run; waiting becomes
+productive only after relay recovery or ordinary-IP execution.
+
 **2026-09-29 — advance-requested guard overturned the raw comparison.**
 
-Owner-supplied direct output records `DISCARD_TO_BASE_RATE_NOT_REJECTED` for both
-draw sports. Football holdout Brier was raw `0.185392`, shrink `0.177842`, and
+The provisional three-month holdout guard returned
+`DISCARD_TO_BASE_RATE_NOT_REJECTED` for both draw sports before the predeclared
+fold arbiter ran; it is preserved as a methodological worked example, not the
+standing verdict. Football holdout Brier was raw `0.185392`, shrink `0.177842`, and
 development-base-only `0.178055`: base-minus-shrink `+0.000213`, month interval
 `[-0.00004,+0.00078]`; log loss was `0.557430`, `0.540865`, and `0.541554`,
 respectively, for information gain `+0.000689`. Handball Brier was raw
@@ -15,15 +42,13 @@ information beyond a constant predictor. This is the seventh worked example and
 the first false positive caught by a guard requested in advance rather than by
 later inspection.
 
-Do not yet finalize “ignore draw probability entirely”: the terminal holdout has
-only three month blocks, while sequential quarters report shrink beating base in
-10/10 football and 9/10 handball folds. The now-predeclared arbiter pools one
-unweighted base-minus-shrink Brier difference per sequential fold, reporting its
-mean, paired fold-bootstrap interval, and exact two-sided sign test. Retain only
-with at least eight folds, positive mean, interval lower bound >0, and p<0.05;
-otherwise use the sport development base rate. Overlapping expanding fit windows
-remain an explicit dependence caveat. Home, away, and draw outcomes use the same
-three-way comparison separately by genuine-board sport. Frozen R1 is unchanged.
+The contradiction was resolved by the predeclared fold arbiter: terminal
+holdout had only three month blocks, while sequential quarters found shrink
+beating base in 10/10 football and 9/10 handball folds. The arbiter uses one
+unweighted base-minus-shrink Brier difference per fold, its paired bootstrap,
+and an exact two-sided sign test. Its standing verdict is recorded above.
+Overlapping expanding fit windows remain an explicit dependence caveat. Frozen
+R1 is unchanged.
 
 **2026-09-29 — football confirms shared over-dispersion; one-parameter recalibration implemented.**
 

@@ -147,10 +147,25 @@ class SettledEvent:
     participant_2_id: str = ""
     league_id: str = ""
     facets: dict[str, Any] = field(default_factory=dict)
+    # Timing provenance travels with each settled facet. Missing timing is
+    # deliberately UNKNOWN and can never be treated as pre-event evidence.
+    facet_timing: dict[str, TimingClass] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.winner_index not in (0, 1, 2):
             raise ValueError("winner_index must be 0, 1 or 2")
+        if not isinstance(self.facets, dict) or not isinstance(self.facet_timing, dict):
+            raise ValueError("facets and facet_timing must be dictionaries")
+        if any(not isinstance(value, TimingClass)
+               for value in self.facet_timing.values()):
+            raise ValueError("facet_timing values must be TimingClass")
+
+    def pre_event_facets(self) -> dict[str, Any]:
+        """Return only facets carrying explicit row-level PRE_EVENT provenance."""
+        return {
+            key: value for key, value in self.facets.items()
+            if self.facet_timing.get(key) == TimingClass.PRE_EVENT
+        }
 
 
 @dataclass(frozen=True)

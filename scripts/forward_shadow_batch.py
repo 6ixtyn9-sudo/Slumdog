@@ -451,6 +451,35 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                 "folds_and_curve_in_full_report": True,
             })
 
+        all_outcomes = analysis.get("all_outcome_probability_recalibration") or {}
+        compact_outcomes = {}
+        for outcome, outcome_result in (all_outcomes.get("outcomes") or {}).items():
+            compact_outcomes[outcome] = {}
+            for sport, result in (outcome_result.get("per_sport") or {}).items():
+                fit = result.get("development_fit") or {}
+                fold_test = result.get("paired_sequential_fold_information_test") or {}
+                compact_outcomes[outcome][sport] = {
+                    "alpha": fit.get("shrink_coefficient"),
+                    "development_base_rate": fit.get("base_rate"),
+                    "information_verdict": result.get("information_verdict"),
+                    "fold_mean_brier_gain_base_minus_shrink": fold_test.get(
+                        "brier_mean_information_gain_base_minus_shrink"),
+                    "fold_brier_95": [
+                        fold_test.get("brier_paired_fold_bootstrap_95_lo"),
+                        fold_test.get("brier_paired_fold_bootstrap_95_hi"),
+                    ],
+                    "positive_folds": fold_test.get("brier_positive_folds"),
+                    "nonzero_folds": fold_test.get("brier_nonzero_folds"),
+                    "sign_test_p": fold_test.get(
+                        "brier_two_sided_exact_sign_test_p"),
+                }
+        if compact_outcomes:
+            emit_notice("r1_backtest_all_outcome_recalibration", {
+                "scope": all_outcomes.get("scope"),
+                "outcomes": compact_outcomes,
+                "full_scores_and_dependence_caveat_in_report": True,
+            })
+
         inventory = analysis.get("corpus_inventory") or {}
         per_sport = {}
         for sport, info in (inventory.get("per_sport") or {}).items():

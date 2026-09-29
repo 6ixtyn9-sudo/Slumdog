@@ -1,4 +1,64 @@
 
+### Standing characterisation and observation freeze — 2026-09-29
+
+**MEASURED, direct workflow log, run `36594243909`:** Forebet draw forecasts
+retain small but temporally persistent information after strong shrinkage.
+Football is `RETAIN_AND_SHRINK`: development n=312,394, base `0.2482762153`,
+alpha `0.2914758229`; the mean unweighted sequential-quarter Brier information
+gain (base minus shrink) is `+0.0008809579`, paired fold-bootstrap 95%
+`[+0.0006071473,+0.0011462094]`, 10/10 positive, exact two-sided sign-test
+`p=0.001953125`. Handball is `RETAIN_AND_SHRINK`: development n=30,646, base
+`0.0652940025`, alpha `0.2350789837`; mean gain `+0.0002451233`, interval
+`[+0.0001455982,+0.0003350729]`, 9/10 positive, `p=0.021484375`. Cricket is
+`DISCARD_TO_BASE_RATE_NOT_REJECTED`: development n=897, base `0.3812709030`,
+alpha `0.5051737546`; mean gain `+0.0053689845`, interval
+`[-0.0003877882,+0.0141724014]`, only 3/6 positive, `p=1.0`. Cricket settlement
+is a match-result draw and remains separate from football/handball score draws.
+
+The terminal holdout remains descriptive: it had only three calendar-month
+blocks and could not resolve football's roughly three-ten-thousandths Brier
+advantage. The fold arbiter was frozen before this run and reversed that holdout
+verdict. Evaluation quarters are disjoint, but expanding training windows
+overlap; these intervals measure temporal transfer under a growing fit, not ten
+independent replications. Alpha retains the stated fraction of deviation from
+the sport/outcome development base rate. Thus Forebet's football/handball draw
+probabilities are real but strongly over-dispersed: retain roughly 29%/24% of
+the deviation and discard the rest. This is probability calibration, not a
+betting edge, payout, EV, Kelly, staking advice, or a new selector. Frozen R1
+still has no measurable clean pooled edge and remains unchanged.
+
+**One final characterization output, then stop analysis:** surface the already
+implemented home-win and away-win raw/shrink/base fold arbiters beside draw,
+including outcome-specific alpha. No new selector, facet model, gate, slice, or
+historical analytical variant is permitted after that output. The open question
+is descriptive only: whether win outcomes retain materially more deviation from
+their base rates than draw outcomes.
+
+**Frozen observation trigger:** after the home/away output is recorded, wait
+until either (a) the `EVENT_DAY` track reaches 500 graded picks or (b) 90 days
+elapse from 2026-09-29 (2026-12-28), whichever occurs first. At the trigger, run
+only the existing scorecard, calibration curves, and fold arbiter against the
+figures above. Do not move thresholds or add variants while waiting. Every
+n<500 slice remains indicative only.
+
+**Facet readiness:** football listing capture already records form, position,
+trend, and goal-average facets with explicit `PRE_EVENT` timing, but no selector
+uses them. `SettledEvent` and the history ledger now preserve row-level
+`facet_timing`; missing or malformed timing fails closed, so only explicitly
+`PRE_EVENT` facets can become eligible in future forward evidence. Historical
+rows without timing remain ineligible and are never retroactively blessed.
+
+**Operational blocker:** run `36594243909` again found relay challenge content
+and direct `HTTPError`; all capture phases were skipped, so waiting on the hosted
+runner currently accumulates zero evidence. Productive waiting requires relay
+recovery or execution from an ordinary-IP machine. The evidence commit
+`2d91739` also failed to rebase because the shallow branch and `main` produced
+add/add conflicts across eleven files; the generated-report shelter worked, so
+untracked reports are no longer the failure. Artifact `forward-shadow-36594243909`
+was preserved as ID `11046240038`, SHA-256
+`6cf5da10842018692cefcfe2f4ab0ff86ef22bb144800a16b24c082a768bd53f`.
+The persist workflow fix is on the session branch but must merge to `main`.
+
 ### Update 2026-09-29: shared draw over-dispersion; recalibration pending evaluation
 
 Football confirms the same directional defect as handball but still

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from slumdog.contracts import EventSnapshot, PriceState, TimingClass
+from slumdog.contracts import EventSnapshot, PriceState, SettledEvent, TimingClass
 
 
 def make_event(**overrides):
@@ -31,6 +31,26 @@ def make_event(**overrides):
 def test_only_explicit_pre_event_facets_are_model_eligible():
     event = make_event()
     assert event.pre_event_facets() == {"rank_gap": 12}
+
+
+def test_settled_facets_fail_closed_without_row_level_timing():
+    settled = SettledEvent(
+        event_id="football:x-y", sport="football", event_date="2026-09-29",
+        participant_1="X", participant_2="Y", winner_index=1,
+        score_1=1, score_2=0, probability_1=0.6, probability_2=0.2,
+        draw_probability=0.2, forebet_pick=1,
+        facets={"form_1": 0.8, "position_1": 2},
+        facet_timing={"form_1": TimingClass.PRE_EVENT},
+    )
+    assert settled.pre_event_facets() == {"form_1": 0.8}
+    with pytest.raises(ValueError, match="TimingClass"):
+        SettledEvent(
+            event_id="bad", sport="football", event_date="2026-09-29",
+            participant_1="X", participant_2="Y", winner_index=1,
+            score_1=1, score_2=0, probability_1=0.6, probability_2=0.2,
+            draw_probability=0.2, forebet_pick=1,
+            facet_timing={"form_1": "PRE_EVENT"},
+        )
 
 
 def test_missing_odds_is_explicit():
