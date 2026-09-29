@@ -1503,6 +1503,26 @@ class TestOfflineBacktestInForwardDriver:
                         "by_underdog_probability_band": {},
                         "by_sport": {},
                     },
+                    "draw_space_split": {
+                        "two_way_sports": {
+                            "sports": ["basketball"],
+                            "pooled": {"mean_predicted_probability": 0.4,
+                                       "hit_rate": 0.45, "successes": 45,
+                                       "n": 100, "wilson_95_lo": 0.35,
+                                       "wilson_95_hi": 0.55,
+                                       "observed_minus_predicted": 0.05},
+                            "per_sport": {},
+                        },
+                        "draw_capable_sports": {
+                            "sports": ["football"],
+                            "pooled": {"n": 50, "differential_surplus": 0.01},
+                            "per_sport": {},
+                        },
+                    },
+                    "coverage": {"distinct_sport_days": 100,
+                                 "distinct_calendar_days": 90,
+                                 "mean_r1_picks_per_sport_day": 1.0,
+                                 "mean_r1_picks_per_calendar_day": 1.1},
                     "raw_hit_rate_note": "descriptive, not merit",
                     "baselines_same_rows": {
                         "our_r1_pick": {"successes": 400, "n": 1000,
@@ -1514,6 +1534,13 @@ class TestOfflineBacktestInForwardDriver:
                             "hit_rate": 0.6111111111},
                     },
                 },
+            },
+            "three_outcome_calibration_map": {
+                "scope": "all rows", "sports": ["football"],
+                "settled_rows_in_draw_capable_sports": 500,
+                "warning": "n<500 indicative",
+                "pooled": {"draw": {"buckets": {"0.30-0.35": {"n": 500}}}},
+                "per_sport": {},
             },
             "corpus_inventory": {
                 "sports_with_a_ledger_in_this_checkout": 1,
@@ -1544,6 +1571,8 @@ class TestOfflineBacktestInForwardDriver:
         assert result["status"] == "COMPLETED"
         assert [title for title, _ in notices] == [
             "r1_backtest_verdict", "r1_backtest_calibration",
+            "r1_backtest_draw_space_split", "r1_backtest_three_outcome_scope",
+            "r1_backtest_three_outcome_pooled_draw",
             "r1_backtest_raw_rates", "r1_backtest_inventory"]
         verdict = notices[0][1]
         assert verdict["provenance_verdict"]["STANDARD"] == {
@@ -1559,11 +1588,15 @@ class TestOfflineBacktestInForwardDriver:
             "wilson_95_lo": 0.37, "wilson_95_hi": 0.43,
             "observed_minus_predicted": 0.05,
         }
-        raw = notices[2][1]
+        split = notices[2][1]["HISTORICAL_PAGE"]
+        assert split["coverage"]["distinct_sport_days"] == 100
+        assert split["two_way_sports"]["sports"] == ["basketball"]
+        assert notices[4][1] == {"buckets": {"0.30-0.35": {"n": 500}}}
+        raw = notices[5][1]
         assert raw["descriptive_not_merit_metric"] is True
         assert raw["populations"]["HISTORICAL_PAGE"]["our_r1_pick"] == {
             "successes": 400, "n": 1000, "hit_rate": 0.4}
-        inventory = notices[3][1]
+        inventory = notices[6][1]
         assert inventory["seeded_history_files_on_disk"] == 2
         assert inventory["per_sport"] == {
             "football": {"settled_row_count": 1234,

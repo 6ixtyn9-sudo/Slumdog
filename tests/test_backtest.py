@@ -248,6 +248,60 @@ class TestBaselinesAndBands:
         assert "Observed - predicted" in text
         assert "Favourite control" in text
 
+    def test_draw_space_split_keeps_two_way_clean_and_draw_differential(self,
+                                                                        tmp_path):
+        football = _build_eligible_scenario(sport="football", winner_index=2)
+        basketball = _build_eligible_scenario(
+            sport="basketball", winner_index=2,
+            test_event_date=_date(101))
+        hockey = _build_eligible_scenario(
+            sport="hockey", winner_index=2,
+            test_event_date=_date(102))
+        _write_ledger(tmp_path, "football", football)
+        _write_ledger(tmp_path, "basketball", basketball)
+        _write_ledger(tmp_path, "hockey", hockey)
+        path = r1_backtest(tmp_path, target_date="2026-01-01")
+        scorecard = json.loads(path.read_text())["populations"]["HISTORICAL_PAGE"]
+        split = scorecard["draw_space_split"]
+        assert split["two_way_sports"]["sports"] == ["basketball", "hockey"]
+        assert split["draw_capable_sports"]["sports"] == ["football"]
+        pooled = split["two_way_sports"]["pooled"]
+        assert pooled["n"] == 2
+        assert pooled["mean_predicted_probability"] == pytest.approx(0.4)
+        assert pooled["hit_rate"] == pytest.approx(1.0)
+        assert pooled["observed_minus_predicted"] == pytest.approx(0.6)
+        assert pooled["surplus_wilson_95_lo"] == pytest.approx(
+            pooled["wilson_95_lo"] - 0.4)
+        assert pooled["indicative_only_n_lt_500"] is True
+        draw = split["draw_capable_sports"]["pooled"]
+        assert draw["n"] == 1
+        assert draw["differential_surplus"] == pytest.approx(1.2)
+        assert "paired" in draw["differential_interval_method"]
+        coverage = scorecard["coverage"]
+        assert coverage["distinct_sport_days"] == 3
+        assert coverage["mean_r1_picks_per_sport_day"] == pytest.approx(1.0)
+
+    def test_three_outcome_map_uses_all_draw_capable_settled_rows(self, tmp_path):
+        event = _ev(
+            "draw-1", "football", _date(1), "Home", "Away", winner_index=0,
+            probability_1=0.4, probability_2=0.3, draw_probability=0.3,
+            disposition="SETTLED_DRAW",
+        )
+        _write_ledger(tmp_path, "football", [event])
+        path = r1_backtest(tmp_path, target_date="2026-01-01")
+        outcome_map = json.loads(path.read_text())["three_outcome_calibration_map"]
+        assert outcome_map["sports"] == ["football"]
+        assert outcome_map["settled_rows_in_draw_capable_sports"] == 1
+        draw = outcome_map["pooled"]["draw"]["buckets"]["0.30-0.35"]
+        assert draw["n"] == 1
+        assert draw["mean_predicted_probability"] == pytest.approx(0.3)
+        assert draw["hit_rate"] == pytest.approx(1.0)
+        assert draw["observed_minus_predicted"] == pytest.approx(0.7)
+        assert draw["indicative_only_n_lt_500"] is True
+        home = outcome_map["pooled"]["home"]["buckets"]["0.35+"]
+        assert home["hit_rate"] == pytest.approx(0.0)
+        assert home["observed_minus_predicted"] == pytest.approx(-0.4)
+
     def test_baselines_computed_on_the_same_rows(self, tmp_path):
         events = _build_eligible_scenario(winner_index=2)
         _write_ledger(tmp_path, "football", events)

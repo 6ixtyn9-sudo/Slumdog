@@ -1,4 +1,29 @@
 
+### Update 2026-09-29: draw-space split and price-free three-outcome map
+
+Measured run `36540808677` shows why pooled surplus is insufficient. In R1 band
+`0.20-0.30`, underdog surplus is `0.09073962264150942` (`n=424`) while the
+same-row favourite control is also positive at `0.04712075471698107`: shared
+movement is consistent with draw miscalibration, not clean selection edge. The
+`0.40+` band holds `n=5722`; predicted `0.4485477105907026`, observed `0.4549`,
+Wilson `0.4420..0.4678`, surplus `0.00635228940929744`. Positive sign, but the
+prediction lies inside the observed interval.
+
+Backtest output now separates two-way sports from draw-capable sports using the
+registry's actual `draw_settles` contract. Two-way rows report clean pooled and
+per-sport underdog surplus plus shifted Wilson bounds. Draw-capable rows report
+underdog surplus minus favourite surplus with a stated paired interval. All
+carry n and an n<500 indicator. Coverage includes distinct sport-days/calendar
+days and mean picks per each.
+
+A separate whole-corpus map covers home, away and draw in draw-capable sports,
+bucketed by each outcome's own predicted probability (`<0.20`, `0.20-0.25`,
+`0.25-0.30`, `0.30-0.35`, `0.35+`), pooled and per sport. Every bucket reports
+mean predicted, observed, Wilson interval, surplus and n. "Power play" means a
+positive calibration surplus on held-out evidence, never price, payout, EV or
+Kelly. No selector or frozen rule changed; the map precedes any separately
+labelled parallel-track proposal.
+
 ### Update 2026-09-29: STANDARD provenance is IDENTICAL; calibration replaces raw hit rate as the merit test
 
 Run `36539053490`, job `109309839581`, was read by anonymous check-run

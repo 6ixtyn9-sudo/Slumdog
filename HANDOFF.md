@@ -1,5 +1,47 @@
 # Slumdog Living Handoff
 
+**2026-09-29 — draw-space split and three-outcome calibration map implemented; no selector tuned.**
+
+Run `36540808677`, job `109315483001`, calibration annotations were read this
+session. Exact measured examples: overall favourite control
+`mean_predicted_probability=0.5193502218405611`, `observed_hit_rate=0.5190`,
+`observed_minus_predicted=-0.0003502218405611046`, `n=6987`; R1 band
+`0.20-0.30` has predicted `0.26066037735849057`, observed `0.3514`, surplus
+`0.09073962264150942`, `n=424`, while its same-row favourite control surplus is
+`0.04712075471698107`. Therefore the R1 band's raw +9.1 points is not labelled
+selection edge: both win sides move upward, consistent with draw-probability
+miscalibration. In the dominant `0.40+` band, R1 predicted
+`0.4485477105907026`, observed `0.4549`, surplus `0.00635228940929744`,
+Wilson observed `0.4420..0.4678`, `n=5722`; predicted lies inside that interval.
+The measured sign is positive but no robust edge is established by this pooled
+view.
+
+The backtest now separates outcome spaces using `SportSpec.draw_settles`, not a
+handwritten sport list. Two-way: basketball, tennis, hockey (its overtime
+contract settles two-way), baseball, american football, rugby, volleyball.
+Draw-capable: football, handball, cricket, and MMA (MMA's board is two-price but
+its outcome contract permits a settled draw). For two-way R1 rows it reports
+pooled and per-sport underdog calibration surplus with Wilson-shifted surplus
+bounds. For draw-capable R1 rows it reports underdog surplus minus favourite
+surplus, with a stated paired normal 95% interval. Every sport/slice has n and
+`indicative_only_n_lt_500`.
+
+Coverage now records distinct sport-days, distinct calendar days, mean R1 picks
+per sport-day, and mean R1 picks per calendar day. Separately, the whole settled
+corpus (not only R1 picks) gets a three-outcome map for draw-capable sports:
+home, away, and draw, each bucketed by its own predicted probability at `<0.20`,
+`0.20-0.25`, `0.25-0.30`, `0.30-0.35`, `0.35+`; each bucket carries predicted
+mean, observed rate, Wilson interval, surplus, n and the n<500 flag, pooled and
+per sport. Notices are split by outcome and sport so no result is silently
+truncated.
+
+"Power play" remains price-free: rare is not sufficient; candidate evidence is
+a positive held-out calibration surplus with adequate n. Odds, EV, Kelly and
+staking remain barred. No draw selector, power-play selector, band restriction,
+sport gate, threshold, or frozen R1 change was made. The map must be read before
+any parallel-track proposal; any eventual selector must be separately labelled
+and evaluated on the post-2026-06-30 holdout.
+
 **2026-09-29 — provenance unlock read from run `36539053490`; calibration is now the primary merit metric.**
 
 Anonymous check-run annotations for job `109309839581` were read directly this

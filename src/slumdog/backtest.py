@@ -46,6 +46,7 @@ rows, see each sport's ``manifest_section`` counts -- and is recorded in
 from __future__ import annotations
 
 import json
+import math
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -189,6 +190,9 @@ def _reconstruct_sport(sport: str, root: Path) -> dict[str, Any]:
                 "favorite_index": identity.favorite_index,
                 "underdog_probability": identity.underdog_probability,
                 "favorite_probability": identity.favorite_probability,
+                "probability_1": ev.probability_1,
+                "probability_2": ev.probability_2,
+                "draw_probability": ev.draw_probability,
                 "settled_context": {"forebet_pick": ev.forebet_pick},
                 "reconstruction": ev.reconstruction,
                 "rank_within_sport_day": rank_idx,
@@ -438,6 +442,103 @@ def _calibration(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _surplus_with_shifted_wilson(block: dict[str, Any]) -> dict[str, Any]:
+    predicted = block.get("mean_predicted_probability")
+    lo = block.get("wilson_95_lo")
+    hi = block.get("wilson_95_hi")
+    return {
+        **block,
+        "surplus_wilson_95_lo": lo - predicted if lo is not None and predicted is not None else None,
+        "surplus_wilson_95_hi": hi - predicted if hi is not None and predicted is not None else None,
+        "indicative_only_n_lt_500": (block.get("n") or 0) < 500,
+    }
+
+
+def _draw_space_split(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Separate clean two-way calibration from draw-capable differential."""
+    two_way = [row for row in rows if not SPORTS[row["sport"]].draw_settles]
+    draw_capable = [row for row in rows if SPORTS[row["sport"]].draw_settles]
+
+    def two_way_block(group: list[dict[str, Any]]) -> dict[str, Any]:
+        return _surplus_with_shifted_wilson(
+            _calibration_block(group, side="underdog"))
+
+    def differential(group: list[dict[str, Any]]) -> dict[str, Any]:
+        dog = _calibration_block(group, side="underdog")
+        fav = _calibration_block(group, side="favorite")
+        usable = []
+        for row in group:
+            dog_p = row.get("underdog_probability")
+            fav_p = row.get("favorite_probability")
+            dog_grade = row.get("grade")
+            fav_grade = _grade_pick(row, row.get("favorite_index"))
+            if (not isinstance(dog_p, (int, float)) or isinstance(dog_p, bool)
+                    or not isinstance(fav_p, (int, float)) or isinstance(fav_p, bool)
+                    or dog_grade not in ("SUCCESS", "FAILURE")
+                    or fav_grade not in ("SUCCESS", "FAILURE")):
+                continue
+            observed_difference = ((1 if dog_grade == "SUCCESS" else 0)
+                                   - (1 if fav_grade == "SUCCESS" else 0))
+            usable.append((observed_difference, float(dog_p) - float(fav_p)))
+        if usable:
+            values = [observed - predicted for observed, predicted in usable]
+            mean = sum(values) / len(values)
+            if len(values) > 1:
+                variance = sum((value - mean) ** 2 for value in values) / (len(values) - 1)
+                half_width = 1.96 * math.sqrt(variance / len(values))
+            else:
+                half_width = None
+        else:
+            mean = None
+            half_width = None
+        return {
+            "n": len(usable),
+            "underdog": dog,
+            "favourite_control": fav,
+            "differential_surplus": (
+                dog.get("observed_minus_predicted")
+                - fav.get("observed_minus_predicted")
+                if dog.get("observed_minus_predicted") is not None
+                and fav.get("observed_minus_predicted") is not None else None),
+            "differential_surplus_95_lo": mean - half_width if half_width is not None else None,
+            "differential_surplus_95_hi": mean + half_width if half_width is not None else None,
+            "differential_interval_method": (
+                "normal 95% interval for the sample mean of paired "
+                "[(underdog_win-favourite_win)-(p_underdog-p_favourite)]"
+            ),
+            "indicative_only_n_lt_500": len(usable) < 500,
+        }
+
+    two_way_by_sport = defaultdict(list)
+    for row in two_way:
+        two_way_by_sport[row["sport"]].append(row)
+    draw_by_sport = defaultdict(list)
+    for row in draw_capable:
+        draw_by_sport[row["sport"]].append(row)
+    return {
+        "two_way_sports": {
+            "sports": sorted(two_way_by_sport),
+            "pooled": two_way_block(two_way),
+            "per_sport": {sport: two_way_block(group)
+                          for sport, group in sorted(two_way_by_sport.items())},
+            "interpretation": (
+                "Clean edge test: these sports cannot settle as draws, so "
+                "underdog and favourite calibration errors are exact mirrors."
+            ),
+        },
+        "draw_capable_sports": {
+            "sports": sorted(draw_by_sport),
+            "pooled": differential(draw_capable),
+            "per_sport": {sport: differential(group)
+                          for sport, group in sorted(draw_by_sport.items())},
+            "interpretation": (
+                "Use underdog surplus minus favourite surplus; shared movement "
+                "in both win sides can be draw-probability miscalibration."
+            ),
+        },
+    }
+
+
 def _score_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Mirror analyze._track_scorecard's overall/by-sport/by-band/baselines
     shape exactly, so the backtest report reads like the live scorecard."""
@@ -505,6 +606,16 @@ def _score_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "calibration": _calibration(rows),
+        "draw_space_split": _draw_space_split(rows),
+        "coverage": {
+            "distinct_sport_days": len({(row["sport"], row["event_date"]) for row in rows}),
+            "distinct_calendar_days": len({row["event_date"] for row in rows}),
+            "mean_r1_picks_per_sport_day": (
+                len(rows) / len({(row["sport"], row["event_date"]) for row in rows})
+                if rows else None),
+            "mean_r1_picks_per_calendar_day": (
+                len(rows) / len({row["event_date"] for row in rows}) if rows else None),
+        },
         "overall": overall,
         "by_sport": by_sport,
         "by_underdog_probability_band": by_band,
@@ -514,6 +625,78 @@ def _score_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "win probabilities by definition, so comparing their raw hit rate "
             "to favourites does not test whether R1 found miscalibration. Use "
             "the calibration section above."
+        ),
+    }
+
+
+THREE_OUTCOME_PROBABILITY_BANDS: tuple[tuple[str, float, float], ...] = (
+    ("<0.20", 0.0, 0.20),
+    ("0.20-0.25", 0.20, 0.25),
+    ("0.25-0.30", 0.25, 0.30),
+    ("0.30-0.35", 0.30, 0.35),
+    ("0.35+", 0.35, 1.0000001),
+)
+
+
+def _three_outcome_calibration(events: list[SettledEvent]) -> dict[str, Any]:
+    """Calibration map for home/away/draw on sports where draws can settle."""
+    draw_events = [event for event in events if SPORTS[event.sport].draw_settles]
+
+    def outcome_map(group: list[SettledEvent], probability_attr: str,
+                    winner_index: int) -> dict[str, Any]:
+        by_band: dict[str, list[tuple[float, bool]]] = defaultdict(list)
+        missing = 0
+        for event in group:
+            probability = getattr(event, probability_attr)
+            if not isinstance(probability, (int, float)) or isinstance(probability, bool):
+                missing += 1
+                continue
+            label = next((label for label, lo, hi in THREE_OUTCOME_PROBABILITY_BANDS
+                          if lo <= float(probability) < hi), "unknown")
+            by_band[label].append((float(probability), event.winner_index == winner_index))
+        out = {}
+        for label, _lo, _hi in THREE_OUTCOME_PROBABILITY_BANDS:
+            rows = by_band.get(label, [])
+            rates = _rate_block(sum(1 for _p, won in rows if won), len(rows))
+            predicted = sum(p for p, _won in rows) / len(rows) if rows else None
+            out[label] = {
+                **rates,
+                "mean_predicted_probability": predicted,
+                "observed_minus_predicted": (
+                    rates["hit_rate"] - predicted
+                    if rates.get("hit_rate") is not None and predicted is not None else None),
+                "surplus_wilson_95_lo": (
+                    rates["wilson_95_lo"] - predicted
+                    if rates.get("wilson_95_lo") is not None and predicted is not None else None),
+                "surplus_wilson_95_hi": (
+                    rates["wilson_95_hi"] - predicted
+                    if rates.get("wilson_95_hi") is not None and predicted is not None else None),
+                "indicative_only_n_lt_500": len(rows) < 500,
+            }
+        return {"buckets": out, "rows_missing_probability": missing}
+
+    def map_group(group: list[SettledEvent]) -> dict[str, Any]:
+        return {
+            "home": outcome_map(group, "probability_1", 1),
+            "away": outcome_map(group, "probability_2", 2),
+            "draw": outcome_map(group, "draw_probability", 0),
+        }
+
+    by_sport: dict[str, list[SettledEvent]] = defaultdict(list)
+    for event in draw_events:
+        by_sport[event.sport].append(event)
+    return {
+        "scope": "all ledger-valid settled rows in draw-capable sports, not only R1 picks",
+        "bucket_contract": [label for label, _lo, _hi in THREE_OUTCOME_PROBABILITY_BANDS],
+        "pooled": map_group(draw_events),
+        "per_sport": {sport: map_group(group)
+                      for sport, group in sorted(by_sport.items())},
+        "sports": sorted(by_sport),
+        "settled_rows_in_draw_capable_sports": len(draw_events),
+        "warning": (
+            "A rare outcome is not a power play by itself. Only positive "
+            "held-out observed-minus-predicted surplus with adequate n is "
+            "candidate evidence. n<500 buckets are indicative only."
         ),
     }
 
@@ -539,6 +722,7 @@ def r1_backtest(root: Path | str = ".", target_date: str | None = None) -> Path:
     per_sport: dict[str, Any] = {}
     all_r1_rows: list[dict[str, Any]] = []
     all_cohort_rows: list[dict[str, Any]] = []
+    all_settled_events: list[SettledEvent] = []
     corpus_wide_reconstruction_counts: Counter[str] = Counter()
     historical_by_key: dict[tuple[str, str], SettledEvent] = {}
 
@@ -562,6 +746,7 @@ def r1_backtest(root: Path | str = ".", target_date: str | None = None) -> Path:
         if result.get("available") and result.get("r1_rows") is not None:
             all_r1_rows.extend(result["r1_rows"])
             all_cohort_rows.extend(result["cohort_rows"])
+            all_settled_events.extend(result.get("settled_events", []))
             for label, count in result.get("reconstruction_populations", {}).items():
                 corpus_wide_reconstruction_counts[label] += count
             for ev in result.get("settled_events", []):
@@ -618,6 +803,7 @@ def r1_backtest(root: Path | str = ".", target_date: str | None = None) -> Path:
             ),
         },
         "corpus_wide_reconstruction_counts": dict(corpus_wide_reconstruction_counts),
+        "three_outcome_calibration_map": _three_outcome_calibration(all_settled_events),
         "reconstruction_populations_present": populations,
         "populations": {},
     }
@@ -778,6 +964,33 @@ def _render_r1_backtest_markdown(analysis: dict[str, Any]) -> str:
         r1_days = info.get("sport_days_with_eligible_r1", "-")
         lines.append(f"| {sport} | yes | {n_rows} | {rng} | {r1_days} |")
 
+    outcome_map = analysis.get("three_outcome_calibration_map") or {}
+    if outcome_map:
+        lines += [
+            "",
+            "## Three-outcome calibration map (draw-capable sports, whole corpus)",
+            "",
+            outcome_map.get("scope", ""),
+            "",
+            outcome_map.get("warning", ""),
+            "",
+            "| Outcome/bucket | Mean predicted | Observed | Observed 95% CI | Observed - predicted | n | n<500 |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
+        ]
+        for outcome in ("home", "away", "draw"):
+            for label, block in (outcome_map.get("pooled", {}).get(outcome, {})
+                                 .get("buckets", {})).items():
+                if not block.get("n"):
+                    continue
+                lines.append(
+                    f"| {outcome}/{label} | {block['mean_predicted_probability']:.2%} | "
+                    f"{block['hit_rate']:.2%} | {block['wilson_95_lo']:.2%}-"
+                    f"{block['wilson_95_hi']:.2%} | "
+                    f"{block['observed_minus_predicted']:+.2%} | {block['n']} | "
+                    f"{'yes' if block['indicative_only_n_lt_500'] else 'no'} |"
+                )
+        lines += ["", "Per-sport maps are retained in the JSON report.", ""]
+
     for population, scorecard in analysis.get("populations", {}).items():
         lines += [
             "",
@@ -821,6 +1034,47 @@ def _render_r1_backtest_markdown(analysis: dict[str, Any]) -> str:
                 f"{sport} — R1 underdog", pair["r1_underdog"]))
             lines.append(_render_calibration_line(
                 f"{sport} — favourite control", pair["favourite_control"]))
+
+        split = scorecard["draw_space_split"]
+        coverage = scorecard["coverage"]
+        two_way = split["two_way_sports"]
+        draw_capable = split["draw_capable_sports"]
+        lines += [
+            "",
+            "### Draw-space-separated edge test",
+            "",
+            f"Distinct sport-days: {coverage['distinct_sport_days']}; distinct calendar days: "
+            f"{coverage['distinct_calendar_days']}; mean R1 picks/sport-day: "
+            f"{coverage['mean_r1_picks_per_sport_day']:.3f}; mean R1 picks/calendar-day: "
+            f"{coverage['mean_r1_picks_per_calendar_day']:.3f}.",
+            "",
+            "#### Two-way sports (clean pooled surplus)",
+            "",
+            _render_calibration_line("pooled two-way R1 underdog", two_way["pooled"]),
+            "",
+            "| Sport | Mean predicted | Observed | Observed 95% CI | Observed - predicted | n |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |",
+        ]
+        for sport, block in two_way["per_sport"].items():
+            lines.append(_render_calibration_line(sport, block))
+        lines += [
+            "",
+            "#### Draw-capable sports (underdog surplus minus favourite surplus)",
+            "",
+            "| Sport | Differential surplus | Differential 95% CI | n | n<500 |",
+            "| --- | ---: | ---: | ---: | --- |",
+        ]
+        for sport, block in [("pooled", draw_capable["pooled"]),
+                             *draw_capable["per_sport"].items()]:
+            lo = block.get("differential_surplus_95_lo")
+            hi = block.get("differential_surplus_95_hi")
+            ci = f"{lo:+.2%}..{hi:+.2%}" if lo is not None and hi is not None else "-"
+            value = block.get("differential_surplus")
+            lines.append(
+                f"| {sport} | {value:+.2%} | {ci} | {block['n']} | "
+                f"{'yes' if block['indicative_only_n_lt_500'] else 'no'} |"
+                if value is not None else f"| {sport} | - | - | {block['n']} | yes |"
+            )
 
         lines += [
             "",

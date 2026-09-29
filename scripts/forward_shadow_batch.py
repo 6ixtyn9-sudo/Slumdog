@@ -212,6 +212,8 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
 
         calibration_notices = {}
         sport_calibration_notices: list[tuple[str, dict]] = []
+        draw_space_notices = {}
+        edge_sport_notices: list[tuple[str, dict]] = []
         headline_rates = {}
         for population, scored in (analysis.get("populations") or {}).items():
             calibration = scored.get("calibration") or {}
@@ -243,6 +245,37 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
                     }},
                 ))
 
+            split = scored.get("draw_space_split") or {}
+            two_way = split.get("two_way_sports") or {}
+            draw_capable = split.get("draw_capable_sports") or {}
+            if split:
+                draw_space_notices[population] = {
+                "coverage": scored.get("coverage"),
+                "two_way_sports": {
+                    "sports": two_way.get("sports"),
+                    "pooled": compact_calibration(two_way.get("pooled")),
+                },
+                "draw_capable_sports": {
+                    "sports": draw_capable.get("sports"),
+                    "pooled": draw_capable.get("pooled"),
+                },
+            }
+            two_way_sports = sorted((two_way.get("per_sport") or {}).items())
+            for chunk_index in range(0, len(two_way_sports), 4):
+                chunk = two_way_sports[chunk_index:chunk_index + 4]
+                edge_sport_notices.append((
+                    f"r1_backtest_two_way_sports_{chunk_index // 4 + 1}",
+                    {population: {sport: compact_calibration(block)
+                                  for sport, block in chunk}},
+                ))
+            draw_sports = sorted((draw_capable.get("per_sport") or {}).items())
+            for chunk_index in range(0, len(draw_sports), 3):
+                chunk = draw_sports[chunk_index:chunk_index + 3]
+                edge_sport_notices.append((
+                    f"r1_backtest_draw_capable_sports_{chunk_index // 3 + 1}",
+                    {population: {sport: block for sport, block in chunk}},
+                ))
+
             baselines = scored.get("baselines_same_rows") or {}
             headline_rates[population] = {
                 "note": scored.get("raw_hit_rate_note"),
@@ -255,6 +288,28 @@ def run_offline_r1_backtest(repo_root: Path) -> dict:
         emit_notice("r1_backtest_calibration", calibration_notices)
         for title, payload in sport_calibration_notices:
             emit_notice(title, payload)
+        if draw_space_notices:
+            emit_notice("r1_backtest_draw_space_split", draw_space_notices)
+        for title, payload in edge_sport_notices:
+            emit_notice(title, payload)
+
+        outcome_map = analysis.get("three_outcome_calibration_map") or {}
+        if outcome_map:
+            emit_notice("r1_backtest_three_outcome_scope", {
+                "scope": outcome_map.get("scope"),
+                "sports": outcome_map.get("sports"),
+                "settled_rows_in_draw_capable_sports": outcome_map.get(
+                    "settled_rows_in_draw_capable_sports"),
+                "warning": outcome_map.get("warning"),
+            })
+            for outcome, payload in (outcome_map.get("pooled") or {}).items():
+                emit_notice(f"r1_backtest_three_outcome_pooled_{outcome}", payload)
+            outcome_sports = sorted((outcome_map.get("per_sport") or {}).items())
+            for sport, sport_payload in outcome_sports:
+                for outcome, payload in sport_payload.items():
+                    emit_notice(
+                        f"r1_backtest_three_outcome_{sport}_{outcome}", payload)
+
         emit_notice("r1_backtest_raw_rates", {
             "descriptive_not_merit_metric": True,
             "populations": headline_rates,
