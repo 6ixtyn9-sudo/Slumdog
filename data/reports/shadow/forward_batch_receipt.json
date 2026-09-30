@@ -1,0 +1,351 @@
+{
+  "batch_schema": "forward_shadow_batch",
+  "canary_gate": {
+    "abort": {
+      "aborted_before_phase": "settlement",
+      "canary": {
+        "checked": true,
+        "direct": {
+          "ok": false,
+          "reason": "RuntimeError: direct fetch failed across transports: urllib=HTTPError"
+        },
+        "healthy": false,
+        "reason": "football tz=0 JSON via the relay looked like a challenge page (272 bytes); via direct RuntimeError: direct fetch failed across transports: urllib=HTTPError \u2014 both paths tested this run were blocked; not proof the source itself is down",
+        "relay": {
+          "ok": false,
+          "reason": "looked like a challenge page (272 bytes)"
+        },
+        "sampled_at": "2026-09-30T04:00:32.830887+00:00",
+        "sport": "football"
+      },
+      "dates_completed": 0,
+      "dates_skipped": [
+        "2026-10-02",
+        "2026-10-03",
+        "2026-10-04",
+        "2026-10-05",
+        "2026-10-06"
+      ],
+      "phases_skipped": [
+        "settlement",
+        "completion",
+        "delta_settlement",
+        "refresh",
+        "event_day_settlement",
+        "event_day",
+        "forward_pass"
+      ]
+    },
+    "aborted": true,
+    "samples": [
+      {
+        "checked": true,
+        "direct": {
+          "ok": false,
+          "reason": "RuntimeError: direct fetch failed across transports: urllib=HTTPError"
+        },
+        "healthy": false,
+        "reason": "football tz=0 JSON via the relay looked like a challenge page (272 bytes); via direct RuntimeError: direct fetch failed across transports: urllib=HTTPError \u2014 both paths tested this run were blocked; not proof the source itself is down",
+        "relay": {
+          "ok": false,
+          "reason": "looked like a challenge page (272 bytes)"
+        },
+        "sampled_at": "2026-09-30T04:00:32.830887+00:00",
+        "sport": "football"
+      }
+    ]
+  },
+  "delta_settlement": [],
+  "event_day": [],
+  "event_day_settlement": [],
+  "generated_at": "2026-09-30T04:07:05Z",
+  "r1_backtest": {
+    "calibration": {
+      "HISTORICAL_PAGE": {
+        "by_underdog_probability_band": {
+          "0.20-0.30": {
+            "favourite_control": {
+              "mean_predicted_probability": 0.3561792452830189,
+              "n": 424,
+              "observed_hit_rate": 0.4033,
+              "observed_minus_predicted": 0.04712075471698107,
+              "observed_wins": 171,
+              "wilson_95_hi": 0.4507,
+              "wilson_95_lo": 0.3577
+            },
+            "r1_underdog": {
+              "mean_predicted_probability": 0.26066037735849057,
+              "n": 424,
+              "observed_hit_rate": 0.3514,
+              "observed_minus_predicted": 0.09073962264150942,
+              "observed_wins": 149,
+              "wilson_95_hi": 0.398,
+              "wilson_95_lo": 0.3075
+            }
+          },
+          "0.30-0.40": {
+            "favourite_control": {
+              "mean_predicted_probability": 0.42788627935723117,
+              "n": 809,
+              "observed_hit_rate": 0.4611,
+              "observed_minus_predicted": 0.03321372064276884,
+              "observed_wins": 373,
+              "wilson_95_hi": 0.4955,
+              "wilson_95_lo": 0.427
+            },
+            "r1_underdog": {
+              "mean_predicted_probability": 0.3434610630407911,
+              "n": 809,
+              "observed_hit_rate": 0.3436,
+              "observed_minus_predicted": 0.0001389369592089129,
+              "observed_wins": 278,
+              "wilson_95_hi": 0.377,
+              "wilson_95_lo": 0.3117
+            }
+          },
+          "0.40+": {
+            "favourite_control": {
+              "mean_predicted_probability": 0.5456990562740301,
+              "n": 5722,
+              "observed_hit_rate": 0.537,
+              "observed_minus_predicted": -0.008699056274030115,
+              "observed_wins": 3073,
+              "wilson_95_hi": 0.5499,
+              "wilson_95_lo": 0.5241
+            },
+            "r1_underdog": {
+              "mean_predicted_probability": 0.4485477105907026,
+              "n": 5722,
+              "observed_hit_rate": 0.4549,
+              "observed_minus_predicted": 0.00635228940929744,
+              "observed_wins": 2603,
+              "wilson_95_hi": 0.4678,
+              "wilson_95_lo": 0.442
+            }
+          },
+          "<0.20": {
+            "favourite_control": {
+              "mean_predicted_probability": 0.2821875,
+              "n": 32,
+              "observed_hit_rate": 0.2812,
+              "observed_minus_predicted": -0.0009874999999999745,
+              "observed_wins": 9,
+              "wilson_95_hi": 0.4537,
+              "wilson_95_lo": 0.1556
+            },
+            "r1_underdog": {
+              "mean_predicted_probability": 0.1646875,
+              "n": 32,
+              "observed_hit_rate": 0.3125,
+              "observed_minus_predicted": 0.1478125,
+              "observed_wins": 10,
+              "wilson_95_hi": 0.4857,
+              "wilson_95_lo": 0.1795
+            }
+          }
+        },
+        "interpretation": "PRIMARY MERIT METRIC: observed outright-win rate minus Forebet's mean assigned probability on the same R1 rows. Raw underdog-vs-favourite hit rates are retained below as descriptive baselines, not the measure of whether an underdog selector has edge. The favourite side is a calibration control: if it moves the same way, the effect may be Forebet-wide calibration bias rather than R1 selection.",
+        "overall": {
+          "favourite_control": {
+            "mean_predicted_probability": 0.5193502218405611,
+            "n": 6987,
+            "observed_hit_rate": 0.519,
+            "observed_minus_predicted": -0.0003502218405611046,
+            "observed_wins": 3626,
+            "wilson_95_hi": 0.5307,
+            "wilson_95_lo": 0.5072
+          },
+          "r1_underdog": {
+            "mean_predicted_probability": 0.4236782596250179,
+            "n": 6987,
+            "observed_hit_rate": 0.4351,
+            "observed_minus_predicted": 0.011421740374982114,
+            "observed_wins": 3040,
+            "wilson_95_hi": 0.4468,
+            "wilson_95_lo": 0.4235
+          }
+        }
+      }
+    },
+    "headline_rates": {
+      "HISTORICAL_PAGE": {
+        "always_favourite_same_rows": {
+          "failures": 3361,
+          "hit_rate": 0.519,
+          "n": 6987,
+          "note": "a settled draw fails BOTH bets (outright win only), so successes+failures need not mirror our_r1_pick's exactly even on these identical 6987 matches",
+          "significant_n": true,
+          "successes": 3626,
+          "wilson_95_hi": 0.5307,
+          "wilson_95_lo": 0.5072
+        },
+        "forebet_pick_same_rows": {
+          "failures": 3140,
+          "hit_rate": 0.5268,
+          "n": 6636,
+          "rows_missing_forebet_pick": 351,
+          "significant_n": true,
+          "successes": 3496,
+          "wilson_95_hi": 0.5388,
+          "wilson_95_lo": 0.5148
+        },
+        "note": "DESCRIPTIVE ONLY, NOT THE MERIT TEST: underdogs have lower assigned win probabilities by definition, so comparing their raw hit rate to favourites does not test whether R1 found miscalibration. Use the calibration section above.",
+        "our_r1_pick": {
+          "failures": 3947,
+          "hit_rate": 0.4351,
+          "n": 6987,
+          "note": "this IS the headline rate above, repeated for side-by-side comparison",
+          "settled_draws": 321,
+          "significant_n": true,
+          "successes": 3040,
+          "wilson_95_hi": 0.4468,
+          "wilson_95_lo": 0.4235
+        }
+      }
+    },
+    "inventory": {
+      "per_sport": {
+        "american_football": {
+          "date_range": [
+            "2023-09-02",
+            "2026-09-25"
+          ],
+          "settled_row_count": 7604
+        },
+        "baseball": {
+          "date_range": [
+            "2024-01-02",
+            "2026-09-22"
+          ],
+          "settled_row_count": 23686
+        },
+        "basketball": {
+          "date_range": [
+            "2023-02-12",
+            "2026-09-25"
+          ],
+          "settled_row_count": 109239
+        },
+        "cricket": {
+          "date_range": [
+            "2025-02-10",
+            "2026-09-22"
+          ],
+          "settled_row_count": 6774
+        },
+        "football": {
+          "date_range": [
+            "2024-01-01",
+            "2026-09-27"
+          ],
+          "settled_row_count": 341849
+        },
+        "handball": {
+          "date_range": [
+            "2024-01-02",
+            "2026-09-21"
+          ],
+          "settled_row_count": 38845
+        },
+        "hockey": {
+          "date_range": [
+            "2023-08-02",
+            "2026-09-15"
+          ],
+          "settled_row_count": 60973
+        },
+        "mma": {
+          "date_range": [
+            "2025-01-11",
+            "2026-09-20"
+          ],
+          "settled_row_count": 653
+        },
+        "rugby": {
+          "date_range": [
+            "2024-01-01",
+            "2026-09-13"
+          ],
+          "settled_row_count": 9187
+        },
+        "tennis": {
+          "date_range": [
+            "2024-05-16",
+            "2026-09-13"
+          ],
+          "settled_row_count": 39946
+        },
+        "volleyball": {
+          "date_range": [
+            "2024-01-01",
+            "2026-09-21"
+          ],
+          "settled_row_count": 40038
+        }
+      },
+      "seeded_history_files_on_disk": 22,
+      "sports_with_a_ledger_in_this_checkout": 11,
+      "sports_with_at_least_one_settled_row": 11
+    },
+    "json_path": "data/reports/r1_backtest_2026-09-30.json",
+    "markdown_path": "data/reports/r1_backtest_2026-09-30.md",
+    "status": "COMPLETED",
+    "verdict": {
+      "EVENT_DAY": {
+        "differing_count": 0,
+        "matched_pair_count": 0,
+        "max_absolute_probability_delta_seen": null,
+        "pre_event_picks_available": 0,
+        "underdog_identity_flipped_count": 0,
+        "verdict": "INSUFFICIENT_DATA"
+      },
+      "STANDARD": {
+        "differing_count": 0,
+        "matched_pair_count": 43,
+        "max_absolute_probability_delta_seen": 0.0,
+        "pre_event_picks_available": 62,
+        "underdog_identity_flipped_count": 0,
+        "verdict": "IDENTICAL"
+      }
+    }
+  },
+  "refresh": [],
+  "results": [],
+  "settlement_backlog": [],
+  "settlement_completion": [],
+  "summary": {
+    "bundle_verified": 0,
+    "canary_aborted": true,
+    "canary_samples": 1,
+    "completed": 0,
+    "delta_settlement_graded": 0,
+    "event_day_failed": 0,
+    "event_day_r1_sports": 0,
+    "event_day_runs": 0,
+    "event_day_selections": 0,
+    "event_day_settled": 0,
+    "failed": 0,
+    "refresh_deltas_written": 0,
+    "refresh_failed": 0,
+    "refresh_new_events": 0,
+    "refresh_runs": 0,
+    "settlement_backlog_failed": 0,
+    "settlement_backlog_settled": 0,
+    "settlement_backlog_total": 0,
+    "settlement_completion_failed": 0,
+    "settlement_completion_resolved_failures": 0,
+    "settlement_completion_resolved_successes": 0,
+    "settlement_completion_runs": 0,
+    "settlement_completion_supplements": 0,
+    "settlement_completion_terminal_unresolved": 0,
+    "skipped_existing": 0,
+    "total": 0
+  },
+  "target_dates": [
+    "2026-10-02",
+    "2026-10-03",
+    "2026-10-04",
+    "2026-10-05",
+    "2026-10-06"
+  ]
+}
