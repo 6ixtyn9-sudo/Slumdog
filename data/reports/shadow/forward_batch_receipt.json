@@ -15,16 +15,16 @@
           "ok": false,
           "reason": "looked like a challenge page (272 bytes)"
         },
-        "sampled_at": "2026-10-02T04:00:49.190096+00:00",
+        "sampled_at": "2026-10-03T04:00:41.341309+00:00",
         "sport": "football"
       },
       "dates_completed": 0,
       "dates_skipped": [
-        "2026-10-04",
         "2026-10-05",
         "2026-10-06",
         "2026-10-07",
-        "2026-10-08"
+        "2026-10-08",
+        "2026-10-09"
       ],
       "phases_skipped": [
         "settlement",
@@ -50,7 +50,7 @@
           "ok": false,
           "reason": "looked like a challenge page (272 bytes)"
         },
-        "sampled_at": "2026-10-02T04:00:49.190096+00:00",
+        "sampled_at": "2026-10-03T04:00:41.341309+00:00",
         "sport": "football"
       }
     ]
@@ -58,7 +58,7 @@
   "delta_settlement": [],
   "event_day": [],
   "event_day_settlement": [],
-  "generated_at": "2026-10-02T04:07:35Z",
+  "generated_at": "2026-10-03T04:07:05Z",
   "r1_backtest": {
     "calibration": {
       "HISTORICAL_PAGE": {
@@ -287,8 +287,8 @@
       "sports_with_a_ledger_in_this_checkout": 11,
       "sports_with_at_least_one_settled_row": 11
     },
-    "json_path": "data/reports/r1_backtest_2026-10-02.json",
-    "markdown_path": "data/reports/r1_backtest_2026-10-02.md",
+    "json_path": "data/reports/r1_backtest_2026-10-03.json",
+    "markdown_path": "data/reports/r1_backtest_2026-10-03.md",
     "status": "COMPLETED",
     "verdict": {
       "EVENT_DAY": {
@@ -342,10 +342,10 @@
     "total": 0
   },
   "target_dates": [
-    "2026-10-04",
     "2026-10-05",
     "2026-10-06",
     "2026-10-07",
-    "2026-10-08"
+    "2026-10-08",
+    "2026-10-09"
   ]
 }
